@@ -5,7 +5,7 @@
   try { host = require('premierepro'); uxp = require('uxp'); } catch (_) {}
   let source = null, job = null, plan = null, exported = null, busy = false, page = 0;
   const selected = new Set();
-  const base = 'http://127.0.0.1:8765';
+  const base = 'http://localhost:8765';
   const pageSize = 40;
   const tickBase = 254016000000n;
   const fields = ['silence-threshold','silence-minimum','silence-before','silence-after','silence-rate','silence-stream'];
@@ -65,7 +65,8 @@
     const count = plan.operations.length;
     const duration = plan.operations.filter((op) => selected.has(op.id)).reduce((sum, op) => sum+op.durationSeconds, 0);
     el('silence-summary').textContent = `${selected.size}/${count} · ${duration.toFixed(2)} s`;
-    el('silence-cuts').replaceChildren();
+    const cuts = el('silence-cuts');
+    while (cuts.firstChild) cuts.removeChild(cuts.firstChild);
     const visible = plan.operations.slice(page*pageSize,(page+1)*pageSize);
     for (const op of visible) {
       const row = document.createElement('div'); row.className='cut-row';

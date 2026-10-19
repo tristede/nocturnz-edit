@@ -9,7 +9,7 @@
 - Les images clés sont calculées en ticks source et sur des intervalles d’images de la séquence. Le dernier point reste dans le clip. In va de l’échelle existante à l’échelle augmentée; Out revient de l’échelle augmentée à l’échelle existante.
 - Une transaction reçoit les actions d’animation. L’interpolation linéaire est explicitement demandée entre les points; la courbe douce est échantillonnée avec une progression smoothstep.
 
-**Validation** : seul le zoom relatif fixe a été appliqué et lu dans Premiere auparavant. Les nouveaux presets animés et le mode Aux cuts sont implémentés mais non exécutés/validés dans Premiere. Ils sont atténués et affichent « À valider dans Premiere ». Aucun test supplémentaire n’a été lancé pour cette tranche. Retour Annuler, images clés sur rushes avec point d’entrée non nul, cadence source différente, transitions et état de verrouillage restent à vérifier dans l’hôte. L’API UXP VideoTrack documentée ne fournit pas de lecture de verrouillage; aucune protection des pistes verrouillées n’est revendiquée ici.
+**Validation** : seul le zoom relatif fixe a été appliqué et lu dans Premiere auparavant. Les nouveaux presets animés et le mode Aux cuts sont implémentés mais non exécutés/validés dans Premiere. Ils sont atténués et affichent « À valider dans Premiere ». Retour Annuler, images clés sur rushes avec point d’entrée non nul, cadence source différente, transitions et état de verrouillage restent à vérifier dans l’hôte. L’API UXP VideoTrack documentée ne fournit pas de lecture de verrouillage; aucune protection des pistes verrouillées n’est revendiquée ici.
 
 ## Interlocuteur — demande d’Adam
 
@@ -24,6 +24,8 @@ Les presets doivent pouvoir servir de mouvement pour ces cadrages. Le mode Libel
 
 Le bouton **Lire les libellés enregistrés** lit le `.prproj` du projet actif via le service local. Il récupère les propriétés `asl.clip.label.name` et `asl.clip.label.color` du `VideoClip` référencé par chaque occurrence de timeline. Aucun repli sur la couleur du `ProjectItem` ou du master clip n’est effectué. Le fichier est lu uniquement; le service n’écrit pas le projet et ne déclenche pas de sauvegarde Premiere.
 
+Quand le projet ne contient que l’index du libellé, le service consulte uniquement les 16 noms et couleurs du profil Adobe local correspondant à la version majeure de l’hôte. Il exige un profil unique et refuse de choisir entre plusieurs profils. Les couleurs COLORREF sont décodées en BGR. Sans palette résolue, l’interface indique explicitement qu’elle affiche les identifiants de libellés.
+
 Parcours :
 
 1. Enregistrer les couleurs dans Premiere, ouvrir Zooms → Interlocuteur → Libellés timeline, puis lire les libellés enregistrés.
@@ -37,7 +39,9 @@ Avant capture et application, le panneau relit le fichier, compare son SHA-256, 
 
 **Limite de fraîcheur** : les couleurs et verrous viennent de la dernière sauvegarde. Des couleurs ou des verrous modifiés uniquement en mémoire ne peuvent pas être détectés par cette lecture. Le panneau demande de les enregistrer puis de relire les libellés. Les changements de montage détectables par les coordonnées sont refusés. Ce mode ne constitue pas une lecture directe des couleurs actuellement affichées dans Premiere.
 
-**Validation restante** : le lecteur et le parcours UXP sont implémentés; seule leur syntaxe a été contrôlée pour cette tranche. Aucun nouveau test ni exécution sur le projet d’Adam n’a été effectué. Lecture réelle de deux occurrences d’un même rush portant des couleurs différentes, décodage visuel des couleurs, capture des points, application native et Annuler restent à valider dans Premiere. Le mode demeure grisé jusqu’à cette validation.
+**Validation native du 20 octobre 2026 — Premiere Beta 27.0.0** : projet isolé de trois occurrences d’une mire PNG, 1920 × 1080 à 25 i/s. Le panneau lit Rose sur deux occurrences et Mangue sur la troisième, toutes issues du même média. La connexion locale, la résolution des noms/couleurs, la capture d’un cadrage à 125 % avec position normalisée (0,35 ; 0,5), puis sa conservation après rechargement du plugin ont été vérifiées. Le SDK renvoie les points sous `{value: [x, y]}`; leur lecture est désormais compatible avec cette représentation. Le rafraîchissement de la liste conserve exactement deux lignes.
+
+**Restant** : l’application a été bloquée avant toute mutation par un preset sans valeur initiale dans le sélecteur UXP. La sélection initiale a été corrigée dans le code, mais cette correction, l’application et Annuler ne sont pas encore validés dans l’hôte : le Mac s’est verrouillé avant la reprise. Le mode demeure grisé. Le protocole et la mire reproductible sont dans `docs/premiere-validation.md`. Six tests Python sur le lecteur et la palette, et trois tests Node sur les points, passent indépendamment de l’hôte.
 
 ### Voix
 

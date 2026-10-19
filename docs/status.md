@@ -38,6 +38,16 @@ Sources de six dépôts copiées avec licences, commits et SHA-256 dans `vendor/
 
 ## Zooms — modes et presets
 
-Interface organisée en Presets, Aux cuts et Interlocuteur. Six presets disponibles dans le code : Fixe, Lent in/out, Punch in/out, Aller-retour. L’animation In/Out et l’alternance par clip sélectionné utilisent des images clés relatives à l’échelle existante; elles restent à valider dans Premiere et sont atténuées. Aucun nouveau test ni action dans Premiere n’a été lancé pour cette tranche.
+Interface organisée en Presets, Aux cuts et Interlocuteur. Six presets disponibles dans le code : Fixe, Lent in/out, Punch in/out, Aller-retour. L’animation In/Out et l’alternance par clip sélectionné utilisent des images clés relatives à l’échelle existante; elles restent à valider dans Premiere et sont atténuées.
 
-Interlocuteur reste grisé jusqu’à validation Premiere. Le mode **Libellés timeline** est implémenté : lecture du projet enregistré, extraction des couleurs propres aux occurrences, capture/mémorisation des cadrages par couleur et source, application fixe ou animée aux clips sélectionnés. Contrôles de contexte, SHA-256 et coordonnées avant application; pas de lecture de couleur du chutier. La capture des points et l’application native n’ont pas encore été exécutées dans Premiere. Le mode Voix reste à développer. Voir `docs/zooms.md`.
+Interlocuteur reste grisé jusqu’à validation Premiere. Le mode **Libellés timeline** est implémenté : lecture du projet enregistré, extraction des couleurs propres aux occurrences, capture/mémorisation des cadrages par couleur et source, application fixe ou animée aux clips sélectionnés. Contrôles de contexte, SHA-256 et coordonnées avant application; pas de lecture de couleur du chutier. Le mode Voix reste à développer. Voir `docs/zooms.md`.
+
+## Validation native des libellés — 2026-10-20
+
+- Projet isolé `validation-local/Nocturnz_Zooms_validation.prproj`, séquence de trois mires PNG de quatre secondes à 25 i/s; aucun changement au montage LOSSA.
+- Connexion HTTP du panneau au service confirmée via `localhost:8765`. L’autorisation par adresse IP seule était refusée par UXP sur cet hôte.
+- Lecture de deux libellés différents sur un même média confirmée : Rose (deux occurrences, `#8c0235`) et Mangue (une occurrence, `#893a04`). Les noms/couleurs viennent du profil Adobe 27 unique; les clips sauvegardés ne contenaient que les index.
+- Capture de position/ancrage/échelle/rotation native confirmée : premier clip à 125 %, position (0,35 ; 0,5). Conservation du cadrage après rechargement du plugin confirmée.
+- Corrections de compatibilité UXP : points sous forme de tableau encapsulé, chemins POSIX à trois barres, suppression des anciennes lignes sans `replaceChildren`, attributs SVG explicites et sélection initiale des menus.
+- Application non confirmée : le premier essai a été refusé avant mutation (« Preset inconnu »). La valeur par défaut est corrigée dans le code; le verrouillage du Mac a empêché de recharger et de vérifier cette correction, l’application et Annuler. Ces étapes et les animations restent à faire dans l’hôte.
+- Tests automatiques : 12 tests Node et 17 tests Python (dont six nouveaux sur les libellés/palettes); le protocole natif et le générateur de mire sont documentés séparément.

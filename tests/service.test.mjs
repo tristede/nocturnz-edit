@@ -10,5 +10,5 @@ test('contrat santé annonce uniquement les capacités du moteur installé', () 
   assert.equal(payload.engines[0].name, 'auto-editor');
   assert.equal(payload.mediaProcessing, payload.engines[0].available);
   assert.deepEqual(payload.capabilities, payload.mediaProcessing
-    ? ['silence-analysis', 'silence-review', 'premiere-xml-export'] : []);
+    ? ['saved-timeline-labels', 'silence-analysis', 'silence-review', 'premiere-xml-export'] : ['saved-timeline-labels']);
 });

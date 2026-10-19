@@ -18,6 +18,41 @@ MAX_XML = 192 * 1024 * 1024
 MAX_CLIPS = 20000
 
 
+def _palette(host_version):
+    """Only use an unambiguous preferences profile for this host major version."""
+    if not isinstance(host_version, str) or not re.fullmatch(r'\d{1,3}(?:\.\d{1,4}){1,3}', host_version):
+        return {}
+    major = host_version.split('.')[0]
+    base = Path.home() / 'Documents' / 'Adobe'
+    candidates = []
+    for family in ('Premiere Pro', 'Premiere Pro (Beta)'):
+        directory = base / family / f'{major}.0'
+        candidates.extend(path for path in directory.glob('Profile-*/Adobe Premiere Pro* Prefs') if path.is_file())
+    if len(candidates) != 1:
+        return {}
+    try:
+        with candidates[0].open('rb') as handle:
+            raw = handle.read(8 * 1024 * 1024 + 1)
+        if len(raw) > 8 * 1024 * 1024 or b'\0' in raw or b'<!DOCTYPE' in raw.upper() or b'<!ENTITY' in raw.upper():
+            return {}
+        root = ET.fromstring(raw)
+        bag = root.find('Preferences/Properties')
+        if bag is None:
+            return {}
+        result = {}
+        for index in range(16):
+            color = bag.findtext(f'BE.Prefs.LabelColors.{index}')
+            name = bag.findtext(f'BE.Prefs.LabelNames.{index}')
+            if color is not None and re.fullmatch(r'\d{1,10}', color) and int(color) <= 0xffffffff:
+                packed = int(color)
+                # Premiere stores its COLORREF label values in BGR order.
+                result[index] = {'displayName': (name or f'Libellé {index + 1}')[:120],
+                                 'colorHex': f'#{packed & 255:02x}{packed >> 8 & 255:02x}{packed >> 16 & 255:02x}'}
+        return result
+    except (OSError, ET.ParseError):
+        return {}
+
+
 def _guid(value):
     if not isinstance(value, str):
         raise ValueError('Identifiant de séquence requis.')
@@ -91,6 +126,7 @@ def read_timeline_labels(payload):
     if len(sequences) != 1:
         raise ValueError('Séquence active absente du projet enregistré. Enregistre puis relis les libellés.')
     sequence = sequences[0]
+    palette = _palette(payload.get('hostVersion'))
     clips, labels, tracks = [], {}, []
     timebase, frame_size = None, None
     for pair in sequence.findall('TrackGroups/TrackGroup'):
@@ -137,6 +173,10 @@ def read_timeline_labels(payload):
                     key = f'{raw_label or "unnamed"}|{color}'
                     label = {'key': key, 'index': label_index, 'storedName': (raw_label or '')[:120],
                              'packedColor': color, 'clipCount': 0}
+                    if label_index in palette:
+                        label.update(palette[label_index])
+                    elif color is not None and -2147483648 <= color <= 0xffffffff:
+                        label['colorHex'] = f'#{color & 255:02x}{color >> 8 & 255:02x}{color >> 16 & 255:02x}'
                     labels.setdefault(key, label)['clipCount'] += 1
                     if len(labels) > 256:
                         raise ValueError('Trop de variantes de libellés dans cette séquence.')
@@ -177,4 +217,5 @@ def read_timeline_labels(payload):
             'projectPath': str(path), 'projectName': path.name,
             'projectSha256': hashlib.sha256(raw).hexdigest(), 'sequenceId': sequence_id,
             'sequenceName': sequence.findtext('Name') or '', 'timebase': str(timebase),
-            'frameSize': frame_size, 'tracks': tracks, 'labels': list(labels.values()), 'clips': clips}
+            'frameSize': frame_size, 'tracks': tracks, 'labels': list(labels.values()), 'clips': clips,
+            'paletteResolved': all('colorHex' in label for label in labels.values())}

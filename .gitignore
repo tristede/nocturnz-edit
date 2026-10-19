@@ -5,3 +5,4 @@ node_modules/
 
 .runtime/
 .venv/
+validation-local/

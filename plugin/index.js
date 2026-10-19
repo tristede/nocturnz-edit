@@ -71,7 +71,8 @@ async function inspectSelection() {
     return;
   }
   $('inspect-selection').setAttribute('aria-disabled', 'true');
-  $('effect-report').replaceChildren();
+  const report = $('effect-report');
+  while (report.firstChild) report.removeChild(report.firstChild);
   status('Lecture de la sélection…');
   try {
     const project = await premiere.Project.getActiveProject();
@@ -255,7 +256,7 @@ async function checkService() {
   $('service-state').textContent = 'Connexion…';
   $('service-state').className = 'service-state';
   try {
-    const response = await fetch('http://127.0.0.1:8765/health');
+    const response = await fetch('http://localhost:8765/health');
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     $('service-state').textContent = 'En ligne';

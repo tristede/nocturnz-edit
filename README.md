@@ -14,7 +14,7 @@ Analyse et XML ont été testés avec le binaire réel et un audio de validation
 
 ## Installer le moteur et lancer le service
 
-**Zoom interlocuteur / Libellés timeline** : le code permet de lire les couleurs du projet enregistré, capturer un cadrage par couleur et source, puis envoyer des cadrages fixes ou animés aux clips sélectionnés. Les associations sont mémorisées dans les données locales du plugin. Ce nouveau parcours reste à valider dans Premiere et demeure grisé. Le mode Voix reste à développer. Voir [Zooms](docs/zooms.md).
+**Zoom interlocuteur / Libellés timeline** : lecture des couleurs, capture et conservation d’un cadrage par couleur/source vérifiées dans Premiere Beta 27 sur une mire isolée. Application fixe/animée et Annuler restent à valider dans l’hôte; ce mode demeure grisé. Le mode Voix reste à développer. Voir [Zooms](docs/zooms.md).
 
 ```sh
 npm run setup:engine
@@ -23,7 +23,7 @@ npm run service
 
 Le premier appel télécharge la version officielle figée et vérifie son empreinte SHA-256. Aucun binaire n’est ajouté à Git. Mac Apple Silicon a été validé; les autres binaires disposent d’une procédure de téléchargement mais n’ont pas été exécutés ici. Aucun abonnement ni API cloud n’est utilisé pour cette analyse CPU.
 
-Le service écoute uniquement `127.0.0.1:8765`. `/health` annonce les capacités du moteur effectivement présent. Les routes média exigent un en-tête client et refusent les origines web; aucun CORS universel n’est activé. Ce contrôle local ne constitue pas encore un système de pairage utilisateur.
+Le service écoute uniquement `127.0.0.1:8765`. Le panneau le joint via `http://localhost:8765`, autorisé dans le manifeste UXP et vérifié dans Premiere Beta 27. `/health` annonce les capacités du moteur effectivement présent. Les routes média exigent un en-tête client et refusent les origines web; aucun CORS universel n’est activé. Ce contrôle local ne constitue pas encore un système de pairage utilisateur.
 
 ### Utiliser Silences
 

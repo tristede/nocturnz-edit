@@ -41,7 +41,7 @@
             <label>Silence minimum (ms)<input id="silence-minimum" type="number" min="40" max="60000" step="20" value="400"></label>
             <label>Marge avant (ms)<input id="silence-before" type="number" min="0" max="5000" step="20" value="120"></label>
             <label>Marge après (ms)<input id="silence-after" type="number" min="0" max="5000" step="20" value="120"></label>
-            <label>Piste source<select id="silence-stream"><option value="all">Toutes</option><option value="0">1</option><option value="1">2</option><option value="2">3</option><option value="3">4</option></select></label>
+            <label>Piste source<select id="silence-stream"><option value="all" selected>Toutes</option><option value="0">1</option><option value="1">2</option><option value="2">3</option><option value="3">4</option></select></label>
             <label>Cadence<input id="silence-rate" type="text" value="25/1"></label>
           </div>
           <div class="button button-primary" id="silence-analyze" role="button" tabindex="0">Analyser la source</div>
@@ -67,7 +67,7 @@
             <div class="zoom-presets" id="zoom-presets" aria-label="Presets de zoom"></div>
           </section>
           <section id="zoom-cuts-pane" hidden>
-            <div class="zoom-fields"><label>Mouvement<select id="zoom-direction"><option value="alternate">In / Out alterné</option><option value="in">Zoom in</option><option value="out">Zoom out</option></select></label></div>
+            <div class="zoom-fields"><label>Mouvement<select id="zoom-direction"><option value="alternate" selected>In / Out alterné</option><option value="in">Zoom in</option><option value="out">Zoom out</option></select></label></div>
           </section>
           <section id="zoom-speaker-pane" hidden>
             <div class="speaker-sources" aria-label="Source de l’interlocuteur">
@@ -85,8 +85,8 @@
                   <input class="zoom-range" id="speaker-amount" type="range" min="1" max="100" step="1" value="10">
                 </section>
                 <div class="zoom-fields" id="speaker-motion-fields" hidden>
-                  <label>Durée<select id="speaker-duration"><option value="0">Tout le clip</option><option value="300">0,3 s</option><option value="600">0,6 s</option><option value="1200">1,2 s</option><option value="2400">2,4 s</option></select></label>
-                  <label>Courbe<select id="speaker-easing"><option value="smooth">Douce</option><option value="linear">Linéaire</option></select></label>
+                  <label>Durée<select id="speaker-duration"><option value="0" selected>Tout le clip</option><option value="300">0,3 s</option><option value="600">0,6 s</option><option value="1200">1,2 s</option><option value="2400">2,4 s</option></select></label>
+                  <label>Courbe<select id="speaker-easing"><option value="smooth" selected>Douce</option><option value="linear">Linéaire</option></select></label>
                 </div>
                 <div class="zoom-scope">Clips vidéo sélectionnés · libellés enregistrés</div>
                 <div class="button button-primary" id="speaker-apply" role="button" tabindex="0">Appliquer les cadrages</div>
@@ -101,8 +101,8 @@
           <div class="quick-values"><div role="button" tabindex="0" data-zoom="5">+5</div><div role="button" tabindex="0" data-zoom="10" class="is-active">+10</div><div role="button" tabindex="0" data-zoom="20">+20</div></div>
           <input class="number-input" id="zoom-increase" type="number" min="1" max="200" step="1" value="10" aria-label="Intensité du zoom en pourcentage">
           <div class="zoom-fields" id="zoom-motion-fields" hidden>
-            <label>Durée<select id="zoom-duration"><option value="0">Tout le clip</option><option value="300">0,3 s</option><option value="600">0,6 s</option><option value="1200">1,2 s</option><option value="2400">2,4 s</option></select></label>
-            <label>Courbe<select id="zoom-easing"><option value="smooth">Douce</option><option value="linear">Linéaire</option></select></label>
+            <label>Durée<select id="zoom-duration"><option value="0" selected>Tout le clip</option><option value="300">0,3 s</option><option value="600">0,6 s</option><option value="1200">1,2 s</option><option value="2400">2,4 s</option></select></label>
+            <label>Courbe<select id="zoom-easing"><option value="smooth" selected>Douce</option><option value="linear">Linéaire</option></select></label>
           </div>
           <div class="zoom-scope">Clips vidéo sélectionnés</div>
           <div class="button button-primary" id="apply-zoom" role="button" tabindex="0">Appliquer</div>

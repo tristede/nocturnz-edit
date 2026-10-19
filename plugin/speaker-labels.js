@@ -6,7 +6,8 @@
   let mappings = new Map(), savedCoordinates = new Map(), saveQueue = Promise.resolve();
   try { host = require('premierepro'); uxp = require('uxp'); } catch (_) {}
   const guid = (value) => String(value).replace(/[{}]/g, '').toLowerCase();
-  const pathKey = (value) => String(value || '').replace(/\\/g, '/').normalize('NFC');
+  // Premiere's XML importer can return ///Users/... for a POSIX source path.
+  const pathKey = (value) => String(value || '').replace(/\\/g, '/').replace(/^\/{3,}/, '/').normalize('NFC');
   const say = (message, error = false) => {
     el('speaker-label-status').textContent = message;
     el('speaker-label-status').className = `tool-status${error ? ' error' : ''}`;
@@ -51,11 +52,11 @@
   async function readFileLabels(current) {
     let response;
     try {
-      response = await fetch('http://127.0.0.1:8765/api/v1/zooms/labels/read', {
+      response = await fetch('http://localhost:8765/api/v1/zooms/labels/read', {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Nocturnz-Client': 'premiere-panel' },
-        body: JSON.stringify({ path: current.path, sequenceId: current.sequenceId }),
+        body: JSON.stringify({ path: current.path, sequenceId: current.sequenceId, hostVersion: uxp.host.version }),
       });
-    } catch (_) { throw new Error('Service local inaccessible. Lance npm run service.'); }
+    } catch (error) { throw new Error(`Service local inaccessible. ${error.message || 'Lance npm run service.'}`); }
     if (response.status === 404) throw new Error('Redémarre le service local pour charger le module Libellés.');
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || `Service : HTTP ${response.status}`);
@@ -79,9 +80,7 @@
   }
   async function pointValue(param) {
     if (!param || await param.isTimeVarying()) throw new Error('Position ou point d’ancrage déjà animé.');
-    const value = unwrap((await param.getStartValue()).value);
-    if (!value || !Number.isFinite(value.x) || !Number.isFinite(value.y)) throw new Error('Cadrage illisible.');
-    return { x: value.x, y: value.y };
+    return require('./point.cjs').readPoint((await param.getStartValue()).value);
   }
   async function motionParameters(item) {
     const chain = await item.getComponentChain();
@@ -179,7 +178,9 @@
     return saveQueue;
   }
   function render() {
-    el('speaker-label-rows').replaceChildren();
+    const rows = el('speaker-label-rows');
+    // UXP 27 replaceChildren() can leave alternate old children behind.
+    while (rows.firstChild) rows.removeChild(rows.firstChild);
     el('speaker-apply-controls').hidden = !snapshot || !snapshot.labels.length;
     if (!snapshot) return;
     for (const label of snapshot.labels) {
@@ -189,10 +190,8 @@
       const heading = document.createElement('div'); heading.className = 'speaker-label-heading';
       const title = document.createElement('span'); title.className = 'speaker-label-name';
       const swatch = document.createElement('span'); swatch.className = 'speaker-label-swatch';
-      if (Number.isInteger(label.packedColor)) {
-        swatch.style.backgroundColor = `#${(label.packedColor & 0xffffff).toString(16).padStart(6, '0')}`;
-      }
-      const name = label.index === null ? label.storedName || 'Sans nom' : `Libellé ${label.index + 1}`;
+      if (/^#[0-9a-f]{6}$/i.test(label.colorHex || '')) swatch.style.backgroundColor = label.colorHex;
+      const name = label.displayName || (label.index === null ? label.storedName || 'Sans nom' : `Libellé ${label.index + 1}`);
       const text = document.createElement('span'); text.textContent = name;
       title.appendChild(swatch); title.appendChild(text); heading.appendChild(title);
       const count = document.createElement('span'); count.className = 'speaker-label-count';
@@ -292,10 +291,15 @@
   }
   for (const item of zoom.presets) {
     const option = document.createElement('option'); option.value = item.id; option.textContent = item.title;
+    if (item.id === 'fixed') option.selected = true;
     el('speaker-preset').appendChild(option);
   }
+  // UXP does not select the first dynamically appended option automatically.
+  el('speaker-preset').selectedIndex = 0;
+  el('speaker-preset').value = 'fixed';
   el('speaker-preset').addEventListener('change', () => {
     const item = zoom.presets.find((value) => value.id === el('speaker-preset').value);
+    if (!item) return;
     el('speaker-motion-fields').hidden = !item.motion;
     el('speaker-amount-field').hidden = !item.motion;
     el('speaker-amount').value = String(item.amount); el('speaker-amount-value').textContent = `${item.amount} %`;
@@ -318,7 +322,7 @@
     await saveQueue.catch(() => {});
     await loadMappings(); render();
     el('speaker-label-source').textContent = `${data.sequenceName} · projet enregistré`;
-    say(data.labels.length ? `${data.labels.length} libellé(s) lus. Enregistre les changements de couleurs puis relis-les avant application.` : 'Aucun libellé de clip reconnu dans cette séquence enregistrée.');
+    say(data.labels.length ? `${data.labels.length} libellé(s) lus.${data.paletteResolved ? '' : ' Palette non résolue : identifiants de libellés affichés.'} Enregistre les changements de couleurs puis relis-les avant application.` : 'Aucun libellé de clip reconnu dans cette séquence enregistrée.');
   });
   bind(el('speaker-apply'), applyFrames);
 })();
