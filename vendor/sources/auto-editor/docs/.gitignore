@@ -1,0 +1,5 @@
+public
+make
+binaries/
+node_modules/
+bun.lockb

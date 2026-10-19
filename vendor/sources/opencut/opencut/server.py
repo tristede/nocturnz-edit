@@ -1,0 +1,1259 @@
+"""
+OpenCut Backend Server
+
+Local HTTP server that the Premiere Pro CEP panel communicates with.
+Runs on localhost:5679 and handles all processing requests.
+"""
+
+import ipaddress
+import logging
+import logging.handlers
+import os
+import re
+import subprocess as _sp
+import sys
+import threading as _log_threading
+import time
+import traceback
+from contextlib import suppress
+
+from flask import Flask, request
+from flask_cors import CORS
+
+_TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
+
+# ---------------------------------------------------------------------------
+# Logging Setup
+# ---------------------------------------------------------------------------
+LOG_DIR = os.path.join(os.path.expanduser("~"), ".opencut")
+os.makedirs(LOG_DIR, exist_ok=True)
+LOG_FILE = os.path.join(LOG_DIR, "server.log")
+
+logger = logging.getLogger("opencut")
+logger.setLevel(logging.DEBUG)
+
+# Job-ID correlation filter — injects job_id into every log record
+_log_thread_local = _log_threading.local()
+
+class _JobLogFilter(logging.Filter):
+    def filter(self, record):
+        record.job_id = getattr(_log_thread_local, "job_id", "")
+        return True
+
+_job_filter = _JobLogFilter()
+logger.addFilter(_job_filter)
+
+# JSON formatter for structured log file (Phase 0.3)
+try:
+    from pythonjsonlogger import jsonlogger
+
+    class _OpenCutJsonFormatter(jsonlogger.JsonFormatter):
+        def add_fields(self, log_record, record, message_dict):
+            super().add_fields(log_record, record, message_dict)
+            log_record["level"] = record.levelname
+            log_record["module"] = record.module
+            log_record["job_id"] = getattr(record, "job_id", "")
+            log_record.pop("levelname", None)
+            log_record.pop("taskName", None)
+
+    _json_formatter = _OpenCutJsonFormatter(
+        "%(asctime)s %(levelname)s %(module)s %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
+    )
+except ImportError:
+    _json_formatter = None
+
+_file_handler = logging.handlers.RotatingFileHandler(
+    LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
+)
+_file_handler.setLevel(logging.DEBUG)
+if _json_formatter:
+    _file_handler.setFormatter(_json_formatter)
+else:
+    # _JobLogFilter (attached above) injects ``record.job_id`` on every
+    # record, so the format string is always resolvable without relying on
+    # Formatter defaults.
+    _file_handler.setFormatter(logging.Formatter(
+        "%(asctime)s [%(levelname)s] [%(job_id)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    ))
+logger.addHandler(_file_handler)
+
+_console_handler = logging.StreamHandler(sys.stdout)
+_console_handler.setLevel(logging.INFO)
+_console_handler.setFormatter(logging.Formatter("  %(message)s"))
+logger.addHandler(_console_handler)
+
+# ---------------------------------------------------------------------------
+# Bundled Installation Detection (centralized in opencut.config)
+# ---------------------------------------------------------------------------
+from opencut.config import OpenCutConfig  # noqa: E402
+
+_default_config = OpenCutConfig.from_env()
+
+# Backward-compat aliases — existing code may reference these module globals
+BUNDLED_MODE = _default_config.bundled_mode
+WHISPER_MODELS_DIR = _default_config.whisper_models_dir
+TORCH_HOME = _default_config.torch_home
+FLORENCE_MODEL_DIR = _default_config.florence_model_dir
+LAMA_MODEL_DIR = _default_config.lama_model_dir
+
+if BUNDLED_MODE:
+    logger.info("Running in bundled mode")
+    if WHISPER_MODELS_DIR:
+        logger.info(f"  Whisper models: {WHISPER_MODELS_DIR}")
+    if TORCH_HOME:
+        logger.info(f"  Torch home: {TORCH_HOME}")
+    if FLORENCE_MODEL_DIR:
+        logger.info(f"  Florence model: {FLORENCE_MODEL_DIR}")
+    if LAMA_MODEL_DIR:
+        logger.info(f"  LaMA model: {LAMA_MODEL_DIR}")
+
+# ---------------------------------------------------------------------------
+# FFmpeg Path Resolution
+# ---------------------------------------------------------------------------
+# Check for bundled ffmpeg next to the exe (installer puts it in {app}\ffmpeg\)
+# or in a sibling ffmpeg/ folder. Prepend to PATH so all subprocess calls find it.
+def _setup_ffmpeg_path():
+    """Find bundled FFmpeg and prepend its directory to PATH."""
+    candidates = []
+    # When running as PyInstaller exe, sys._MEIPASS is the temp extract dir
+    # but the ffmpeg folder is next to the exe, not inside the bundle
+    if getattr(sys, 'frozen', False):
+        exe_dir = os.path.dirname(sys.executable)
+        candidates.append(os.path.join(exe_dir, "..", "ffmpeg"))  # {app}\ffmpeg from {app}\server\exe
+        candidates.append(os.path.join(exe_dir, "ffmpeg"))
+    # When running from source
+    candidates.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "ffmpeg"))
+    candidates.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "ffmpeg"))
+
+    for candidate in candidates:
+        ffmpeg_exe = os.path.join(candidate, "ffmpeg.exe") if sys.platform == "win32" else os.path.join(candidate, "ffmpeg")
+        if os.path.isfile(ffmpeg_exe):
+            resolved = os.path.abspath(candidate)
+            os.environ["PATH"] = resolved + os.pathsep + os.environ.get("PATH", "")
+            logger.info(f"  Bundled FFmpeg: {resolved}")
+            return True
+    return False
+
+_bundled_ffmpeg = _setup_ffmpeg_path()
+if not _bundled_ffmpeg:
+    # Verify FFmpeg is available on system PATH
+    import shutil
+    if shutil.which("ffmpeg"):
+        logger.info("  FFmpeg: system PATH")
+    else:
+        logger.warning("  FFmpeg: NOT FOUND — many features will not work")
+
+# Pre-warm FFmpeg/FFprobe path cache now that PATH is fully configured
+from opencut.helpers import get_ffmpeg_path, get_ffprobe_path  # noqa: E402
+
+try:
+    get_ffmpeg_path()
+    get_ffprobe_path()
+except Exception as exc:  # keep diagnostics/API available while media work is blocked
+    logger.error("  FFmpeg: BLOCKED by runtime security gate — %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# System Site-Packages Discovery (frozen builds)
+# ---------------------------------------------------------------------------
+#: Opt-in for the legacy behaviour of importing an external interpreter's
+#: site-packages into the frozen build. Set it to the interpreter's path, or to
+#: "1"/"auto" to search PATH the way OpenCut used to.
+EXTERNAL_SITE_PACKAGES_ENV = "OPENCUT_EXTERNAL_SITE_PACKAGES"
+
+
+def _external_interpreter_version(python: str) -> tuple[int, int] | None:
+    """Return ``(major, minor)`` for ``python``, or None when it cannot run."""
+    try:
+        result = _sp.run(
+            [python, "-c", "import sys; print('%d.%d' % sys.version_info[:2])"],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+    except (OSError, _sp.SubprocessError) as exc:
+        logger.debug("  Could not read version from %s: %s", python, exc)
+        return None
+    if result.returncode != 0:
+        return None
+    match = re.match(r"\s*(\d+)\.(\d+)", result.stdout or "")
+    return (int(match.group(1)), int(match.group(2))) if match else None
+
+
+def _candidate_external_interpreters(setting: str) -> list[str]:
+    """Return the interpreters the operator asked us to consider, in order."""
+    setting = (setting or "").strip()
+    if not setting:
+        return []
+    if setting.lower() not in {"1", "true", "yes", "auto"}:
+        # An explicit path. Anything else on PATH is irrelevant.
+        return [setting] if os.path.isfile(setting) else []
+    import shutil
+
+    found = []
+    for name in ("python", "python3", "py"):
+        resolved = shutil.which(name)
+        if resolved and resolved not in found:
+            found.append(resolved)
+    return found
+
+
+def _setup_system_site_packages():
+    """Import optional packages from an external interpreter, when asked to.
+
+    This used to run unconditionally in frozen builds: it executed the first
+    ``python`` on PATH and appended whatever site-packages that interpreter
+    reported. Two problems, both real. Native extension modules built for a
+    different CPython minor version are not merely unusable, they abort the
+    process on import, which is what "the server just dies" looked like in
+    issue #8 (a 3.13 build adopting C:\\Python312). And it made any writable
+    directory on PATH that contains a python.exe into startup code execution
+    plus an import-shadowing path, in a product that otherwise attests its
+    decoders and pins its model revisions.
+
+    So it is now opt-in, and even then the interpreter's minor version must
+    match this build's. The bundled runtime plus ``~/.opencut/packages``
+    (populated with ``pip --target``) remain the supported way to add optional
+    dependencies to a packaged install.
+    """
+    if not getattr(sys, "frozen", False):
+        return []
+
+    setting = os.environ.get(EXTERNAL_SITE_PACKAGES_ENV, "")
+    if not setting:
+        logger.debug(
+            "  External site-packages disabled; set %s to opt in. "
+            "Optional deps resolve from the bundled runtime and ~/.opencut/packages.",
+            EXTERNAL_SITE_PACKAGES_ENV,
+        )
+        return []
+
+    ours = sys.version_info[:2]
+    rejected: list[str] = []
+    for python in _candidate_external_interpreters(setting):
+        version = _external_interpreter_version(python)
+        if version is None:
+            rejected.append(f"{python} (version unreadable)")
+            continue
+        if version != ours:
+            # A mismatched .pyd does not raise ImportError, it crashes the
+            # interpreter, so this has to be refused rather than attempted.
+            rejected.append(f"{python} (Python {version[0]}.{version[1]}, need {ours[0]}.{ours[1]})")
+            continue
+        added = _append_site_packages_from(python)
+        logger.info(
+            "  External site-packages: added %d path(s) from %s (Python %d.%d); rejected: %s",
+            added, python, version[0], version[1], ", ".join(rejected) or "none",
+        )
+        return [python]
+
+    logger.warning(
+        "  %s is set but no compatible interpreter was found. Rejected: %s. "
+        "OpenCut needs Python %d.%d to share native modules safely.",
+        EXTERNAL_SITE_PACKAGES_ENV, ", ".join(rejected) or "none", ours[0], ours[1],
+    )
+    return []
+
+
+def _append_site_packages_from(python: str) -> int:
+    """Append ``python``'s site-packages directories to ``sys.path``."""
+    import json
+
+    added = 0
+    probes = (
+        "import site, json; print(json.dumps(site.getsitepackages()))",
+        "import site, json; print(json.dumps([site.getusersitepackages()]))",
+    )
+    for probe in probes:
+        try:
+            result = _sp.run(
+                [python, "-c", probe],
+                capture_output=True, text=True, timeout=10, check=False,
+            )
+        except (OSError, _sp.SubprocessError) as exc:
+            logger.debug("  site-packages probe failed for %s: %s", python, exc)
+            continue
+        if result.returncode != 0:
+            continue
+        try:
+            paths = json.loads(result.stdout.strip() or "[]")
+        except json.JSONDecodeError:
+            continue
+        for path in paths:
+            if isinstance(path, str) and os.path.isdir(path) and path not in sys.path:
+                sys.path.append(path)
+                added += 1
+    return added
+
+
+# Ensure ~/.opencut/packages (pip --target fallback) is importable EARLY as a
+# low-priority fallback. It must not outrank stdlib or bundled app modules.
+_opencut_packages = os.path.join(os.path.expanduser("~"), ".opencut", "packages")
+os.makedirs(_opencut_packages, exist_ok=True)
+if _opencut_packages not in sys.path:
+    sys.path.append(_opencut_packages)
+    logger.info("  Added ~/.opencut/packages to sys.path (fallback)")
+
+# Arm crash capture before any optional dependency is imported: a module built
+# against the wrong CPython ABI aborts the process on import, and only an
+# already-armed faulthandler writes anything when that happens.
+try:
+    from opencut.crash_reporter import install_crash_handlers
+
+    install_crash_handlers()
+except Exception as _crash_setup_error:  # pragma: no cover - never block startup
+    logger.warning("Could not install crash handlers: %s", _crash_setup_error)
+
+_setup_system_site_packages()
+
+# Blueprints handle their own imports; this block pre-loads for backward compat
+try:
+    from .core.silence import detect_speech, get_edit_summary  # noqa: F401
+    from .core.zoom import generate_zoom_events  # noqa: F401
+    from .export.premiere import export_premiere_xml  # noqa: F401
+    from .export.srt import export_ass, export_json, export_srt, export_vtt, rgb_to_ass_color  # noqa: F401
+    from .utils.config import CaptionConfig, ExportConfig, SilenceConfig, get_preset  # noqa: F401
+    from .utils.media import probe as _probe_media  # noqa: F401
+except ImportError:
+    pass
+
+
+# ---------------------------------------------------------------------------
+# Optional observability — Sentry / GlitchTip
+# ---------------------------------------------------------------------------
+
+_SENTRY_INITIALISED = False
+
+
+def _init_sentry_if_configured() -> bool:
+    """Initialise Sentry / GlitchTip when configured via env.
+
+    Reads:
+    - ``SENTRY_DSN`` — GlitchTip or Sentry DSN. Empty / unset → skipped.
+    - ``OPENCUT_SENTRY_ENV`` — environment tag (default: "production").
+    - ``OPENCUT_SENTRY_RELEASE`` — release tag (default: current version).
+    - ``OPENCUT_SENTRY_SAMPLE_RATE`` — float 0..1 (default: 1.0).
+
+    Safe when ``sentry_sdk`` isn't installed — logs at INFO and returns
+    ``False``. Idempotent — returns ``True`` on re-entry once initialised.
+    """
+    global _SENTRY_INITIALISED
+    if _SENTRY_INITIALISED:
+        return True
+
+    dsn = os.environ.get("SENTRY_DSN", "").strip()
+    if not dsn:
+        return False
+
+    try:
+        import sentry_sdk  # type: ignore
+        from sentry_sdk.integrations.flask import FlaskIntegration  # type: ignore
+    except ImportError:
+        logger.info(
+            "SENTRY_DSN set but `sentry_sdk` not installed — "
+            "observability disabled. pip install sentry-sdk[flask]"
+        )
+        return False
+
+    try:
+        sample_rate = float(os.environ.get("OPENCUT_SENTRY_SAMPLE_RATE") or "1.0")
+    except (TypeError, ValueError):
+        sample_rate = 1.0
+    sample_rate = max(0.0, min(1.0, sample_rate))
+
+    env = os.environ.get("OPENCUT_SENTRY_ENV", "production")
+    try:
+        from opencut import __version__ as _ver
+    except Exception:  # noqa: BLE001
+        _ver = "unknown"
+    release = os.environ.get("OPENCUT_SENTRY_RELEASE", f"opencut@{_ver}")
+
+    try:
+        sentry_sdk.init(
+            dsn=dsn,
+            environment=env,
+            release=release,
+            sample_rate=sample_rate,
+            traces_sample_rate=sample_rate,
+            integrations=[FlaskIntegration()],
+            # Don't capture request bodies — they often contain media
+            # paths that are irrelevant to crash triage.
+            send_default_pii=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("sentry_sdk.init failed: %s — observability disabled", exc)
+        return False
+
+    _SENTRY_INITIALISED = True
+    logger.info(
+        "Sentry initialised (env=%s, release=%s, sample_rate=%.2f)",
+        env, release, sample_rate,
+    )
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Flask App Factory
+# ---------------------------------------------------------------------------
+def create_app(config=None, testing=False, introspection=False):
+    """Create and configure the Flask application.
+
+    Args:
+        config: An ``OpenCutConfig`` instance.  When *None* (the default),
+            the module-level ``_default_config`` built from env vars is used.
+        testing: Skip the background/startup work that tests do not want.
+        introspection: Build a read-only app suitable for generating route,
+            readiness, and OpenAPI contracts. Contract generation is supposed
+            to be an inspection of the registration graph, but it used to boot
+            a production app: that swept the user's temp files, started the
+            disk-monitor thread, ran credential migrations, initialised Sentry,
+            and imported and registered whatever plugins happened to be in
+            ``~/.opencut/plugins``. Introspection registers the built-in
+            blueprints and nothing else, so a manifest check cannot mutate the
+            machine it is describing.
+
+    Returns:
+        Configured Flask app with all blueprints registered.
+    """
+    if config is None:
+        config = _default_config
+    # Introspection is a strict superset of the test-mode skips.
+    if introspection:
+        testing = True
+
+    # Keep jobs.py runtime limits in sync with the app config used for this
+    # process, including tests that supply a custom OpenCutConfig instance.
+    try:
+        from opencut.jobs import apply_config as _apply_job_config
+
+        _apply_job_config(config)
+    except Exception as e:
+        logger.warning("Could not apply job runtime config: %s", e)
+
+    # Optional observability — Sentry / GlitchTip. Driven by env vars so
+    # deployments opt in without the module dependency becoming a hard
+    # requirement. Safe to call multiple times (sentry_sdk.init is
+    # idempotent-ish — subsequent calls just reconfigure the hub).
+    if not introspection:
+        _init_sentry_if_configured()
+
+    # Startup + periodic sweep of stale opencut_* temp files. Best-effort;
+    # failure never blocks app startup.
+    if not testing:
+        try:
+            from opencut.core import temp_cleanup as _temp_cleanup
+            _temp_cleanup.run_startup_sweep()
+            _temp_cleanup.start_background_sweep()
+        except Exception as _cleanup_exc:  # noqa: BLE001
+            logger.warning("temp_cleanup bootstrap failed: %s", _cleanup_exc)
+
+        try:
+            from opencut.core import disk_monitor as _disk_monitor
+            _disk_monitor.start_background()
+        except Exception as _disk_exc:  # noqa: BLE001
+            logger.warning("disk_monitor bootstrap failed: %s", _disk_exc)
+
+    from opencut.errors import error_response as _error_response  # noqa: E402
+    from opencut.errors import register_error_handlers
+    from opencut.security import OpenCutRequest, validate_csrf_request  # noqa: E402
+
+    _app = Flask(__name__)
+    _app.request_class = OpenCutRequest
+    _app.config["OPENCUT"] = config
+    _app.config["MAX_CONTENT_LENGTH"] = config.max_content_length
+    CORS(_app, origins=config.cors_origins)
+
+    register_error_handlers(_app)
+
+    # Host-header trust gate. Registered before correlation, auth, and CSRF so
+    # an attacker-chosen ``Host`` can never reach /health, the auth check, or
+    # the CSRF bootstrap. See opencut/trusted_hosts.py for the policy.
+    _install_trusted_host_middleware(_app, config, _error_response)
+
+    if not testing:
+        try:
+            from opencut.credential_store import run_startup_migrations
+
+            migration_result = run_startup_migrations()
+            if migration_result["failed"]:
+                logger.warning(
+                    "Credential migration checks failed: %s",
+                    ", ".join(migration_result["failed"]),
+                )
+        except Exception as _credential_exc:  # noqa: BLE001
+            logger.warning(
+                "Credential-vault startup migration failed: %s",
+                _credential_exc,
+            )
+
+    # Per-request correlation ID middleware — must run before route
+    # blueprints register so every view sees the populated ``g.request_id``.
+    try:
+        from opencut.core.request_correlation import install_middleware
+        install_middleware(_app)
+    except Exception as _rc_exc:  # noqa: BLE001
+        logger.warning("request_correlation install failed: %s", _rc_exc)
+
+    # F303: host-embedded panels load from ``file://`` and so present
+    # ``Origin: null``, which /health must refuse a CSRF token to. Publish a
+    # 0600 secret the panel can read through ExtendScript to prove it is not a
+    # web page. Startup survives a failure here, but the panel does not recover
+    # from one: a ``file://`` document has no same-origin fallback, so without
+    # this secret every mutating request it makes returns 403 CSRF_INVALID.
+    try:
+        from opencut.panel_bootstrap import ensure_bootstrap_secret
+
+        ensure_bootstrap_secret()
+    except Exception as _pb_exc:  # noqa: BLE001 - startup must survive a read-only home
+        logger.warning("panel bootstrap secret unavailable: %s", _pb_exc)
+
+    # F112: per-install API token gate for non-loopback binds. The gate
+    # only fires when ``OPENCUT_ALLOW_REMOTE=1`` is set AND the request
+    # peer is non-loopback — local panel/CLI traffic stays trusted.
+    try:
+        _install_remote_auth_middleware(_app, _error_response)
+
+    except Exception as _auth_exc:  # noqa: BLE001
+        if _remote_bind_allowed():
+            raise RuntimeError(
+                "Remote auth middleware install failed while OPENCUT_ALLOW_REMOTE=1"
+            ) from _auth_exc
+        logger.warning("auth middleware install failed: %s", _auth_exc)
+
+    @_app.before_request
+    def _enforce_csrf_token():  # noqa: D401 - tiny middleware
+        return validate_csrf_request()
+
+    @_app.errorhandler(413)
+    def handle_large_request(e):
+        """Return 413 when request payload exceeds MAX_CONTENT_LENGTH."""
+        max_mb = config.max_content_length / (1024 * 1024)
+        return _error_response(
+            "REQUEST_TOO_LARGE",
+            f"Request too large (max {max_mb:.0f} MB)",
+            status=413,
+            suggestion="Reduce the payload size or process the file in smaller batches.",
+        )
+
+    @_app.errorhandler(RuntimeError)
+    def handle_runtime_error(e):
+        """Return a structured error for unhandled RuntimeErrors.
+
+        Delegates to ``safe_error`` so FFmpeg/ImportError/MemoryError
+        RuntimeErrors get classified into specific codes with recovery
+        suggestions. Falls back to a generic INTERNAL_ERROR response if
+        classification fails.
+        """
+        logger.exception("Unhandled RuntimeError: %s", e)
+        try:
+            from opencut.errors import safe_error as _safe_error
+            return _safe_error(e, context="runtime_error_handler")
+        except Exception:
+            err_msg = str(e)[:200] if str(e) else "Internal server error"
+            return _error_response(
+                "INTERNAL_ERROR",
+                err_msg,
+                status=500,
+                suggestion="Check the server logs for details.",
+            )
+
+    @_app.errorhandler(500)
+    def handle_internal_error(e):
+        """Log unhandled 500 errors to crash log for post-mortem debugging."""
+        import traceback as _tb
+        logger.exception("Unhandled 500 error: %s", e)
+        try:
+            _crash_log = os.path.join(LOG_DIR, "crash.log")
+            with open(_crash_log, "a", encoding="utf-8") as _f:
+                _f.write(f"\n--- {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
+                _f.write(f"Endpoint: {request.path} [{request.method}]\n")
+                _tb.print_exc(file=_f)
+        except Exception:
+            pass
+        return _error_response(
+            "INTERNAL_ERROR",
+            "An internal error occurred. Check server logs for details.",
+            status=500,
+            suggestion="Retry the request; if it persists check ~/.opencut/crash.log.",
+        )
+
+    # Register Blueprints (all routes are in opencut/routes/)
+    from opencut.routes import assert_no_route_collisions, register_blueprints  # noqa: E402
+    register_blueprints(_app)
+
+    # Load Plugins. Skipped for introspection: a contract describes what
+    # OpenCut ships, and importing third-party plugin modules to build it
+    # would both run their code and make the manifest machine-dependent.
+    if not introspection:
+        try:
+            from opencut.core.plugins import load_all_plugins
+            plugin_result = load_all_plugins(_app)
+            if plugin_result["loaded"]:
+                logger.info("Plugins: %d loaded", len(plugin_result["loaded"]))
+        except Exception as e:
+            logger.warning("Plugin loading failed: %s", e)
+
+    # Route ownership must stay unambiguous. Fail fast if any later blueprint or
+    # plugin registration reintroduces a method/path collision.
+    assert_no_route_collisions(_app)
+
+    return _app
+
+
+# Backward-compat: module-level singleton used by entry points and tests.
+# Access via `from opencut.server import app` triggers __getattr__ below,
+# which creates the singleton on first use rather than at import time.
+_app_singleton = None
+_app_lock = _log_threading.Lock()
+
+
+def _get_app():
+    """Return the shared Flask app singleton, creating it on first call."""
+    global _app_singleton
+    with _app_lock:
+        if _app_singleton is None:
+            _app_singleton = create_app()
+    return _app_singleton
+
+
+def __getattr__(name: str):
+    """Lazy attribute access for module-level names.
+
+    Supports ``from opencut.server import app`` without triggering
+    ``create_app()`` at import time.
+    """
+    if name == "app":
+        inst = _get_app()
+        # Populate __dict__ so subsequent accesses bypass this hook.
+        globals()["app"] = inst
+        return inst
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+# ---------------------------------------------------------------------------
+# PID File Management, Port Checking, and Kill Strategies
+# ---------------------------------------------------------------------------
+# Extracted to opencut/pid.py.  Re-exported here so any code that previously
+# did `from opencut.server import _read_pid` (or similar) continues to work.
+from opencut.pid import (  # noqa: E402, F401
+    PID_FILE,
+    _check_port,
+    _is_opencut_on_port,
+    _is_pid_alive,
+    _kill_via_netstat,
+    _kill_via_pid,
+    _kill_via_shutdown_endpoint,
+    _nuke_old_servers,
+    _read_pid,
+    _remove_pid,
+    _wait_for_port,
+    _write_pid,
+)
+
+
+# ---------------------------------------------------------------------------
+# Windows Toast Notification
+# ---------------------------------------------------------------------------
+def _report_missing_generated_manifests() -> list[str]:
+    """Fail loudly at boot when the build shipped without its manifests.
+
+    Each individual loader falls back on its own, so a build missing
+    ``opencut/_generated`` used to surface as one incidental warning and then a
+    scatter of unrelated-looking feature bugs. Report the whole set once, where
+    someone reading a bug report will see it.
+    """
+    from opencut._generated import (
+        GENERATED_DIR,
+        GeneratedManifestMissing,
+        missing_manifests,
+    )
+
+    missing = missing_manifests()
+    if not missing:
+        return []
+    detail = ", ".join(missing)
+    message = (
+        f"{len(missing)} generated manifest(s) missing from {GENERATED_DIR}: {detail}. "
+        "This build was packaged without opencut/_generated; route validation, "
+        "feature readiness, extended MCP tools and the CLI route allowlist are degraded. "
+        "Reinstall OpenCut or rebuild with collect_data_files('opencut._generated')."
+    )
+    logger.error(message)
+    print(f"  WARNING: {message}")
+    try:
+        from opencut.checks import record_check_failure
+
+        record_check_failure("generated_manifests", GeneratedManifestMissing(missing))
+    except ImportError:  # pragma: no cover - checks is a first-party module
+        pass
+    return missing
+
+
+def _show_startup_notification(port):
+    """Show a Windows toast notification so user knows the server started."""
+    if sys.platform != "win32":
+        return
+    # Coerce to int to prevent injection into the PowerShell command string
+    safe_port = int(port)
+    with suppress(Exception):
+        # Use PowerShell to show a native Windows toast (no extra deps needed)
+        _sp.run(
+            ["powershell", "-WindowStyle", "Hidden", "-Command",
+             "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null; "
+             "[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom, ContentType = WindowsRuntime] | Out-Null; "
+             "$xml = [Windows.Data.Xml.Dom.XmlDocument]::new(); "
+             "$xml.LoadXml('<toast><visual><binding template=\"ToastText02\">"
+             "<text id=\"1\">OpenCut Server Running</text>"
+             f"<text id=\"2\">Listening on port {safe_port}. Open Premiere Pro to connect.</text>"
+             "</binding></visual></toast>'); "
+             "$toast = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('OpenCut'); "
+             "$toast.Show([Windows.UI.Notifications.ToastNotification]::new($xml))"],
+            creationflags=0x08000000,  # CREATE_NO_WINDOW
+            stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+            timeout=10, check=False
+        )
+
+
+# ---------------------------------------------------------------------------
+# Server Startup
+# ---------------------------------------------------------------------------
+def run_server(host="127.0.0.1", port=5679, debug=False):
+    """Start the OpenCut backend server."""
+    import tempfile
+
+    # Clean up stale preview temp files from previous runs
+    try:
+        import glob as _glob
+        _tmp = tempfile.gettempdir()
+        _now = time.time()
+        for _f in _glob.glob(os.path.join(_tmp, "opencut_preview_*.jpg")):
+            try:
+                if (_now - os.path.getmtime(_f)) > 3600:
+                    os.unlink(_f)
+            except OSError:
+                pass
+    except Exception:
+        pass
+
+    effective_port = port
+    recover_durable_work = True
+
+    if not _check_port(host, port):
+        # Port is busy - run the kill sequence
+        if _nuke_old_servers(host, port):
+            effective_port = port
+        elif _is_opencut_on_port(host, port):
+            # An OpenCut server we could not reclaim is still serving. Moving to
+            # an alternate port would put two servers on the same ~/.opencut
+            # databases and overwrite the PID file that points at the live one,
+            # which is how a working install turns into "service unavailable".
+            live_pid, live_port = _read_pid()
+            located = f"PID {live_pid}" if live_pid else "an unknown PID"
+            print("")
+            print(f"  ERROR: OpenCut is already running on {host}:{port} ({located}).")
+            print("  Stop that server before starting another, or use --port to")
+            print("  run this one on a different port deliberately.")
+            print("")
+            logger.error(
+                "Refusing to start: live OpenCut server on %s:%s (pid=%s, pid-file port=%s)",
+                host, port, live_pid, live_port,
+            )
+            sys.exit(1)
+        else:
+            # Port held by something that is not OpenCut - find an alternate.
+            recover_durable_work = False
+            print("  Searching for an open port...")
+            for offset in range(1, 11):
+                candidate = port + offset
+                if _check_port(host, candidate):
+                    effective_port = candidate
+                    print(f"  Using port {effective_port} instead.")
+                    break
+            else:
+                print("")
+                print(f"  ERROR: Ports {port}-{port + 10} are all in use.")
+                print("  Kill any stuck python processes and try again.")
+                print("")
+                sys.exit(1)
+
+    # Write PID file so future instances can kill us -- but never over one that
+    # names a server still serving. An alternate-port instance that clobbers the
+    # PID file orphans the original: nothing can find it to shut it down, which
+    # is the same failure as two servers on one port, just one step removed.
+    _existing_pid, _existing_port = _read_pid()
+    if (
+        effective_port != port
+        and _existing_pid is not None
+        and _existing_port is not None
+        and _existing_port != effective_port
+        and _is_opencut_on_port(host, _existing_port)
+    ):
+        logger.warning(
+            "Leaving the PID file pointing at the live server on port %s; this "
+            "instance runs on %s and will not be discoverable through it.",
+            _existing_port, effective_port,
+        )
+        print(f"  Note: another OpenCut server is live on port {_existing_port}.")
+        print(f"        This instance runs on {effective_port} and shares its user data.")
+    else:
+        _write_pid(effective_port)
+
+    # Only the process that owns the requested port may recover shared durable
+    # work. An alternate-port instance can coexist with the original server,
+    # so marking its running jobs interrupted or rewriting its queue would
+    # create duplicate recovery candidates.
+    if recover_durable_work:
+        try:
+            from opencut.job_store import cleanup_old_jobs, mark_interrupted
+            mark_interrupted()
+            cleanup_old_jobs()
+        except Exception as e:
+            logger.warning("Job store startup failed: %s", e)
+
+    # Register cleanup on normal exit
+    import atexit
+    atexit.register(_remove_pid)
+    from opencut.workers import shutdown_pool
+    atexit.register(shutdown_pool)
+    # Close persistent SQLite connections so the WAL files aren't held
+    # open on Windows after shutdown.
+    try:
+        from opencut.job_store import close_all_connections as _close_job_db
+        atexit.register(_close_job_db)
+    except ImportError:
+        pass
+    try:
+        from opencut.core.footage_index_db import close_all_connections as _close_footage_db
+        atexit.register(_close_footage_db)
+    except ImportError:
+        pass
+    try:
+        from opencut.journal import close_all_connections as _close_journal_db
+        atexit.register(_close_journal_db)
+    except ImportError:
+        pass
+
+    print("")
+    from opencut import __version__
+    print(f"  OpenCut Backend Server v{__version__}")
+    print(f"  Listening on http://{host}:{effective_port}")
+    print(f"  PID: {os.getpid()}")
+    print(f"  Log file: {LOG_FILE}")
+    print("  Press Ctrl+C to stop")
+    print("")
+    logger.info(f"Server starting on http://{host}:{effective_port} (pid={os.getpid()})")
+    _report_missing_generated_manifests()
+
+    # Show Windows toast notification so user knows server started (especially
+    # when launched via VBS hidden launcher where console is invisible)
+    _show_startup_notification(effective_port)
+
+    server_app = _get_app()
+    # The Werkzeug debug reloader starts a parent process before the serving
+    # child. Only the serving process may claim and resume durable queue work.
+    if recover_durable_work and (not debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true"):
+        try:
+            from opencut.routes.jobs_routes import initialize_job_queue
+
+            recovery = initialize_job_queue(server_app)
+            if recovery.get("loaded") or recovery.get("interrupted"):
+                logger.info(
+                    "Job queue recovered: loaded=%s interrupted=%s invalid=%s",
+                    recovery.get("loaded", 0),
+                    recovery.get("interrupted", 0),
+                    recovery.get("invalid", 0),
+                )
+        except Exception as queue_exc:  # noqa: BLE001 - server remains available
+            logger.error("Job queue startup recovery failed: %s", queue_exc)
+
+    _serve_wsgi_app(server_app, host=host, port=effective_port, debug=debug)
+
+
+#: Which server handled this process's traffic, so a bug report can say.
+_ACTIVE_WSGI_SERVER = "not started"
+
+
+def active_wsgi_server() -> str:
+    return _ACTIVE_WSGI_SERVER
+
+
+def _serve_wsgi_app(app, *, host: str, port: int, debug: bool) -> None:
+    """Serve the Flask app, choosing the right server for the bind."""
+    global _ACTIVE_WSGI_SERVER
+
+    if _should_use_production_wsgi(host=host, debug=debug):
+        from waitress import serve
+
+        threads = _waitress_thread_count()
+        _ACTIVE_WSGI_SERVER = f"waitress (threads={threads})"
+        logger.info("Serving remote OpenCut API with Waitress (threads=%s)", threads)
+        serve(app, host=host, port=port, threads=threads)
+        return
+
+    if debug:
+        _ACTIVE_WSGI_SERVER = "werkzeug (debug reloader)"
+        app.run(host=host, port=port, debug=True, threaded=True)
+        return
+
+    # Loopback, not debugging. Werkzeug's threaded server stays: this bind is
+    # reachable only from the machine it runs on, and the panel's SSE and
+    # WebSocket paths want a response that is written straight through.
+    #
+    # What does change is the noise. ``app.run`` routes through
+    # ``run_simple``, whose ``log_startup`` reprints the address OpenCut has
+    # already printed and adds "This is a development server. Do not use it in
+    # a production deployment." A user pasted exactly that into issue #8 while
+    # reporting an unrelated crash. ``make_server`` is the same server without
+    # the banner.
+    from werkzeug.serving import make_server
+
+    _ACTIVE_WSGI_SERVER = "werkzeug (threaded, loopback)"
+    logger.info("Serving loopback OpenCut API with the Werkzeug threaded server")
+    server = make_server(host, port, app, threaded=True)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+
+
+def _should_use_production_wsgi(*, host: str, debug: bool) -> bool:
+    return not debug and not _is_loopback_host(host)
+
+
+def _install_trusted_host_middleware(app, config, error_response):
+    """Reject requests whose ``Host`` header is not an authority we serve.
+
+    Loopback peers are trusted by default, so without this gate a rebound DNS
+    name (``evil.example`` resolving to 127.0.0.1) reaches ``/health`` with a
+    matching ``Origin`` and harvests the CSRF bootstrap token. IP literals are
+    exempt from rebinding, so non-loopback literals are accepted only when the
+    operator opted into a remote bind.
+    """
+    from opencut import trusted_hosts as _trusted_hosts
+
+    allowed = _trusted_hosts.build_trusted_hosts(
+        configured=getattr(config, "trusted_hosts", ()) or (),
+        bind_host=getattr(config, "bind_host", "") or "",
+    )
+    allow_ip_literals = _trusted_hosts.remote_bind_enabled()
+    app.config["OPENCUT_TRUSTED_HOSTS"] = allowed
+
+    @app.before_request
+    def _enforce_trusted_host():  # noqa: D401 - tiny middleware
+        raw_host = request.headers.get("Host", "")
+        if _trusted_hosts.is_trusted_host(
+            raw_host,
+            allowed,
+            allow_ip_literals=allow_ip_literals,
+        ):
+            return None
+        try:
+            from opencut.security_audit import record_untrusted_host_rejection
+
+            record_untrusted_host_rejection(raw_host)
+        except Exception:  # noqa: BLE001 - auditing must never block the gate
+            pass
+        return error_response(
+            "UNTRUSTED_HOST",
+            "Request rejected: unrecognized Host header",
+            status=400,
+            suggestion=(
+                "Reach OpenCut at http://127.0.0.1:<port>, or add the hostname "
+                "to OPENCUT_TRUSTED_HOSTS before using it."
+            ),
+        )
+
+
+def _install_remote_auth_middleware(app, error_response):
+    from opencut import auth as _auth
+
+    auth_exempt_paths = frozenset({"/health", "/auth/info"})
+
+    @app.before_request
+    def _enforce_remote_auth_token():  # noqa: D401 - tiny middleware
+        if request.path in auth_exempt_paths:
+            return None
+        if not _auth.request_requires_auth_token(request.remote_addr):
+            return None
+        token = _auth.extract_request_token(request.headers)
+        if _auth.is_token_valid(token):
+            return None
+        from opencut.security_audit import record_auth_token_rejection
+        record_auth_token_rejection()
+        return error_response(
+            "AUTH_REQUIRED",
+            "Missing or invalid X-OpenCut-Auth token",
+            status=401,
+            suggestion=_auth.auth_recovery_suggestion(),
+        )
+
+
+def _waitress_thread_count() -> int:
+    raw = os.environ.get("OPENCUT_WAITRESS_THREADS", "").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 8
+    return max(1, min(value, 64))
+
+
+def download_models(model_size="base"):
+    """Download Whisper model for offline use. Called by installer."""
+    import warnings
+    warnings.filterwarnings("ignore")
+
+    # Suppress noisy huggingface_hub warnings
+    for name in ["huggingface_hub", "huggingface_hub.file_download",
+                 "huggingface_hub.utils", "huggingface_hub._commit_api",
+                 "urllib3", "filelock"]:
+        logging.getLogger(name).setLevel(logging.ERROR)
+
+    # Model size info for progress display
+    model_sizes = {
+        "tiny": "~75 MB", "tiny.en": "~75 MB",
+        "base": "~150 MB", "base.en": "~150 MB",
+        "small": "~500 MB", "small.en": "~500 MB",
+        "medium": "~1.5 GB", "medium.en": "~1.5 GB",
+        "large-v1": "~3 GB", "large-v2": "~3 GB", "large-v3": "~3 GB",
+        "turbo": "~1.6 GB", "large-v3-turbo": "~1.6 GB",
+    }
+    size_str = model_sizes.get(model_size, "unknown size")
+
+    # Resolve model name to the immutable repository revision used at runtime.
+    from opencut.core.asr_provenance import model_identity
+
+    repo_id, revision = model_identity("faster-whisper", model_size)
+
+    print("")
+    print("  OpenCut Model Downloader")
+    print("  ========================")
+    print("")
+    print(f"  Model:  Whisper '{model_size}' ({size_str})")
+    print(f"  Repo:   {repo_id}")
+    print("  Source: Hugging Face (huggingface.co)")
+    print("")
+
+    # Step 1: Download model files with progress
+    try:
+        from opencut.core.model_safety import safe_list_repo_files, safe_snapshot_download
+
+        print("  Fetching file list...")
+        files = safe_list_repo_files(repo_id, revision=revision)
+        total_files = len(files)
+        print(f"  Found {total_files} files to download.")
+        print("")
+
+        _file_count = [0]
+        _start_time = [time.time()]
+
+        def _progress_callback(step_name: str):
+            """Called when tqdm updates — we intercept to show our own progress."""
+            pass
+
+        # Monkey-patch tqdm to show cleaner progress
+        _orig_tqdm = None
+        _tqdm_mod = None
+        try:
+            import tqdm as _tqdm_mod
+            _orig_tqdm = _tqdm_mod.tqdm
+
+            class _InstallerTqdm(_orig_tqdm):
+                def __init__(self, *args, **kwargs):
+                    kwargs["bar_format"] = "  {desc} {percentage:3.0f}% |{bar:25}| {n_fmt}/{total_fmt} {rate_fmt}"
+                    kwargs["ncols"] = 75
+                    kwargs.setdefault("file", sys.stdout)
+                    super().__init__(*args, **kwargs)
+
+            _tqdm_mod.tqdm = _InstallerTqdm
+        except Exception:
+            pass
+
+        try:
+            print("  Downloading from Hugging Face...")
+            print("")
+            snapshot_path = safe_snapshot_download(
+                repo_id,
+                revision=revision,
+                local_files_only=False,
+            )
+            print("")
+        finally:
+            # Always restore tqdm even if download fails
+            if _tqdm_mod is not None and _orig_tqdm is not None:
+                _tqdm_mod.tqdm = _orig_tqdm
+
+    except Exception as e:
+        print(f"  [ERROR] Download failed: {e}")
+        print("")
+        print("  You can download it later from the OpenCut panel in Premiere Pro.")
+        return 1
+
+    # Step 2: Verify model loads correctly
+    print("")
+    print("  Verifying model...")
+    try:
+        from faster_whisper import WhisperModel
+        model = WhisperModel(snapshot_path, device="cpu", compute_type="int8")
+        del model
+        print(f"  [OK] Whisper '{model_size}' model downloaded and verified!")
+    except Exception as e:
+        print(f"  [WARNING] Model downloaded but verification failed: {e}")
+        print("  The model may still work — try it from the OpenCut panel.")
+
+    print("")
+    print("  Models are cached in your user profile and will be")
+    print("  available immediately when you use OpenCut.")
+    print("")
+    return 0
+
+
+def _pause_on_fatal_exit() -> None:
+    """Wait for user acknowledgement only in interactive terminals."""
+    stdin = getattr(sys, "stdin", None)
+    try:
+        if stdin is not None and stdin.isatty():
+            input("  Press Enter to close...")
+    except (EOFError, KeyboardInterrupt):
+        pass
+
+
+def _is_loopback_host(host: str) -> bool:
+    """Return True when ``host`` cannot expose the API beyond this machine."""
+    normalized = str(host or "").strip().lower()
+    if normalized == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(normalized.strip("[]")).is_loopback
+    except ValueError:
+        return False
+
+
+def _remote_bind_allowed() -> bool:
+    return os.environ.get("OPENCUT_ALLOW_REMOTE", "").strip().lower() in _TRUE_ENV_VALUES
+
+
+def main():
+    """Entry point for `opencut-server` console script (pyproject.toml).
+
+    CLI flags override env vars; env vars override the built-in defaults.
+    Supported env vars:
+        OPENCUT_HOST   — bind address (default 127.0.0.1)
+        OPENCUT_PORT   — listen port (default 5679)
+        OPENCUT_DEBUG  — enable Flask debug mode when set to "true"/"1"
+        OPENCUT_ALLOW_REMOTE — set to "1" to allow non-loopback binds
+    """
+    try:
+        import argparse
+
+        # Env var defaults — let docker-compose / launchers configure without --flags.
+        env_host = os.environ.get("OPENCUT_HOST", "127.0.0.1").strip() or "127.0.0.1"
+        try:
+            env_port = int(os.environ.get("OPENCUT_PORT", "5679"))
+            if not (1 <= env_port <= 65535):
+                env_port = 5679
+        except ValueError:
+            env_port = 5679
+        env_debug = os.environ.get("OPENCUT_DEBUG", "").strip().lower() in ("1", "true", "yes", "on")
+
+        parser = argparse.ArgumentParser(description="OpenCut Backend Server")
+        parser.add_argument("--host", default=env_host, help="Host to bind to")
+        parser.add_argument("--port", type=int, default=env_port, help="Port to listen on")
+        parser.add_argument("--debug", action="store_true", default=env_debug, help="Enable debug mode")
+        parser.add_argument("--download-models", nargs="?", const="base", default=None,
+                            metavar="MODEL",
+                            help="Download Whisper model (tiny/base/small/medium/large-v3/turbo)")
+        parser.add_argument(
+            "--rotate-auth",
+            action="store_true",
+            help="Rotate the writable API-token backend and exit",
+        )
+        parser.add_argument(
+            "--print-auth",
+            action="store_true",
+            help="Print the OS-vault API token (secret-file values are never echoed)",
+        )
+        args = parser.parse_args()
+
+        if args.rotate_auth or args.print_auth:
+            from opencut import auth as _auth
+
+            token = _auth.rotate_token() if args.rotate_auth else _auth.ensure_token()
+            print("")
+            if _auth.using_token_file():
+                action = "rotated" if args.rotate_auth else "validated"
+                print(f"  OpenCut API token: {action}; value intentionally not displayed")
+                print("  Stored in:         externally managed secret file")
+                print("  Rotation:          replace the external secret and restart if read-only")
+            else:
+                print(f"  OpenCut API token: {token.token}")
+                print("  Stored in:         OS credential vault")
+                print(f"  Metadata:          {_auth.AUTH_FILE}")
+            print(f"  Header to use:     {_auth.AUTH_HEADER}")
+            print("  This token is only required for non-loopback requests when")
+            print("  OPENCUT_ALLOW_REMOTE=1 is set.")
+            return 0
+
+        if args.download_models is not None:
+            os.environ["HF_HUB_DISABLE_IMPLICIT_TOKEN"] = "1"
+            os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
+            os.environ["HF_HUB_DISABLE_EXPERIMENTAL_WARNING"] = "1"
+            sys.exit(download_models(args.download_models))
+        else:
+            if not _is_loopback_host(args.host):
+                if not _remote_bind_allowed():
+                    print("")
+                    print("  ERROR: Refusing to bind OpenCut to a non-loopback host.")
+                    print(f"  Requested host: {args.host}")
+                    print("  OpenCut's backend is a local, single-user API. Keep it on")
+                    print("  127.0.0.1 unless you intentionally expose it on a trusted network.")
+                    print("  Set OPENCUT_ALLOW_REMOTE=1 to allow a remote bind.")
+                    return 2
+                # Ensure a vault token exists before announcing remote binding.
+                try:
+                    from opencut import auth as _auth
+
+                    issued = _auth.ensure_token()
+                except Exception as _auth_exc:  # noqa: BLE001
+                    print("")
+                    print(f"  ERROR: could not initialise auth token: {_auth_exc}")
+                    print("  Configure a secure OS credential vault or mount a locked-down")
+                    print("  token file through OPENCUT_REMOTE_AUTH_TOKEN_FILE, then retry.")
+                    return 2
+                print("")
+                print(f"  WARNING: Binding OpenCut to non-loopback host {args.host}.")
+                print("  Non-loopback requests must carry X-OpenCut-Auth.")
+                if issued is not None:
+                    if _auth.using_token_file():
+                        print("  Token source: externally managed secret file (value not displayed)")
+                        print("  Rotate read-only mounts by replacing the secret and recreating the service.")
+                    else:
+                        print("  Reveal with: opencut-server --print-auth")
+                        print("  Rotate with: opencut-server --rotate-auth")
+            run_server(host=args.host, port=args.port, debug=args.debug)
+            return 0
+    except Exception as _fatal:
+        print("")
+        print("  " + "=" * 50)
+        print("  FATAL ERROR — OpenCut Server failed to start")
+        print("  " + "=" * 50)
+        print("")
+        traceback.print_exc()
+        print("")
+        try:
+            _crash_log = os.path.join(os.path.expanduser("~"), ".opencut", "crash.log")
+            with open(_crash_log, "a", encoding="utf-8") as _f:
+                _f.write(f"\n--- {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
+                _f.write("OpenCut Server startup crash\n\n")
+                traceback.print_exc(file=_f)
+            print(f"  Crash log saved to: {_crash_log}")
+        except Exception:
+            pass
+        print("")
+        _pause_on_fatal_exit()
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

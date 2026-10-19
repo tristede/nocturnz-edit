@@ -1,0 +1,152 @@
+{
+  "schemaVersion": 1,
+  "note": "Source entry points only. This mapping does not certify upstream completeness, model availability or Premiere/UXP compatibility. Zoom relatif and source-silence CLI are independent existing integrations.",
+  "modules": [
+    {
+      "id": "silences",
+      "upstreamStatus": "source-imported-adapter-pending",
+      "entryPoints": [
+        "vendor/sources/opencut/opencut/core/silence.py",
+        "vendor/sources/auto-editor/src/analyze/audio.nim",
+        "vendor/sources/jumpcut/jumpcut.py",
+        "vendor/sources/premiere-director/panel/src/silence/detect.ts"
+      ]
+    },
+    {
+      "id": "hesitations",
+      "upstreamStatus": "source-imported-adapter-pending",
+      "entryPoints": [
+        "vendor/sources/opencut/opencut/core/fillers.py"
+      ]
+    },
+    {
+      "id": "repetitions",
+      "upstreamStatus": "source-imported-adapter-pending",
+      "entryPoints": [
+        "vendor/sources/opencut/opencut/core/repeat_detect.py"
+      ]
+    },
+    {
+      "id": "transcription",
+      "upstreamStatus": "source-imported-adapter-pending",
+      "entryPoints": [
+        "vendor/sources/opencut/opencut/core/asr_router.py",
+        "vendor/sources/opencut/opencut/core/transcript_edit.py",
+        "vendor/sources/opencut/opencut/core/crisper_whisper.py",
+        "vendor/sources/premiere-director/panel/src/asr/whisper.ts"
+      ]
+    },
+    {
+      "id": "captions",
+      "upstreamStatus": "source-imported-adapter-pending",
+      "entryPoints": [
+        "vendor/sources/opencut/opencut/core/captions.py",
+        "vendor/sources/opencut/opencut/core/animated_captions.py",
+        "vendor/sources/opencut/opencut/core/styled_captions.py"
+      ]
+    },
+    {
+      "id": "podcast",
+      "upstreamStatus": "source-imported-adapter-pending",
+      "entryPoints": [
+        "vendor/sources/opencut/opencut/core/multicam.py",
+        "vendor/sources/opencut/opencut/core/podcast_suite.py",
+        "vendor/sources/openpodcut/analyzer/cuts.py",
+        "vendor/sources/openpodcut/analyzer/vad.py",
+        "vendor/sources/podclip/client/analyzer.js",
+        "vendor/sources/podclip/host/host.jsx",
+        "vendor/sources/premiere-director/panel/src/director/engine.ts"
+      ]
+    },
+    {
+      "id": "cadrages",
+      "upstreamStatus": "source-imported-adapter-pending",
+      "entryPoints": [
+        "vendor/sources/opencut/opencut/core/multicam_grid.py",
+        "vendor/sources/opencut/opencut/core/split_screen.py"
+      ]
+    },
+    {
+      "id": "zooms",
+      "upstreamStatus": "source-imported-adapter-pending",
+      "entryPoints": [
+        "vendor/sources/opencut/opencut/core/zoom.py",
+        "vendor/sources/opencut/opencut/core/auto_zoom.py"
+      ]
+    },
+    {
+      "id": "recadrage",
+      "upstreamStatus": "source-imported-adapter-pending",
+      "entryPoints": [
+        "vendor/sources/opencut/opencut/core/smart_reframe.py",
+        "vendor/sources/opencut/opencut/core/face_reframe.py"
+      ]
+    },
+    {
+      "id": "shorts",
+      "upstreamStatus": "source-imported-adapter-pending",
+      "entryPoints": [
+        "vendor/sources/opencut/opencut/core/shorts_pipeline.py",
+        "vendor/sources/opencut/opencut/core/highlights.py"
+      ]
+    },
+    {
+      "id": "chapitres",
+      "upstreamStatus": "source-imported-adapter-pending",
+      "entryPoints": [
+        "vendor/sources/opencut/opencut/core/chapter_gen.py",
+        "vendor/sources/opencut/opencut/core/stream_chapters.py"
+      ]
+    },
+    {
+      "id": "broll",
+      "upstreamStatus": "source-imported-adapter-pending",
+      "entryPoints": [
+        "vendor/sources/opencut/opencut/core/broll_suggest.py",
+        "vendor/sources/opencut/opencut/core/broll_insert.py",
+        "vendor/sources/opencut/opencut/core/footage_search.py"
+      ]
+    },
+    {
+      "id": "audio",
+      "upstreamStatus": "source-imported-adapter-pending",
+      "entryPoints": [
+        "vendor/sources/opencut/opencut/core/audio.py",
+        "vendor/sources/opencut/opencut/core/audio_enhance.py",
+        "vendor/sources/opencut/opencut/core/audio_duck.py"
+      ]
+    },
+    {
+      "id": "musique",
+      "upstreamStatus": "source-imported-adapter-pending",
+      "entryPoints": [
+        "vendor/sources/opencut/opencut/core/music_gen.py",
+        "vendor/sources/opencut/opencut/core/music_remix.py"
+      ]
+    },
+    {
+      "id": "censure",
+      "upstreamStatus": "source-imported-adapter-pending",
+      "entryPoints": [
+        "vendor/sources/opencut/opencut/core/profanity_censor.py",
+        "vendor/sources/opencut/opencut/core/redaction.py"
+      ]
+    },
+    {
+      "id": "recettes",
+      "upstreamStatus": "source-imported-adapter-pending",
+      "entryPoints": [
+        "vendor/sources/opencut/opencut/core/workflow.py",
+        "vendor/sources/opencut/opencut/core/macro_recorder.py"
+      ]
+    },
+    {
+      "id": "lots",
+      "upstreamStatus": "source-imported-adapter-pending",
+      "entryPoints": [
+        "vendor/sources/opencut/opencut/core/batch_process.py",
+        "vendor/sources/opencut/opencut/core/batch_executor.py"
+      ]
+    }
+  ]
+}

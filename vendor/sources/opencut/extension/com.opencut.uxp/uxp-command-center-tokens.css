@@ -1,0 +1,123 @@
+/* OpenCut UXP command-center color and elevation tokens. */
+
+:root,
+html.theme-darkest {
+  color-scheme: dark;
+  --cc-bg: #0d0f13;
+  --cc-sidebar: #101319;
+  --cc-surface: #171b22;
+  --cc-surface-raised: #1c2129;
+  --cc-control: #222832;
+  --cc-border: rgba(214, 222, 233, 0.10);
+  --cc-border-strong: rgba(214, 222, 233, 0.18);
+  --cc-text: #e8ebf0;
+  --cc-muted: #a2a9b4;
+  --cc-accent: #86a8f7;
+  --cc-on-accent: #08101f;
+  --cc-accent-soft: rgba(134, 168, 247, 0.12);
+  --cc-success: #76b99e;
+  --cc-warning: #d7ad62;
+  --cc-danger: #d68680;
+  --cc-hover: rgba(255, 255, 255, 0.045);
+  --cc-selected: rgba(134, 168, 247, 0.13);
+  --cc-overlay: rgba(2, 4, 7, 0.72);
+  --cc-focus-ring: rgba(134, 168, 247, 0.30);
+  --cc-disabled: #747c89;
+  --cc-radius: 6px;
+  --cc-shadow: none;
+  --cc-shadow-float: 0 18px 48px rgba(0, 0, 0, 0.42);
+}
+
+html.theme-dark {
+  color-scheme: dark;
+  --cc-bg: #1b1e23;
+  --cc-sidebar: #20242a;
+  --cc-surface: #272b32;
+  --cc-surface-raised: #2d323a;
+  --cc-control: #343a44;
+  --cc-border: rgba(226, 231, 239, 0.13);
+  --cc-border-strong: rgba(226, 231, 239, 0.22);
+  --cc-text: #f0f2f5;
+  --cc-muted: #b8bec7;
+  --cc-accent: #91aff7;
+  --cc-on-accent: #08101f;
+  --cc-accent-soft: rgba(145, 175, 247, 0.15);
+  --cc-success: #7bc2a5;
+  --cc-warning: #e1ba70;
+  --cc-danger: #df918a;
+  --cc-hover: rgba(255, 255, 255, 0.055);
+  --cc-selected: rgba(145, 175, 247, 0.15);
+  --cc-overlay: rgba(8, 10, 14, 0.68);
+  --cc-focus-ring: rgba(145, 175, 247, 0.32);
+  --cc-disabled: #858c97;
+  --cc-radius: 6px;
+  --cc-shadow: none;
+  --cc-shadow-float: 0 18px 48px rgba(0, 0, 0, 0.36);
+
+  --bg-primary: #1b1e23;
+  --bg-secondary: #20242a;
+  --bg-card: #272b32;
+  --bg-card-hdr: #2d323a;
+  --bg-input: #20242a;
+  --bg-hover: #343a44;
+  --text-primary: #f0f2f5;
+  --text-secondary: #b8bec7;
+  --text-disabled: #7e858f;
+  --border: #3c424c;
+  --border-light: #4a515d;
+}
+
+html.theme-light {
+  color-scheme: light;
+  --cc-bg: #edf1f6;
+  --cc-sidebar: #f7f9fc;
+  --cc-surface: #ffffff;
+  --cc-surface-raised: #f6f8fb;
+  --cc-control: #e7ecf3;
+  --cc-border: rgba(34, 48, 69, 0.16);
+  --cc-border-strong: rgba(34, 48, 69, 0.28);
+  --cc-text: #182132;
+  --cc-muted: #5e697a;
+  --cc-accent: #466fd3;
+  --cc-on-accent: #ffffff;
+  --cc-accent-soft: rgba(70, 111, 211, 0.13);
+  --cc-success: #287f64;
+  --cc-warning: #895d0c;
+  --cc-danger: #a83f3c;
+  --cc-hover: rgba(24, 33, 50, 0.055);
+  --cc-selected: rgba(70, 111, 211, 0.13);
+  --cc-overlay: rgba(15, 20, 29, 0.54);
+  --cc-focus-ring: rgba(70, 111, 211, 0.30);
+  --cc-disabled: #778294;
+  --cc-radius: 6px;
+  --cc-shadow: 0 14px 32px rgba(38, 52, 73, 0.10);
+  --cc-shadow-float: 0 18px 48px rgba(38, 52, 73, 0.18);
+
+  --bg-primary: #edf1f6;
+  --bg-secondary: #f7f9fc;
+  --bg-card: #ffffff;
+  --bg-card-hdr: #f6f8fb;
+  --bg-input: #ffffff;
+  --bg-hover: #e4e9f0;
+  --text-primary: #182132;
+  --text-secondary: #5e697a;
+  --text-disabled: #7a8493;
+  --border: #d3dae5;
+  --border-light: #c4cdd9;
+  --border-focus: #466fd3;
+  --success: #287f64;
+  --success-dim: rgba(40, 127, 100, 0.12);
+  --error: #a83f3c;
+  --error-dim: rgba(168, 63, 60, 0.12);
+  --warning: #895d0c;
+  --warning-dim: rgba(137, 93, 12, 0.12);
+  --info: #2c6eaa;
+}
+
+html.theme-light body {
+  --oc-accent-rgb: 70, 111, 211;
+  --oc-warm-rgb: 137, 93, 12;
+  --accent: rgb(var(--oc-accent-rgb));
+  --accent-hover: #315dbd;
+  --accent-dim: rgba(var(--oc-accent-rgb), 0.13);
+}

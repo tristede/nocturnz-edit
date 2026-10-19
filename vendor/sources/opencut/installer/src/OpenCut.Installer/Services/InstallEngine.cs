@@ -1,0 +1,360 @@
+using System.Diagnostics;
+using OpenCut.Installer.Models;
+
+namespace OpenCut.Installer.Services;
+
+/// <summary>
+/// Orchestrates the full install sequence, replicating all Inno Setup operations.
+/// </summary>
+public class InstallEngine
+{
+    private readonly InstallConfig _config;
+    private readonly ProcessKiller _processKiller = new();
+    private readonly PayloadExtractor _payloadExtractor = new();
+    private readonly FileInstaller _fileInstaller = new();
+    private readonly RegistryManager _registryManager = new();
+    private readonly ShortcutCreator _shortcutCreator = new();
+    private readonly CepInstaller _cepInstaller = new();
+    private readonly WhisperDownloader _whisperDownloader = new();
+    private readonly DependencyInstaller _dependencyInstaller = new();
+    private readonly FfmpegSecurityVerifier _ffmpegSecurityVerifier = new();
+
+    public InstallEngine(InstallConfig config)
+    {
+        _config = config;
+    }
+
+    public void RunInstall(IProgress<InstallProgress> progress)
+    {
+        int totalSteps = 18;
+        int step = 0;
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"OpenCut-Install-{Guid.NewGuid():N}");
+        using var transaction = new InstallTransaction(_config, _registryManager);
+
+        try
+        {
+            // Step 1: Kill existing processes
+            step = 1;
+            _processKiller.KillOpenCutProcesses(progress, step, totalSteps);
+
+            // Capture every stateful surface before an upgrade uninstaller or
+            // the first file copy can mutate it.
+            transaction.Begin(progress, totalSteps);
+            PrepareUpgrade(transaction, progress, step, totalSteps);
+
+            // Step 2: Extract payload
+            step = 2;
+            _payloadExtractor.Extract(tempDir, progress, step, totalSteps);
+            var ffmpegSrc = Path.Combine(tempDir, "ffmpeg");
+            _ffmpegSecurityVerifier.VerifyPayload(ffmpegSrc);
+            Report(progress, step, totalSteps, "Verifying FFmpeg",
+                $"Verified {AppConstants.BundledFfmpegVersion}; {AppConstants.BundledFfmpegSecurityCve} is patched.",
+                LogLevel.Success);
+
+            // Step 3: Copy server files
+            step = 3;
+            Report(progress, step, totalSteps, "Copying server files", "Installing server...");
+            var serverSrc = Path.Combine(tempDir, "server");
+            if (Directory.Exists(serverSrc))
+                _fileInstaller.CopyDirectory(serverSrc, _config.ServerPath,
+                    "Copying server files", progress, step, totalSteps);
+            else
+            {
+                // Try OpenCut-Server directory name (PyInstaller default)
+                var altSrc = Path.Combine(tempDir, "OpenCut-Server");
+                if (Directory.Exists(altSrc))
+                    _fileInstaller.CopyDirectory(altSrc, _config.ServerPath,
+                        "Copying server files", progress, step, totalSteps);
+                else
+                    Report(progress, step, totalSteps, "Copying server files",
+                        "Server files not found in payload.", LogLevel.Warning);
+            }
+
+            // Step 4: Copy FFmpeg
+            step = 4;
+            Report(progress, step, totalSteps, "Copying FFmpeg", "Installing FFmpeg...");
+            _fileInstaller.CopyDirectory(ffmpegSrc, _config.FfmpegPath,
+                "Copying FFmpeg", progress, step, totalSteps);
+
+            // Step 5: Copy CEP extension to install dir
+            step = 5;
+            Report(progress, step, totalSteps, "Copying extension", "Copying CEP extension...");
+            var extSrc = Path.Combine(tempDir, "extension", AppConstants.CepExtensionId);
+            if (!Directory.Exists(extSrc))
+                extSrc = Path.Combine(tempDir, AppConstants.CepExtensionId);
+            if (Directory.Exists(extSrc))
+                _fileInstaller.CopyDirectory(extSrc, _config.ExtensionPath,
+                    "Copying extension", progress, step, totalSteps);
+
+            var uxpSrc = Path.Combine(tempDir, "extension", AppConstants.UxpExtensionId);
+            if (!Directory.Exists(uxpSrc))
+                uxpSrc = Path.Combine(tempDir, AppConstants.UxpExtensionId);
+            if (Directory.Exists(uxpSrc))
+                _fileInstaller.CopyDirectory(uxpSrc, _config.UxpExtensionPath,
+                    "Copying extension", progress, step, totalSteps);
+
+            // Step 6: Copy launcher VBS + logo.ico
+            step = 6;
+            Report(progress, step, totalSteps, "Copying launcher", "Installing launcher...");
+            var vbsSrc = Path.Combine(tempDir, AppConstants.LauncherVbs);
+            if (File.Exists(vbsSrc))
+                _fileInstaller.CopyFile(vbsSrc,
+                    Path.Combine(_config.InstallPath, AppConstants.LauncherVbs),
+                    "Copying launcher", progress, step, totalSteps);
+
+            var icoSrc = Path.Combine(tempDir, "logo.ico");
+            if (File.Exists(icoSrc))
+                _fileInstaller.CopyFile(icoSrc,
+                    Path.Combine(_config.InstallPath, "logo.ico"),
+                    "Copying icon", progress, step, totalSteps);
+
+            var releaseMetadataSrc = Path.Combine(tempDir, "release-metadata");
+            if (!Directory.Exists(releaseMetadataSrc))
+                throw new InvalidDataException("The installer payload has no release composition evidence.");
+            _fileInstaller.CopyDirectory(releaseMetadataSrc,
+                Path.Combine(_config.InstallPath, "release-metadata"),
+                "Copying release evidence", progress, step, totalSteps);
+
+            var licenseSrc = Path.Combine(tempDir, "LICENSE");
+            if (!File.Exists(licenseSrc))
+                throw new InvalidDataException("The installer payload has no OpenCut license.");
+            _fileInstaller.CopyFile(licenseSrc,
+                Path.Combine(_config.InstallPath, "LICENSE"),
+                "Copying license", progress, step, totalSteps);
+
+            // Step 7: Create logs directory
+            step = 7;
+            _fileInstaller.EnsureDirectory(_config.LogsPath,
+                "Creating directories", progress, step, totalSteps);
+
+            // Step 8: Add FFmpeg to PATH
+            step = 8;
+            if (_config.UpdatePath)
+                _registryManager.AddToPath(_config.FfmpegPath, progress, step, totalSteps);
+            else
+                Report(progress, step, totalSteps, "Updating PATH", "Skipped (not selected).", LogLevel.Debug);
+
+            // Step 9: Set PlayerDebugMode
+            step = 9;
+            if (_config.SetPlayerDebugMode)
+                _registryManager.SetPlayerDebugMode(progress, step, totalSteps);
+            else
+                Report(progress, step, totalSteps, "PlayerDebugMode", "Skipped (not selected).", LogLevel.Debug);
+
+            // Step 10: Install CEP extension to Adobe folder
+            step = 10;
+            if (_config.InstallCepExtension && Directory.Exists(_config.ExtensionPath))
+                _cepInstaller.InstallExtension(_config, progress, step, totalSteps);
+            else
+                Report(progress, step, totalSteps, "CEP extension", "Skipped (not selected).", LogLevel.Debug);
+
+            // The same checkbox covers both panels: CEP for Premiere up to 25.5,
+            // UXP for 25.6+, which is what survives the ExtendScript cutoff.
+            if (_config.InstallCepExtension)
+                _cepInstaller.InstallUxpExtension(_config, progress, step, totalSteps);
+
+            // Step 11: Write install path to registry
+            step = 11;
+            _registryManager.WriteInstallPath(_config.InstallPath, progress, step, totalSteps);
+
+            // Step 12: Create shortcuts
+            step = 12;
+            _shortcutCreator.CreateShortcuts(_config, progress, step, totalSteps);
+
+            // Step 13: Copy installer as uninstaller
+            step = 13;
+            Report(progress, step, totalSteps, "Copying uninstaller", "Installing uninstaller...");
+            var selfPath = Environment.ProcessPath;
+            if (selfPath != null && File.Exists(selfPath))
+            {
+                Directory.CreateDirectory(_config.InstallPath);
+                File.Copy(selfPath, _config.UninstallExePath, overwrite: true);
+                Report(progress, step, totalSteps, "Copying uninstaller",
+                    "Uninstaller installed.", LogLevel.Success);
+            }
+
+            // Step 14: Register in Add/Remove Programs
+            step = 14;
+            if (_config.RegisterUninstaller)
+                _registryManager.RegisterUninstall(_config, progress, step, totalSteps);
+            else
+                Report(progress, step, totalSteps, "Registering uninstaller", "Skipped (not selected).", LogLevel.Debug);
+
+            // Step 15: Write machine-readable install manifest
+            step = 15;
+            WriteInstallerManifest(progress, step, totalSteps);
+
+            // Step 16: Download Whisper model (optional)
+            step = 16;
+            if (_config.DownloadWhisperModel)
+                _whisperDownloader.DownloadModel(_config, progress, step, totalSteps);
+            else
+                Report(progress, step, totalSteps, "Whisper model", "Skipped (not selected).", LogLevel.Debug);
+
+            // Step 17: Install optional Python tools
+            step = 17;
+            _dependencyInstaller.InstallDeps(_config, progress, step, totalSteps);
+
+            // Step 18: Cleanup temp
+            step = 18;
+            Report(progress, step, totalSteps, "Cleaning up", "Removing temporary files...");
+            try
+            {
+                if (Directory.Exists(tempDir))
+                    Directory.Delete(tempDir, recursive: true);
+                Report(progress, step, totalSteps, "Cleaning up", "Temporary files removed.", LogLevel.Success);
+            }
+            catch (Exception ex)
+            {
+                Report(progress, step, totalSteps, "Cleaning up",
+                    $"Could not remove temp dir: {ex.Message}", LogLevel.Warning);
+            }
+
+            transaction.Commit(progress, step, totalSteps);
+            Report(progress, totalSteps, totalSteps, "Installation complete",
+                "OpenCut has been installed successfully!", LogLevel.Success);
+        }
+        catch (Exception ex)
+        {
+            Exception? rollbackError = null;
+            try
+            {
+                transaction.Rollback(progress, Math.Max(step, 1), totalSteps);
+            }
+            catch (Exception restoreException)
+            {
+                rollbackError = restoreException;
+            }
+
+            // Cleanup temp on failure
+            try { if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true); }
+            catch { /* Ignore cleanup errors */ }
+
+            if (rollbackError is not null)
+            {
+                throw new InvalidOperationException(
+                    $"Installation failed at step {step}: {ex.Message} Rollback also failed: {rollbackError.Message}",
+                    new AggregateException(ex, rollbackError));
+            }
+
+            throw new InvalidOperationException($"Installation failed at step {step}; the previous state was restored: {ex.Message}", ex);
+        }
+    }
+
+    private static void PrepareUpgrade(
+        InstallTransaction transaction,
+        IProgress<InstallProgress> progress,
+        int step,
+        int totalSteps)
+    {
+        var previousPath = transaction.PreviousInstallPath;
+        if (!string.IsNullOrWhiteSpace(previousPath) && Directory.Exists(previousPath))
+        {
+            var uninstallerPath = Path.Combine(previousPath, "OpenCut-Uninstall.exe");
+            if (!File.Exists(uninstallerPath))
+            {
+                throw new InvalidOperationException(
+                    $"An existing OpenCut installation was found at {previousPath}, " +
+                    "but its uninstaller is missing. Remove that installation or restore OpenCut-Uninstall.exe before upgrading.");
+            }
+
+            Report(progress, step, totalSteps, "Preparing upgrade",
+                $"Removing the previous installation from {previousPath}...", LogLevel.Info);
+            RunPreviousUninstaller(uninstallerPath, previousPath);
+            Report(progress, step, totalSteps, "Preparing upgrade",
+                "Previous installation removed; continuing with a clean install root.", LogLevel.Success);
+        }
+
+        transaction.PrepareCleanInstallRoot();
+    }
+
+    private static void RunPreviousUninstaller(string uninstallerPath, string installPath)
+    {
+        var currentProcessPath = Environment.ProcessPath;
+        if (currentProcessPath is not null &&
+            string.Equals(currentProcessPath, uninstallerPath, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                "The installer cannot run the previous uninstaller because they are the same executable.");
+        }
+
+        var logPath = Path.Combine(
+            Path.GetTempPath(), $"OpenCut-Upgrade-Uninstall-{Guid.NewGuid():N}.log");
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = uninstallerPath,
+            WorkingDirectory = installPath,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        startInfo.ArgumentList.Add("--uninstall");
+        startInfo.ArgumentList.Add("--quiet");
+        startInfo.ArgumentList.Add("--dir");
+        startInfo.ArgumentList.Add(installPath);
+        startInfo.ArgumentList.Add("--log");
+        startInfo.ArgumentList.Add(logPath);
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Could not start the previous OpenCut uninstaller.");
+        if (!process.WaitForExit(TimeSpan.FromMinutes(5)))
+        {
+            try { process.Kill(entireProcessTree: true); }
+            catch { /* Preserve the timeout as the actionable failure. */ }
+            throw new TimeoutException("The previous OpenCut uninstaller did not finish within five minutes.");
+        }
+
+        if (process.ExitCode != 0)
+        {
+            throw new InvalidOperationException(
+                $"The previous OpenCut uninstaller failed with exit code {process.ExitCode}. " +
+                $"See {logPath} for details.");
+        }
+    }
+
+    private static void Report(IProgress<InstallProgress> progress, int step, int total,
+        string stepName, string message, LogLevel level = LogLevel.Info)
+    {
+        progress.Report(new InstallProgress
+        {
+            StepNumber = step,
+            TotalSteps = total,
+            StepName = stepName,
+            Message = message,
+            Level = level
+        });
+    }
+
+    private void WriteInstallerManifest(IProgress<InstallProgress> progress, int step, int totalSteps)
+    {
+        Report(progress, step, totalSteps, "Installer manifest", "Writing installer manifest...");
+
+        var dir = Path.GetDirectoryName(_config.InstallerManifestPath);
+        if (!string.IsNullOrEmpty(dir))
+            Directory.CreateDirectory(dir);
+
+        var manifest = new SortedDictionary<string, object?>
+        {
+            ["app_name"] = AppConstants.AppName,
+            ["app_version"] = AppConstants.AppVersion,
+            ["installer_kind"] = "wpf",
+            ["install_path"] = _config.InstallPath,
+            ["server_path"] = _config.ServerPath,
+            ["ffmpeg_path"] = _config.FfmpegPath,
+            ["bundled_ffmpeg_version"] = AppConstants.BundledFfmpegVersion,
+            ["bundled_ffprobe_version"] = AppConstants.BundledFfprobeVersion,
+            ["bundled_ffmpeg_security_floor"] = AppConstants.BundledFfmpegSecurityFloor,
+            ["bundled_ffmpeg_security_cve"] = AppConstants.BundledFfmpegSecurityCve,
+            ["bundled_ffmpeg_security_fix_commits"] = AppConstants.BundledFfmpegSecurityFixCommits,
+            ["bundled_ffmpeg_source_commit"] = AppConstants.BundledFfmpegSourceCommit,
+            ["bundled_ffmpeg_source_sha256"] = AppConstants.BundledFfmpegSourceSha256,
+            ["bundled_ffmpeg_package_url"] = AppConstants.BundledFfmpegPackageUrl,
+            ["bundled_ffmpeg_package_sha256"] = AppConstants.BundledFfmpegPackageSha256,
+            ["installed_at_utc"] = DateTime.UtcNow.ToString("O"),
+        };
+
+        var json = JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true });
+        File.WriteAllText(_config.InstallerManifestPath, json);
+        Report(progress, step, totalSteps, "Installer manifest", _config.InstallerManifestPath, LogLevel.Success);
+    }
+}

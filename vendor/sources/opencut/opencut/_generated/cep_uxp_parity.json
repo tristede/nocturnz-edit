@@ -1,0 +1,272 @@
+{
+  "catalogue_version": 1,
+  "cep_only": [
+    "ocAddNativeCaptionTrack",
+    "ocQeReflect"
+  ],
+  "cep_only_count": 2,
+  "function_count": 19,
+  "functions": [
+    {
+      "cep_only": false,
+      "f_numbers": [
+        "F198",
+        "F252"
+      ],
+      "name": "ocPing",
+      "replacement_plan": "Inline in the UXP panel bridge; no CEP fallback required.",
+      "risk": "low",
+      "role": "Synchronous health probe for the CEP host bridge.",
+      "status": "direct_uxp",
+      "uxp_path": "Return a direct health response from the UXP host module."
+    },
+    {
+      "cep_only": false,
+      "f_numbers": [
+        "F198",
+        "F252"
+      ],
+      "name": "ocGetSequenceInfo",
+      "replacement_plan": "Keep the UXP bridge implementation as the canonical path.",
+      "risk": "low",
+      "role": "Read the active sequence identity, dimensions, frame rate, and duration.",
+      "status": "direct_uxp",
+      "uxp_path": "PProBridge.getSequenceInfo() via Sequence settings and active project state."
+    },
+    {
+      "cep_only": false,
+      "f_numbers": [
+        "F198",
+        "F252"
+      ],
+      "name": "ocAddSequenceMarkers",
+      "replacement_plan": "Port callers to the UXP bridge and retain CEP only for legacy hosts.",
+      "risk": "low",
+      "role": "Create timeline markers from backend-generated marker payloads.",
+      "status": "direct_uxp",
+      "uxp_path": "PProBridge.addMarkers() / Sequence marker list APIs."
+    },
+    {
+      "cep_only": false,
+      "f_numbers": [
+        "F198",
+        "F252"
+      ],
+      "name": "ocGetSequenceMarkers",
+      "replacement_plan": "Use the same shape as CEP so backend marker contracts stay stable.",
+      "risk": "low",
+      "role": "Read active-sequence markers for round-trip metadata workflows.",
+      "status": "direct_uxp",
+      "uxp_path": "Sequence.getMarkerList() and marker object traversal."
+    },
+    {
+      "cep_only": false,
+      "f_numbers": [
+        "F198",
+        "F252",
+        "F267",
+        "F349"
+      ],
+      "name": "ocApplySequenceCuts",
+      "replacement_plan": "Landed 2026-08-20 (F349): applyCuts builds a TrackItemSelection and runs createRemoveItemsAction inside Project.executeTransaction, verified by the existing host-write read-back contract. It stays partial because the action removes whole track items and the typed API exposes no razor, so a cut whose range crosses a track-item boundary \u2014 silence inside one clip, the common case \u2014 still falls back to sequence.rippleDelete() and records why. Emulating a razor with clone plus set-start/set-end actions, and confirming the ripple accounting, needs F252's live-host lane before the CEP fallback can be dropped.",
+      "risk": "medium",
+      "role": "Remove or trim timeline ranges and ripple-delete where requested.",
+      "status": "partial_uxp",
+      "uxp_path": "SequenceEditor.getEditor(sequence).createRemoveItemsAction(trackItemSelection, ripple, mediaType, shiftOverLapping?) -> Action (confirmed 2026-08-20 in @adobe/premierepro 26.3.0 typings, src/premierepro.d.ts:3203-3232). Run through Project.executeTransaction so the edit is undoable and its effect is observable \u2014 preferred over sequence.rippleDelete(), which premiere-pro-mcp #21 measured returning success while changing nothing on 26.3."
+    },
+    {
+      "cep_only": false,
+      "f_numbers": [
+        "F198",
+        "F252",
+        "F267"
+      ],
+      "name": "ocApplyClipKeyframes",
+      "replacement_plan": "Port as a UXP bridge operation once feature-level UDT covers keyframes.",
+      "risk": "low",
+      "role": "Apply opacity, scale, position, or other keyframe payloads to clips.",
+      "status": "direct_uxp",
+      "uxp_path": "Component and property keyframe APIs on UXP clip items."
+    },
+    {
+      "cep_only": false,
+      "f_numbers": [
+        "F198",
+        "F252"
+      ],
+      "name": "ocBatchRenameProjectItems",
+      "replacement_plan": "Treat as low-priority convenience wiring in the UXP bridge.",
+      "risk": "low",
+      "role": "Rename selected project items in bulk.",
+      "status": "direct_uxp",
+      "uxp_path": "Project item rename APIs."
+    },
+    {
+      "cep_only": false,
+      "f_numbers": [
+        "F198",
+        "F252"
+      ],
+      "name": "ocCreateSmartBins",
+      "replacement_plan": "Move bin creation behind the UXP project bridge.",
+      "risk": "low",
+      "role": "Create bins for organized project-item workflows.",
+      "status": "direct_uxp",
+      "uxp_path": "Project root item and bin creation APIs."
+    },
+    {
+      "cep_only": true,
+      "f_numbers": [
+        "F186",
+        "F198",
+        "F253",
+        "F266"
+      ],
+      "name": "ocAddNativeCaptionTrack",
+      "replacement_plan": "Keep CEP fallback while available; prioritize F253 Hybrid Plugin caption-track creation or adopt an Adobe UXP API if it ships. Until then the supported UXP-era path is exporting the SRT sidecar for manual import.",
+      "risk": "high",
+      "role": "Create a native Premiere caption track from SRT-style segments.",
+      "status": "cep_only",
+      "uxp_path": "No UXP caption-track write API as of 26.3 (audited 2026-08-20 against @adobe/premierepro 26.3.0 typings). CaptionTrack exposes only getCaptionTrackCount, getCaptionTrack(index), createSetNameAction, and setMute \u2014 read, rename, and mute. Transcript.createImportTextSegmentsAction targets a ClipProjectItem transcript, which is a different object from a sequence caption track and is not a substitute."
+    },
+    {
+      "cep_only": false,
+      "f_numbers": [
+        "F198",
+        "F252"
+      ],
+      "name": "ocGetProjectBins",
+      "replacement_plan": "Use UXP project-tree traversal and keep response shape stable.",
+      "risk": "low",
+      "role": "List project bins for import and organization workflows.",
+      "status": "direct_uxp",
+      "uxp_path": "Project.getRootItem() traversal."
+    },
+    {
+      "cep_only": false,
+      "f_numbers": [
+        "F198",
+        "F255"
+      ],
+      "name": "ocExportSequenceRange",
+      "replacement_plan": "Route to UXP export APIs as part of F255 encoder integration.",
+      "risk": "low",
+      "role": "Export a selected active-sequence range.",
+      "status": "direct_uxp",
+      "uxp_path": "EncoderManager / export APIs where available."
+    },
+    {
+      "cep_only": false,
+      "f_numbers": [
+        "F198",
+        "F252"
+      ],
+      "name": "ocRemoveSequenceMarkers",
+      "replacement_plan": "Use UXP marker deletion for parity with marker import/export routes.",
+      "risk": "low",
+      "role": "Remove OpenCut-created sequence markers.",
+      "status": "direct_uxp",
+      "uxp_path": "Sequence marker list APIs."
+    },
+    {
+      "cep_only": false,
+      "f_numbers": [
+        "F198",
+        "F252"
+      ],
+      "name": "ocUnrenameItems",
+      "replacement_plan": "Share the batch-rename UXP bridge path.",
+      "risk": "low",
+      "role": "Undo project-item batch rename payloads.",
+      "status": "direct_uxp",
+      "uxp_path": "Project item rename APIs."
+    },
+    {
+      "cep_only": false,
+      "f_numbers": [
+        "F198",
+        "F252"
+      ],
+      "name": "ocRemoveImportedSequence",
+      "replacement_plan": "Use UXP project-item deletion with explicit result reporting.",
+      "risk": "low",
+      "role": "Remove a sequence imported for preview or interchange workflows.",
+      "status": "direct_uxp",
+      "uxp_path": "Project item delete/remove APIs."
+    },
+    {
+      "cep_only": false,
+      "f_numbers": [
+        "F198",
+        "F252"
+      ],
+      "name": "ocSetSequencePlayhead",
+      "replacement_plan": "Expose as a UXP bridge utility for review and marker navigation.",
+      "risk": "low",
+      "role": "Move the active sequence playhead to a target time.",
+      "status": "direct_uxp",
+      "uxp_path": "Active sequence playhead/time APIs."
+    },
+    {
+      "cep_only": false,
+      "f_numbers": [
+        "F198",
+        "F252"
+      ],
+      "name": "ocRemoveImportedItem",
+      "replacement_plan": "Share the imported-sequence removal guardrails.",
+      "risk": "low",
+      "role": "Remove an imported project item by identity.",
+      "status": "direct_uxp",
+      "uxp_path": "Project item delete/remove APIs."
+    },
+    {
+      "cep_only": true,
+      "f_numbers": [
+        "F187",
+        "F198",
+        "F266",
+        "F267"
+      ],
+      "name": "ocQeReflect",
+      "replacement_plan": "Retire QE reflection after CEP EOL rather than seeking a successor; replace any real workflow that depends on it one by one with documented UXP APIs and F267 UDT evidence.",
+      "risk": "high",
+      "role": "Reflect undocumented QE DOM methods for diagnostics.",
+      "status": "cep_only",
+      "uxp_path": "No supported UXP QE DOM equivalent (audited 2026-08-20 against @adobe/premierepro 26.3.0 typings: no qe, reflect, executeScript, or evalScript surface exists). QE reflection is a CEP/ExtendScript debug facility, not a user feature, so it retires rather than ports."
+    },
+    {
+      "cep_only": false,
+      "f_numbers": [
+        "F198",
+        "F252"
+      ],
+      "name": "ocEmitPingEvent",
+      "replacement_plan": "Replace the event transport while keeping the acknowledgement semantics.",
+      "risk": "low",
+      "role": "Emit a panel acknowledgement event for host/panel round trips.",
+      "status": "different_mechanism",
+      "uxp_path": "UXP addon events or direct backend callback instead of CSXSEvent."
+    },
+    {
+      "cep_only": false,
+      "f_numbers": [
+        "F303"
+      ],
+      "name": "ocReadPanelBootstrapToken",
+      "replacement_plan": "Keep the secret contract identical and swap only the file-read transport when CEP retires.",
+      "risk": "low",
+      "role": "Read the local CSRF bootstrap secret so a file:// panel can prove it is host-embedded and not a web page.",
+      "status": "different_mechanism",
+      "uxp_path": "UXP reads the same secret through its own localFileSystem permission; no ExtendScript bridge is involved."
+    }
+  ],
+  "source": "extension/com.opencut.panel/host/index.jsx",
+  "status_counts": {
+    "cep_only": 2,
+    "different_mechanism": 2,
+    "direct_uxp": 14,
+    "partial_uxp": 1
+  },
+  "uxp_typings": "@adobe/premierepro@26.3.0-beta.67"
+}

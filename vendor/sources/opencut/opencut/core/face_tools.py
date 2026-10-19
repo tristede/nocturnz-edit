@@ -1,0 +1,337 @@
+"""
+OpenCut Face Tools Module v0.7.1
+
+Face detection, blur, and tracking:
+- Face detection using MediaPipe FaceMesh (468 landmarks) or Haar cascades
+- Auto-blur/pixelate faces in video
+- Face tracking across frames
+- Region-of-interest face enhancement
+
+MediaPipe is Apache 2.0, runs on CPU at 30+ FPS, 2-5MB models.
+Falls back to OpenCV Haar cascades if MediaPipe unavailable.
+"""
+
+import logging
+import os
+import shutil
+import tempfile
+from pathlib import Path
+from typing import Callable, Dict, Optional
+
+from opencut.core.face_detect_compat import get_shared_face_detector
+from opencut.helpers import ensure_package, get_video_info, run_ffmpeg
+
+logger = logging.getLogger("opencut")
+
+# ---------------------------------------------------------------------------
+# Availability
+# ---------------------------------------------------------------------------
+def check_mediapipe_available() -> bool:
+    try:
+        import mediapipe  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def check_insightface_available() -> bool:
+    try:
+        import insightface  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def check_face_tools_available() -> Dict:
+    caps = {"mediapipe": check_mediapipe_available(), "insightface": check_insightface_available()}
+    try:
+        import cv2  # noqa: F401
+        caps["opencv"] = True
+        caps["haar"] = True
+    except ImportError:
+        caps["opencv"] = False
+        caps["haar"] = False
+    return caps
+
+
+# ---------------------------------------------------------------------------
+# Face Detection
+# ---------------------------------------------------------------------------
+def _detect_faces_mediapipe(frame, detector):
+    """Detect faces using MediaPipe. Returns list of (x, y, w, h) rects."""
+    t_h = frame.shape[0]
+    w = frame.shape[1]
+
+    rgb = frame[:, :, ::-1]  # BGR to RGB
+    results = detector.process(rgb)
+    faces = []
+    if results.detections:
+        for det in results.detections:
+            bb = det.location_data.relative_bounding_box
+            x1 = max(0, int(bb.xmin * w))
+            y1 = max(0, int(bb.ymin * t_h))
+            bw = int(bb.width * w)
+            bh = int(bb.height * t_h)
+            # Add padding (20% on each side)
+            pad_x = int(bw * 0.2)
+            pad_y = int(bh * 0.2)
+            x1 = max(0, x1 - pad_x)
+            y1 = max(0, y1 - pad_y)
+            bw = min(w - x1, bw + 2 * pad_x)
+            bh = min(t_h - y1, bh + 2 * pad_y)
+            faces.append((x1, y1, bw, bh))
+    return faces
+
+
+def _detect_faces_haar(frame, cascade):
+    """Detect faces using OpenCV Haar cascade. Returns list of (x, y, w, h)."""
+    import cv2
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    rects = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+    return [(int(x), int(y), int(w), int(h)) for (x, y, w, h) in rects]
+
+
+def _detect_faces_insightface(frame, app):
+    """Detect faces using InsightFace buffalo_l. Returns list of (x, y, w, h) rects.
+
+    Higher accuracy than MediaPipe/Haar, especially on difficult angles,
+    occlusions, and low-resolution faces. Uses RetinaFace detector internally.
+    """
+    faces = app.get(frame)
+    rects = []
+    for face in faces:
+        bbox = face.bbox.astype(int)
+        x1, y1, x2, y2 = bbox[0], bbox[1], bbox[2], bbox[3]
+        # Add padding (15%)
+        w = x2 - x1
+        h = y2 - y1
+        pad_x = int(w * 0.15)
+        pad_y = int(h * 0.15)
+        x1 = max(0, x1 - pad_x)
+        y1 = max(0, y1 - pad_y)
+        w = min(frame.shape[1] - x1, w + 2 * pad_x)
+        h = min(frame.shape[0] - y1, h + 2 * pad_y)
+        rects.append((x1, y1, w, h))
+    return rects
+
+
+# ---------------------------------------------------------------------------
+# Face Blur / Pixelate
+# ---------------------------------------------------------------------------
+def blur_faces(
+    input_path: str,
+    output_path: Optional[str] = None,
+    output_dir: str = "",
+    method: str = "gaussian",
+    strength: int = 51,
+    detector: str = "mediapipe",
+    on_progress: Optional[Callable] = None,
+) -> str:
+    """
+    Auto-detect and blur all faces in video.
+
+    Args:
+        method: "gaussian" (smooth blur), "pixelate" (mosaic), "black" (solid box).
+        strength: Blur kernel size (odd number, higher = more blur). For pixelate, block size.
+        detector: "insightface" (highest accuracy), "mediapipe" (fast), or "haar" (fallback).
+    """
+    if not ensure_package("cv2", "opencv-python", on_progress):
+        raise RuntimeError("Failed to install opencv-python. Install manually: pip install opencv-python")
+    import cv2
+
+    if output_path is None:
+        base = os.path.splitext(os.path.basename(input_path))[0]
+        ext = os.path.splitext(input_path)[1] or ".mp4"
+        directory = output_dir or os.path.dirname(input_path)
+        output_path = os.path.join(directory, f"{base}_faces_blurred{ext}")
+
+    # Ensure strength is odd for gaussian
+    if method == "gaussian" and strength % 2 == 0:
+        strength += 1
+
+    # Set up detector
+    face_det = None
+    mp_face = None
+    insight_app = None
+    if detector == "insightface":
+        try:
+            ensure_package("insightface", "insightface", on_progress)
+            ensure_package("onnxruntime", "onnxruntime", on_progress)
+            import insightface
+
+            from opencut.gpu import get_device_index, selected_onnx_providers
+
+            gpu_index = get_device_index()
+            insight_app = insightface.app.FaceAnalysis(
+                name="buffalo_l", providers=selected_onnx_providers()
+            )
+            insight_app.prepare(ctx_id=gpu_index if gpu_index is not None else -1, det_size=(640, 640))
+        except Exception:
+            detector = "mediapipe"
+
+    if detector == "mediapipe":
+        try:
+            ensure_package("mediapipe", "mediapipe", on_progress)
+            import mediapipe as mp
+            mp_face = mp.solutions.face_detection.FaceDetection(
+                model_selection=1, min_detection_confidence=0.5
+            )
+        except Exception:
+            detector = "haar"
+
+    if detector == "haar":
+        face_det = get_shared_face_detector()
+
+    if on_progress:
+        on_progress(10, "Processing video frames...")
+
+    info = get_video_info(input_path)
+    tmp_dir = tempfile.mkdtemp(prefix="opencut_faceblur_")
+    frames_in = os.path.join(tmp_dir, "in")
+    frames_out = os.path.join(tmp_dir, "out")
+    os.makedirs(frames_in, exist_ok=True)
+    os.makedirs(frames_out, exist_ok=True)
+
+    try:
+        run_ffmpeg([
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-y", "-i", input_path,
+            os.path.join(frames_in, "frame_%06d.png"),
+        ])
+
+        frame_files = sorted(Path(frames_in).glob("frame_*.png"))
+        total = len(frame_files)
+        if total == 0:
+            raise RuntimeError("No frames extracted")
+
+        faces_found = 0
+        for i, fp in enumerate(frame_files):
+            frame = cv2.imread(str(fp))
+            if frame is None:
+                continue
+
+            # Detect faces
+            if detector == "insightface" and insight_app:
+                rects = _detect_faces_insightface(frame, insight_app)
+            elif detector == "mediapipe" and mp_face:
+                rects = _detect_faces_mediapipe(frame, mp_face)
+            else:
+                rects = _detect_faces_haar(frame, face_det)
+
+            faces_found += len(rects)
+
+            # Apply blur to each face region
+            for (x, y, w, h) in rects:
+                roi = frame[y:y+h, x:x+w]
+                if roi.size == 0:
+                    continue
+                if method == "gaussian":
+                    blurred = cv2.GaussianBlur(roi, (strength, strength), 30)
+                    frame[y:y+h, x:x+w] = blurred
+                elif method == "pixelate":
+                    block = max(4, strength // 3)
+                    small = cv2.resize(roi, (max(1, w // block), max(1, h // block)),
+                                       interpolation=cv2.INTER_LINEAR)
+                    frame[y:y+h, x:x+w] = cv2.resize(small, (w, h),
+                                                       interpolation=cv2.INTER_NEAREST)
+                elif method == "black":
+                    frame[y:y+h, x:x+w] = 0
+
+            cv2.imwrite(os.path.join(frames_out, fp.name), frame)
+
+            if on_progress and i % max(1, total // 20) == 0:
+                pct = 10 + int((i / total) * 80)
+                on_progress(pct, f"Processing frame {i+1}/{total}...")
+
+        if on_progress:
+            on_progress(92, "Encoding output video...")
+
+        # Probe may return 0 fps for VFR / corrupt sources. ``-framerate 0``
+        # makes FFmpeg refuse the input concat with a confusing error, so
+        # floor at 1.0 (and prefer the real value when usable).
+        _src_fps = info.get("fps", 0) or 0
+        try:
+            _src_fps = float(_src_fps)
+        except (TypeError, ValueError):
+            _src_fps = 0.0
+        if _src_fps <= 0 or _src_fps != _src_fps:  # also rejects NaN
+            _src_fps = 30.0
+        run_ffmpeg([
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-y",
+            "-framerate", str(_src_fps),
+            "-i", os.path.join(frames_out, "frame_%06d.png"),
+            "-i", input_path,
+            "-map", "0:v", "-map", "1:a?",
+            "-c:v", "libx264", "-crf", "18", "-preset", "medium",
+            "-pix_fmt", "yuv420p", "-c:a", "copy", "-shortest",
+            output_path,
+        ])
+
+        if on_progress:
+            on_progress(100, f"Face blur complete ({faces_found} detections)")
+        return output_path
+
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        if mp_face:
+            mp_face.close()
+
+
+# ---------------------------------------------------------------------------
+# Face Count / Detect (image or single frame)
+# ---------------------------------------------------------------------------
+def detect_faces_in_frame(
+    input_path: str,
+    detector: str = "mediapipe",
+    on_progress: Optional[Callable] = None,
+) -> Dict:
+    """
+    Detect faces in an image or first frame of video.
+    Returns face count and bounding box coordinates.
+    """
+    if not ensure_package("cv2", "opencv-python", on_progress):
+        raise RuntimeError("Failed to install opencv-python. Install manually: pip install opencv-python")
+    import cv2
+
+    ext = os.path.splitext(input_path)[1].lower()
+    is_video = ext in (".mp4", ".mov", ".avi", ".mkv", ".webm")
+
+    if is_video:
+        _ntf = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        tmp = _ntf.name
+        _ntf.close()
+        try:
+            run_ffmpeg([
+                "ffmpeg", "-hide_banner", "-loglevel", "error",
+                "-y", "-i", input_path, "-vframes", "1", tmp,
+            ])
+            frame = cv2.imread(tmp)
+        finally:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+    else:
+        frame = cv2.imread(input_path)
+
+    if frame is None:
+        return {"faces": 0, "rects": []}
+
+    if detector == "mediapipe":
+        try:
+            ensure_package("mediapipe", "mediapipe", on_progress)
+            import mediapipe as mp
+            with mp.solutions.face_detection.FaceDetection(
+                model_selection=1, min_detection_confidence=0.5
+            ) as fd:
+                rects = _detect_faces_mediapipe(frame, fd)
+        except Exception:
+            rects = _detect_faces_haar(frame, get_shared_face_detector())
+    else:
+        rects = _detect_faces_haar(frame, get_shared_face_detector())
+
+    return {
+        "faces": len(rects),
+        "rects": [{"x": r[0], "y": r[1], "w": r[2], "h": r[3]} for r in rects],
+    }

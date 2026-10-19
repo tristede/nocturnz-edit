@@ -1,0 +1,326 @@
+import ast
+import json
+import math
+import time
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+from opencut.security import safe_bool
+from tests.conftest import csrf_headers
+
+
+# ---------------------------------------------------------------------------
+# Unit tests for safe_bool() edge cases (v1.9.22 hardening)
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("value,expected", [
+    (True, True),
+    (False, False),
+    (None, False),
+    (1, True),
+    (0, False),
+    (-1, True),
+    (1.0, True),
+    (0.0, False),
+    ("true", True),
+    ("True", True),
+    ("false", False),
+    ("FALSE", False),
+    ("yes", True),
+    ("no", False),
+    ("on", True),
+    ("off", False),
+    ("1", True),
+    ("0", False),
+    ("", False),
+    ("null", False),
+    ("none", False),
+    (b"true", True),
+    (b"false", False),
+    (bytearray(b"yes"), True),
+    (bytearray(b"no"), False),
+])
+def test_safe_bool_accepts_common_forms(value, expected):
+    assert safe_bool(value, default=False) is expected
+
+
+@pytest.mark.parametrize("value", [
+    float("nan"),
+    float("inf"),
+    float("-inf"),
+    [True],
+    [],
+    {"key": "value"},
+    {},
+    (1, 2),
+    set(),
+    object(),
+])
+def test_safe_bool_rejects_unsafe_inputs(value):
+    # Ambiguous / unsafe inputs must fall back to the caller-supplied default
+    assert safe_bool(value, default=False) is False
+    assert safe_bool(value, default=True) is True
+
+
+def test_safe_bool_unknown_string_uses_default():
+    assert safe_bool("maybe", default=True) is True
+    assert safe_bool("maybe", default=False) is False
+
+
+def test_safe_bool_nan_float_uses_default():
+    assert safe_bool(math.nan, default=True) is True
+    assert safe_bool(math.nan, default=False) is False
+
+
+def test_routes_do_not_use_raw_bool_for_getters():
+    offenders = []
+    for path in sorted(Path("opencut/routes").glob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(path))
+        lines = source.splitlines()
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "bool"
+                and node.args
+            ):
+                continue
+            arg = node.args[0]
+            if isinstance(arg, ast.Call) and isinstance(arg.func, ast.Attribute) and arg.func.attr == "get":
+                offenders.append(f"{path}:{node.lineno}: {lines[node.lineno - 1].strip()}")
+
+    assert not offenders, "Use opencut.security.safe_bool for route getter coercion:\n" + "\n".join(offenders)
+
+
+def test_routes_wrap_request_body_boolean_flags_in_safe_bool():
+    """Every request-body flag with a bool default must go through safe_bool.
+
+    F397: the check above only matches ``bool(<expr>.get(...))`` as one nested
+    expression. Two shapes evaded it — a flag assigned on one line and coerced
+    on the next, and (far more common) a flag never coerced at all, just handed
+    to an ``if`` or a boolean parameter. Raw truthiness turns the string
+    ``"false"`` into ``True``, so a client opting out of a behaviour gets it.
+
+    Only reads off the request body count. ``plugin.get("valid", False)`` and
+    friends read dicts the server built itself, which are not a trust boundary.
+    """
+    request_body_names = {"data", "config_data", "payload", "body"}
+    offenders = []
+
+    for path in sorted(Path("opencut/routes").rglob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(path))
+
+        guarded = set()
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id in ("safe_bool", "bool")
+            ):
+                guarded.update(id(child) for child in ast.walk(node))
+
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id in request_body_names
+                and len(node.args) == 2
+            ):
+                continue
+            default = node.args[1]
+            if not (isinstance(default, ast.Constant) and isinstance(default.value, bool)):
+                continue
+            if id(node) in guarded:
+                continue
+            offenders.append(f"{path}:{node.lineno}: {ast.unparse(node)}")
+
+    assert not offenders, (
+        "Wrap request-body boolean flags in opencut.security.safe_bool:\n" + "\n".join(offenders)
+    )
+
+
+def poll_job(client, job_id, timeout=10):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        resp = client.get(f"/status/{job_id}")
+        data = resp.get_json()
+        if data["status"] in ("complete", "error", "cancelled"):
+            return data
+        time.sleep(0.05)
+    raise TimeoutError(f"Job {job_id} did not complete within {timeout}s")
+
+
+def test_whisper_settings_string_false_stays_false(client, csrf_token):
+    resp = client.post(
+        "/whisper/settings",
+        data=json.dumps({"cpu_mode": "false", "model": "base"}),
+        headers=csrf_headers(csrf_token),
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["settings"]["cpu_mode"] is False
+
+
+def test_audio_enhance_string_false_flags_fail_validation(client, csrf_token, tmp_path):
+    media = tmp_path / "dialog.wav"
+    media.write_bytes(b"RIFF-test")
+
+    with patch("opencut.checks.check_resemble_enhance_available", return_value=True):
+        resp = client.post(
+            "/audio/enhance",
+            data=json.dumps({
+                "filepath": str(media),
+                "backend": "resemble",
+                "denoise": "false",
+                "enhance": "false",
+            }),
+            headers=csrf_headers(csrf_token),
+        )
+        job = poll_job(client, resp.get_json()["job_id"])
+
+    assert resp.status_code == 200
+    assert job["status"] == "error"
+    assert "At least one of 'denoise' or 'enhance' must be True" in job["error"]
+
+
+def test_video_auto_zoom_string_false_does_not_apply_file(client, csrf_token, tmp_path):
+    media = tmp_path / "clip.mp4"
+    media.write_bytes(b"fake-mp4")
+
+    keyframes = [{"time": 0.0, "zoom": 1.15}]
+    with patch("opencut.core.auto_zoom.generate_zoom_keyframes", return_value=keyframes), \
+            patch("opencut.routes.video_editing._sp.run") as mock_run:
+        resp = client.post(
+            "/video/auto-zoom",
+            data=json.dumps({
+                "filepath": str(media),
+                "apply_to_file": "false",
+            }),
+            headers=csrf_headers(csrf_token),
+        )
+        job = poll_job(client, resp.get_json()["job_id"])
+
+    assert resp.status_code == 200
+    assert job["status"] == "complete"
+    assert job["result"]["keyframes"] == keyframes
+    assert "output" not in job["result"]
+    assert not any(
+        call.args and any(str(part) == "-vf" or "zoompan" in str(part) for part in call.args[0])
+        for call in mock_run.call_args_list
+    )
+
+
+def test_video_auto_zoom_apply_uses_shared_tracking_filter(client, csrf_token, tmp_path):
+    media = tmp_path / "clip.mp4"
+    media.write_bytes(b"fake-mp4")
+    keyframes = {
+        "fps": 30.0,
+        "keyframes": [
+            {"time": 0.0, "scale": 1.0, "anchor_x": 0.8, "anchor_y": 0.75},
+        ],
+    }
+
+    with patch("opencut.core.auto_zoom.generate_zoom_keyframes", return_value=keyframes), \
+            patch("opencut.core.auto_zoom.build_zoompan_filter", return_value="tracked-zoompan") as build_filter, \
+            patch("opencut.helpers.get_video_info", return_value={"width": 1920, "height": 1080, "fps": 30.0}), \
+            patch("opencut.routes.video_editing.get_ffmpeg_path", return_value="ffmpeg"), \
+            patch("opencut.routes.video_editing._sp.run") as mock_run:
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stderr = b""
+        resp = client.post(
+            "/video/auto-zoom",
+            data=json.dumps({
+                "filepath": str(media),
+                "apply_to_file": True,
+            }),
+            headers=csrf_headers(csrf_token),
+        )
+        job = poll_job(client, resp.get_json()["job_id"])
+
+    assert resp.status_code == 200
+    assert job["status"] == "complete"
+    assert job["result"]["output"].endswith("clip_autozoom.mp4")
+    build_filter.assert_called_once_with(
+        keyframes["keyframes"], 1920, 1080, keyframes["fps"]
+    )
+    render_calls = [
+        call for call in mock_run.call_args_list
+        if call.args and "-vf" in call.args[0]
+    ]
+    assert render_calls
+    command = render_calls[-1].args[0]
+    assert "tracked-zoompan" in command
+
+
+def test_video_shorts_pipeline_string_false_flags_stay_false(client, csrf_token, tmp_path):
+    media = tmp_path / "interview.mp4"
+    media.write_bytes(b"fake-mp4")
+
+    captured = {}
+
+    def fake_generate(_filepath, config, output_dir, on_progress):
+        captured["face_track"] = config.face_track
+        captured["burn_captions"] = config.burn_captions
+        captured["output_dir"] = output_dir
+        on_progress(100, "done")
+        return []
+
+    with patch("opencut.core.shorts_pipeline.generate_shorts", side_effect=fake_generate):
+        resp = client.post(
+            "/video/shorts-pipeline",
+            data=json.dumps({
+                "filepath": str(media),
+                "face_track": "false",
+                "burn_captions": "false",
+            }),
+            headers=csrf_headers(csrf_token),
+        )
+        job = poll_job(client, resp.get_json()["job_id"])
+
+    assert resp.status_code == 200
+    assert job["status"] == "complete"
+    assert captured["face_track"] is False
+    assert captured["burn_captions"] is False
+
+
+def test_lip_sync_string_false_opts_out_of_the_external_model(client, csrf_token, tmp_path):
+    """F397: `use_external` was read raw and then passed through bool().
+
+    Splitting the read and the coercion across two lines hid it from the
+    single-expression check above, so a client sending "false" still got the
+    heavy Wav2Lip path.
+    """
+    from opencut.core.lip_sync import LipSyncResult
+
+    media = tmp_path / "clip.mp4"
+    media.write_bytes(b"fake-mp4")
+    audio = tmp_path / "vo.wav"
+    audio.write_bytes(b"RIFF-test")
+
+    captured = {}
+
+    def fake_lip_sync(**kwargs):
+        captured.update(kwargs)
+        kwargs["on_progress"](100)
+        return LipSyncResult(output_path=str(media))
+
+    with patch("opencut.core.lip_sync.apply_lip_sync", side_effect=fake_lip_sync):
+        resp = client.post(
+            "/api/video/lip-sync",
+            data=json.dumps({
+                "filepath": str(media),
+                "audio_path": str(audio),
+                "use_external": "false",
+            }),
+            headers=csrf_headers(csrf_token),
+        )
+        job = poll_job(client, resp.get_json()["job_id"])
+
+    assert resp.status_code == 200
+    assert job["status"] == "complete"
+    assert captured["use_external"] is False

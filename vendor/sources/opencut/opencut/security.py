@@ -1,0 +1,807 @@
+"""
+OpenCut Security Utilities
+
+Path validation, CSRF protection, and safe pip install helpers.
+"""
+
+import functools
+import hashlib
+import hmac
+import json
+import logging
+import os
+import re
+import secrets
+import shutil
+import subprocess
+import sys
+import threading
+import time
+from contextlib import contextmanager
+from typing import Iterable, Optional, Tuple
+
+from flask import Request, jsonify, request
+from werkzeug.exceptions import BadRequest
+
+from opencut.errors import error_response
+from opencut.security_audit import (
+    record_csrf_rejection,
+    record_path_validation_rejection,
+    record_rate_limit_rejection,
+)
+
+logger = logging.getLogger("opencut")
+
+# Valid Whisper model names for input validation
+VALID_WHISPER_MODELS = frozenset({
+    "tiny", "tiny.en", "base", "base.en", "small", "small.en",
+    "medium", "medium.en", "large", "large-v1", "large-v2", "large-v3",
+    "turbo", "large-v3-turbo",
+    "distil-large-v2", "distil-large-v3", "distil-large-v3.5",
+    "distil-medium.en", "distil-small.en",
+})
+
+
+class OpenCutRequest(Request):
+    """Flask request class that rejects top-level non-object JSON bodies.
+
+    The backend routes overwhelmingly expect JSON objects and immediately call
+    ``data.get(...)``. A top-level array/string/number would otherwise make it
+    through ``request.get_json()`` and crash later as an ``AttributeError``,
+    surfacing as a 500 instead of a clear client error. Centralizing the guard
+    here hardens every route that still uses Flask's request parsing directly.
+    """
+
+    _OBJECT_ONLY_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+    def get_json(self, force=False, silent=False, cache=True):
+        data = super().get_json(force=force, silent=silent, cache=cache)
+        if data is None:
+            return data
+        expects_object = self.method in self._OBJECT_ONLY_METHODS and (force or self.is_json)
+        if expects_object and not isinstance(data, dict):
+            raise BadRequest("JSON body must be an object.")
+        return data
+
+# ---------------------------------------------------------------------------
+# CSRF Token (rotating with TTL)
+# ---------------------------------------------------------------------------
+CSRF_TTL = 3600          # seconds — tokens expire after 1 hour
+CSRF_MAX_TOKENS = 10     # keep at most this many valid tokens
+
+_csrf_tokens: dict[str, float] = {}   # token_str -> expiry_timestamp
+_csrf_lock = threading.Lock()
+
+
+def _purge_expired_tokens() -> None:
+    """Remove expired tokens from ``_csrf_tokens``.  Caller must hold ``_csrf_lock``."""
+    now = time.monotonic()
+    expired = [t for t, exp in _csrf_tokens.items() if exp <= now]
+    for t in expired:
+        del _csrf_tokens[t]
+
+
+def _newest_token() -> Tuple[Optional[str], float]:
+    """Return ``(token, expiry)`` for the newest token, or ``(None, 0)``."""
+    if not _csrf_tokens:
+        return None, 0.0
+    return max(_csrf_tokens.items(), key=lambda kv: kv[1])
+
+
+def get_csrf_token() -> str:
+    """Return the current (newest) CSRF token, generating a new one if needed."""
+    with _csrf_lock:
+        _purge_expired_tokens()
+        tok, exp = _newest_token()
+        now = time.monotonic()
+        # Generate a new token when none exist or the newest is past half-life
+        if tok is None or (exp - now) < (CSRF_TTL / 2):
+            new_tok = secrets.token_hex(32)
+            _csrf_tokens[new_tok] = now + CSRF_TTL
+            # Evict oldest if over the cap
+            while len(_csrf_tokens) > CSRF_MAX_TOKENS:
+                oldest = min(_csrf_tokens, key=_csrf_tokens.get)
+                del _csrf_tokens[oldest]
+            tok = new_tok
+        return tok
+
+
+def is_csrf_token_valid(header_token: str) -> bool:
+    """Return True when *header_token* matches a non-expired CSRF token."""
+    if not isinstance(header_token, str) or not header_token or not header_token.isascii():
+        return False
+    with _csrf_lock:
+        _purge_expired_tokens()
+        # Evaluate ALL comparisons before testing any result so timing does
+        # not leak which position in the token list matched.
+        matches = [hmac.compare_digest(header_token, token) for token in _csrf_tokens]
+        return any(matches)
+
+
+def validate_csrf_request():
+    """Return a Flask error response for invalid mutating requests, else None."""
+    if request.method not in ("POST", "PUT", "PATCH", "DELETE"):
+        return None
+    header_token = request.headers.get("X-OpenCut-Token", "")
+    if is_csrf_token_valid(header_token):
+        return None
+    token_present = bool(header_token)
+    record_csrf_rejection(token_present=token_present)
+    # The panel picks its recovery hint from `code`, so a bare {"error": ...}
+    # leaves the user with an unactionable message — the shape reported in
+    # issue #5. Distinguish "never bootstrapped" from "token went stale":
+    # they have different fixes.
+    if token_present:
+        suggestion = (
+            "The panel's security token expired or the server restarted. "
+            "Reconnect the panel (it refetches the token from /health) and retry."
+        )
+    else:
+        suggestion = (
+            "The panel never received a security token. Reconnect it; if the "
+            "panel is host-embedded it must complete the /health bootstrap "
+            "before any action."
+        )
+    return error_response(
+        "CSRF_INVALID",
+        "Invalid or missing CSRF token",
+        status=403,
+        suggestion=suggestion,
+    )
+
+
+def require_csrf(f):
+    """
+    Decorator that rejects POST/PUT/PATCH/DELETE requests missing a valid
+    ``X-OpenCut-Token`` header.  The token is handed to the panel via
+    the ``/health`` response so no extra round-trip is needed.
+
+    Accepts ANY non-expired token from the rotating pool, giving clients
+    a grace window when tokens rotate.
+    """
+    @functools.wraps(f)
+    def wrapper(*args, **kwargs):
+        csrf_error = validate_csrf_request()
+        if csrf_error is not None:
+            return csrf_error
+        return f(*args, **kwargs)
+
+    # `functools.wraps` copies the wrapped function's name over the wrapper,
+    # so name-based introspection can never see this decorator. Introspection
+    # (OpenAPI security, /api/routes) reads this explicit marker instead.
+    wrapper._opencut_requires_csrf = True
+    return wrapper
+
+
+# ---------------------------------------------------------------------------
+# JSON Body Validation
+# ---------------------------------------------------------------------------
+def get_json_dict(*, force: bool = True, silent: bool = False) -> dict:
+    """Return the request JSON body as a dict.
+
+    Many OpenCut routes expect a top-level JSON object and immediately call
+    ``data.get(...)``. When a client sends a JSON array, number, or string, that
+    pattern turns into an ``AttributeError`` and surfaces as a 500. This helper
+    normalizes the happy path and turns non-object JSON into a clear 400-level
+    validation error instead.
+
+    Both malformed JSON and non-object JSON raise ``werkzeug.BadRequest`` so the
+    app's centralized error handlers return a structured 400 response. The
+    handler in :func:`opencut.errors.register_error_handlers` recognises the
+    ``"JSON body must be an object"`` sentinel and maps it to ``INVALID_INPUT``,
+    so callers can use ``get_json_dict()`` directly without a local ``try`` —
+    a bare ``ValueError`` would otherwise escape to the generic 500 handler.
+    """
+    data = request.get_json(force=force, silent=silent)
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise BadRequest("JSON body must be an object")
+    return data
+
+
+def _destructive_plan_payload(plan: dict) -> bytes:
+    clean_plan = {key: value for key, value in plan.items() if key != "confirm_token"}
+    return json.dumps(clean_plan, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+
+
+def _destructive_confirmation_secret() -> str:
+    header_token = request.headers.get("X-OpenCut-Token", "")
+    return header_token or get_csrf_token()
+
+
+def destructive_confirm_token(plan: dict) -> str:
+    """Return a request-scoped confirmation token for a destructive plan."""
+    secret = _destructive_confirmation_secret().encode("utf-8")
+    return hmac.new(secret, _destructive_plan_payload(plan), hashlib.sha256).hexdigest()
+
+
+def build_destructive_plan(
+    operation: str,
+    *,
+    targets=None,
+    records=None,
+    metadata=None,
+    reversible: bool = False,
+) -> dict:
+    """Build a stable dry-run plan with a confirmation token."""
+    plan = {
+        "operation": str(operation),
+        "targets": list(targets or []),
+        "records": list(records or []),
+        "metadata": dict(metadata or {}),
+        "reversible": bool(reversible),
+    }
+    plan["confirm_token"] = destructive_confirm_token(plan)
+    return plan
+
+
+def verify_destructive_confirm_token(plan: dict, confirm_token) -> bool:
+    """Validate a client confirmation token against the current request plan."""
+    if not isinstance(confirm_token, str) or not confirm_token:
+        return False
+    return hmac.compare_digest(confirm_token, destructive_confirm_token(plan))
+
+
+def destructive_confirmation_required_response(plan: dict) -> dict:
+    """Return the standard response body for missing destructive confirmation."""
+    return {
+        "error": "confirm_token required",
+        "code": "DESTRUCTIVE_CONFIRMATION_REQUIRED",
+        "suggestion": "Run with dry_run=true, review the plan, then pass the returned confirm_token.",
+        "dry_run": False,
+        "plan": plan,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Path Validation
+# ---------------------------------------------------------------------------
+def is_path_within(path: str, allowed_base: str) -> bool:
+    """Return True when *path* resolves inside *allowed_base*.
+
+    Path containment checks are easy to get subtly wrong with string prefix
+    comparisons: sibling directories can share prefixes and Windows paths are
+    case-insensitive. This helper resolves symlinks, normalizes path casing on
+    platforms that need it, and uses ``commonpath`` for component-aware
+    comparison.
+    """
+    if not path or not allowed_base:
+        return False
+    try:
+        resolved = os.path.normcase(os.path.realpath(path))
+        resolved_base = os.path.normcase(os.path.realpath(allowed_base))
+        return os.path.commonpath([resolved, resolved_base]) == resolved_base
+    except (OSError, TypeError, ValueError):
+        return False
+
+
+def is_path_within_any(path: str, allowed_roots: Iterable[str]) -> bool:
+    """Return True when *path* resolves inside at least one allowed root."""
+    return any(is_path_within(path, root) for root in allowed_roots if root)
+
+
+def validate_path(path: str, allowed_base: str = None) -> str:
+    """
+    Validate and resolve a file path, blocking traversal attacks.
+
+    - Rejects empty / whitespace-only paths
+    - Rejects null bytes
+    - Rejects ``..`` components
+    - Rejects UNC / network / Win32 device paths (``\\\\``, ``\\\\?\\``, ``\\\\.\\``)
+    - Resolves symlinks via ``os.path.realpath``
+    - Optionally checks the resolved path is under *allowed_base*
+      (case-insensitive on Windows)
+
+    Returns the resolved absolute path.
+    Raises ``ValueError`` on invalid/dangerous input.
+    """
+    def _reject(reason: str) -> None:
+        record_path_validation_rejection(path, reason, allowed_base=allowed_base)
+        raise ValueError(reason)
+
+    if not path or not isinstance(path, str):
+        _reject("Empty or invalid path")
+
+    # Reject whitespace-only paths — ``os.path.normpath("  ")`` becomes ``"."``
+    # which would silently resolve to the server's CWD.
+    stripped = path.strip()
+    if not stripped:
+        _reject("Empty or whitespace-only path")
+
+    # Block null bytes
+    if "\x00" in path:
+        _reject("Null byte in path")
+
+    # Block UNC / network / Win32 device paths (SSRF / NTLM hash leak risk).
+    # Covers both slashes because Windows accepts forward-slash UNC as well.
+    prefix_checks = (path, path.replace("/", "\\"))
+    if any(p.startswith("\\\\") for p in prefix_checks):
+        _reject("UNC/network paths are not allowed")
+
+    # Block Windows Alternate Data Streams (e.g. "file.txt:hidden" or
+    # "file.txt::$DATA").  ADS names are invisible in Explorer and can
+    # be used to hide data or bypass basename-based checks.
+    basename = os.path.basename(path)
+    if ":" in basename and not re.match(r"^[A-Za-z]:$", basename):
+        _reject("Alternate data stream references are not allowed")
+
+    # Block Windows reserved device names (CON, PRN, AUX, NUL, COM1-9, LPT1-9)
+    stem = os.path.splitext(basename)[0].upper()
+    if stem in {"CON", "PRN", "AUX", "NUL"} or re.match(r"^(COM|LPT)\d$", stem):
+        _reject("Windows reserved device name in path")
+
+    # Normalise and block .. components
+    normed = os.path.normpath(path)
+    # Re-check after normpath (could produce UNC from edge cases)
+    if normed.startswith("\\\\") or normed.startswith("//"):
+        _reject("UNC/network paths are not allowed")
+    parts = normed.replace("\\", "/").split("/")
+    if ".." in parts:
+        _reject("Path traversal blocked")
+
+    # Resolve to absolute real path (follows symlinks)
+    resolved = os.path.realpath(normed)
+
+    # A symlink could resolve to a UNC / Win32 device path even when the
+    # user-supplied string was a plain absolute path. Recheck the resolved
+    # form so the SSRF / NTLM-hash-leak guard above can't be tunnelled
+    # through a pre-staged symlink.
+    if resolved.startswith("\\\\") or resolved.startswith("//"):
+        _reject("Resolved path points to a UNC/network location")
+
+    # Optional base-directory confinement. Windows paths are case-insensitive,
+    # so compare under ``normcase`` to avoid false negatives when ``realpath``
+    # returns a different case than the caller passed for ``allowed_base``.
+    if allowed_base is not None:
+        if not is_path_within(resolved, allowed_base):
+            _reject("Path outside allowed directory")
+
+    return resolved
+
+
+# ---------------------------------------------------------------------------
+# Safe pip install
+# ---------------------------------------------------------------------------
+def _find_system_python() -> Optional[str]:
+    """Find system Python executable when running as a frozen (PyInstaller) build."""
+    for name in ("python", "python3", "py"):
+        path = shutil.which(name)
+        if path:
+            try:
+                result = subprocess.run(
+                    [path, "--version"], capture_output=True, text=True, timeout=10
+                )
+                if result.returncode == 0:
+                    logger.debug("Found system Python: %s (%s)", path, result.stdout.strip())
+                    return path
+            except Exception:
+                continue
+    return None
+
+
+PILLOW_RUNTIME_REQUIREMENT = "Pillow>=12.3.0,<13"
+OPENCV_RUNTIME_REQUIREMENT = "opencv-python==4.14.0.94"
+
+_SAFE_PACKAGE_RE = re.compile(
+    r"^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?"
+    r"(?:\[[A-Za-z0-9_,-]+\])?"  # extras: [all], [dev,test]
+    r"(?:(?:==|>=|<=|~=|!=|>|<)[A-Za-z0-9.*+!_-]+"
+    r"(?:,(?:==|>=|<=|~=|!=|>|<)[A-Za-z0-9.*+!_-]+)*)?$"
+)
+
+_RUNTIME_SECURITY_REQUIREMENTS = {
+    "pillow": PILLOW_RUNTIME_REQUIREMENT,
+    "huggingface-hub": "huggingface-hub>=1.26,<2",
+    "opencv-python-headless": OPENCV_RUNTIME_REQUIREMENT,
+    # Both distributions export ``cv2`` and cannot safely coexist.  Normalize
+    # legacy feature bootstraps to the GUI-capable provider required by
+    # PySceneDetect 0.7+.
+    "opencv-python": OPENCV_RUNTIME_REQUIREMENT,
+}
+
+
+def validate_safe_pip_package(package: str) -> str:
+    """Validate a package spec before passing it to ``pip install``.
+
+    The installer uses subprocess argument lists instead of a shell, but keeping
+    the accepted shape narrow avoids URL/path installs, control characters, and
+    ambiguous whitespace in runtime dependency requests.
+    """
+    if not isinstance(package, str):
+        raise ValueError(f"Invalid package name: {package!r}")
+    normalized = package.strip()
+    if not normalized or "\x00" in normalized or any(ch.isspace() for ch in normalized):
+        raise ValueError(f"Invalid package name: {package!r}")
+    if not _SAFE_PACKAGE_RE.fullmatch(normalized):
+        raise ValueError(f"Invalid package name: {package!r}")
+    return normalized
+
+
+def runtime_security_requirement(package: str) -> str:
+    """Return the advisory-safe runtime requirement for *package*.
+
+    Optional feature bootstraps historically requested bare ``Pillow`` and
+    therefore could install a vulnerable release from an old package index.
+    Centralising security constraints here keeps every ``ensure_package`` and
+    direct ``safe_pip_install`` path on the same bounded range.
+    """
+    normalized = validate_safe_pip_package(package)
+    from opencut.dependency_support import dependency_support
+
+    support = dependency_support(normalized)
+    if not support["supported"]:
+        raise RuntimeError(support["reason"])
+    name = re.split(r"[\[>=<!~]", normalized, maxsplit=1)[0].lower()
+    return _RUNTIME_SECURITY_REQUIREMENTS.get(name, normalized)
+
+
+def _verify_package_importable(python: str, package: str, target_dir: str = None) -> bool:
+    """Check if a package is importable by running a quick subprocess check.
+
+    Uses the import name (strips extras/version specifiers and normalises
+    hyphens to underscores).  When *target_dir* is given it is prepended
+    to ``sys.path`` inside the subprocess so ``--target`` installs are
+    found.
+    """
+    # Derive the bare import name: "whisperx[all]>=0.1" -> "whisperx"
+    import_name = re.split(r"[\[>=<!~]", package)[0].replace("-", "_")
+    setup = ""
+    if target_dir:
+        setup = f"import sys; sys.path.append({target_dir!r}); "
+    cmd = [python, "-c", f"{setup}import {import_name}"]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def safe_pip_install(package: str, timeout: int = 600) -> subprocess.CompletedProcess:
+    """
+    Install a pip package with a safe fallback chain:
+
+    1. ``pip install --target ~/.opencut/packages`` — always writable, no admin needed
+    2. Normal ``pip install <package>``
+    3. ``pip install --user <package>``
+    4. ``pip install --break-system-packages <package>``  (only inside a venv)
+
+    When running as a frozen (PyInstaller) build, uses system Python
+    from PATH instead of ``sys.executable`` (which points to the exe).
+
+    Permission errors (Errno 13) are caught and immediately skip to the
+    next strategy instead of failing the entire install.
+
+    Returns the ``CompletedProcess`` on success.
+    Raises ``RuntimeError`` if all strategies fail.
+    """
+    package = runtime_security_requirement(package)
+
+    # Frozen builds can't use sys.executable for pip — find system Python
+    if getattr(sys, "frozen", False):
+        python = _find_system_python()
+        if not python:
+            raise RuntimeError(
+                f"Cannot install {package}: Python not found in PATH. "
+                "Install Python from python.org and ensure it is on PATH."
+            )
+    else:
+        python = sys.executable
+
+    # Prefer pre-built binary wheels (avoids needing Rust/C compilers)
+    # ~/.opencut/packages — the ONLY directory guaranteed writable without admin
+    _target_dir = os.path.join(os.path.expanduser("~"), ".opencut", "packages")
+    os.makedirs(_target_dir, exist_ok=True)
+    # Append to sys.path so target installs are available without outranking
+    # stdlib, bundled modules, or the active environment's site-packages.
+    if _target_dir not in sys.path:
+        sys.path.append(_target_dir)
+
+    _base = [python, "-m", "pip", "install", package, "--prefer-binary", "-q"]
+
+    # Build strategy list — --target first to avoid permission errors
+    strategies = [
+        ("--target (user-local)", _base + ["--target", _target_dir]),
+        ("default pip install", list(_base)),
+        ("--user install", _base + ["--user"]),
+    ]
+
+    # Only allow --break-system-packages inside a virtual environment
+    if _in_virtualenv():
+        strategies.append(
+            ("--break-system-packages", _base + ["--break-system-packages"])
+        )
+
+    last_result = None
+    for label, cmd in strategies:
+        logger.info("Trying to install %s via strategy: %s", package, label)
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            if result.returncode == 0:
+                logger.info("Successfully installed %s via strategy: %s", package, label)
+                # Verify the package is actually importable
+                if _verify_package_importable(python, package, _target_dir):
+                    logger.info("Verified %s is importable after install", package)
+                else:
+                    logger.warning(
+                        "Package %s installed via %s but import check failed — "
+                        "this may be OK for packages with different import names",
+                        package, label,
+                    )
+                return result
+
+            # Check stderr for permission denied (Errno 13) — skip immediately
+            stderr_text = result.stderr or ""
+            if "Permission denied" in stderr_text or "Errno 13" in stderr_text or "[WinError 5]" in stderr_text:
+                logger.warning(
+                    "Permission denied installing %s via %s — skipping to next strategy. "
+                    "stderr: %s", package, label, stderr_text[-300:]
+                )
+                last_result = result
+                continue
+
+            logger.warning(
+                "Strategy %s failed for %s (rc=%d): %s",
+                label, package, result.returncode, (result.stderr or "")[-300:]
+            )
+            last_result = result
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f"pip install {package} timed out after {timeout}s")
+        except OSError as e:
+            # Catch OS-level permission errors (e.g. Errno 13 from subprocess itself)
+            if e.errno == 13:
+                logger.warning("OS permission error for strategy %s: %s — skipping", label, e)
+                continue
+            logger.warning("pip install attempt (%s) failed: %s", label, e)
+            last_result = None
+        except Exception as e:
+            logger.warning("pip install attempt (%s) failed: %s", label, e)
+            last_result = None
+
+    stderr = last_result.stderr[-500:] if last_result and last_result.stderr else "unknown error"
+    # Provide actionable hint for Rust/compiler errors
+    if "rust" in stderr.lower() or "cargo" in stderr.lower() or "metadata-generation-failed" in stderr.lower():
+        raise RuntimeError(
+            f"Failed to install {package}: this package requires Rust to compile from source, "
+            f"and no pre-built wheel is available for your Python version.\n\n"
+            f"Fix: Install Rust from https://rustup.rs/ and restart, "
+            f"or upgrade Python to 3.10-3.12 where pre-built wheels are available.\n\n"
+            f"Details: {stderr[-300:]}"
+        )
+    raise RuntimeError(f"Failed to install {package}: {stderr}")
+
+
+def validate_filepath(filepath: str) -> str:
+    """
+    Validate a user-supplied file path for input files.
+
+    Runs ``validate_path`` checks and verifies the file exists on disk.
+    Returns the resolved absolute path.
+    Raises ``ValueError`` if the path is invalid or missing.
+    """
+    resolved = validate_path(filepath)
+    if not os.path.isfile(resolved):
+        raise ValueError(f"File not found: {filepath}")
+    return resolved
+
+
+def validate_output_path(path: str) -> str:
+    """Validate a user-supplied output file path.
+
+    Like ``validate_path`` but does NOT require the file to exist (it will
+    be created).  Ensures the *parent directory* exists and is writable.
+    Returns the resolved absolute path.
+    """
+    resolved = validate_path(path)
+    parent = os.path.dirname(resolved)
+    if parent and not os.path.isdir(parent):
+        raise ValueError(f"Output directory does not exist: {parent}")
+    if parent and not os.access(parent, os.W_OK):
+        raise ValueError(f"Output directory is not writable: {parent}")
+    if os.path.exists(resolved):
+        if os.path.isdir(resolved):
+            raise ValueError(f"Output path is a directory: {resolved}")
+        if not os.access(resolved, os.W_OK):
+            raise ValueError(f"Output file is not writable: {resolved}")
+    return resolved
+
+
+def safe_float(value, default: float = 0.0, min_val: float = None, max_val: float = None) -> float:
+    """Convert *value* to float, returning *default* on failure.
+
+    If *min_val* or *max_val* are given, clamp the result to that range.
+    Rejects inf/nan values in both the input and the bounds.
+    """
+    try:
+        result = float(value)
+        if result != result or result == float("inf") or result == float("-inf"):
+            return default
+    except (TypeError, ValueError):
+        return default
+    # Guard against NaN/inf bounds — NaN comparisons silently return False,
+    # which would bypass clamping entirely.
+    if min_val is not None:
+        try:
+            min_f = float(min_val)
+            if min_f == min_f and result < min_f:  # skip if min_val is NaN
+                result = min_f
+        except (TypeError, ValueError):
+            pass
+    if max_val is not None:
+        try:
+            max_f = float(max_val)
+            if max_f == max_f and result > max_f:  # skip if max_val is NaN
+                result = max_f
+        except (TypeError, ValueError):
+            pass
+    return result
+
+
+def safe_int(value, default: int = 0, min_val: int = None, max_val: int = None) -> int:
+    """Convert *value* to int, returning *default* on failure.
+
+    If *min_val* or *max_val* are given, clamp the result to that range.
+    """
+    try:
+        result = int(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return default
+    if min_val is not None:
+        try:
+            min_i = int(min_val)
+            if result < min_i:
+                result = min_i
+        except (TypeError, ValueError, OverflowError):
+            pass
+    if max_val is not None:
+        try:
+            max_i = int(max_val)
+            if result > max_i:
+                result = max_i
+        except (TypeError, ValueError, OverflowError):
+            pass
+    return result
+
+
+def safe_bool(value, default: bool = False) -> bool:
+    """Convert common string/numeric flag values to bool.
+
+    Accepts native booleans, 0/1 style numbers, and common string forms
+    like ``"true"`` / ``"false"``. Falls back to *default* for unknown,
+    ambiguous, or structurally unsafe inputs instead of treating every
+    non-empty value as ``True``.
+
+    Hardened edge cases:
+
+    * ``None`` returns ``default``.
+    * ``NaN`` / ``inf`` floats return ``default`` (consistent with
+      ``safe_float``).
+    * ``bytes`` / ``bytearray`` are decoded as UTF-8 then parsed as
+      strings, so ``b"false"`` correctly returns ``False``.
+    * Lists, tuples, sets, and dicts return ``default`` — a flag with a
+      container value is a client bug, not a truth signal.
+    * Unknown string forms return ``default``.
+    """
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, float):
+        # NaN and infinities are never valid flag values.
+        if value != value or value == float("inf") or value == float("-inf"):
+            return default
+        return value != 0
+    if isinstance(value, int):
+        return value != 0
+    if isinstance(value, (bytes, bytearray)):
+        try:
+            value = value.decode("utf-8", errors="ignore")
+        except Exception:
+            return default
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off", "", "null", "none"}:
+            return False
+        return default
+    # Containers and arbitrary objects should not be silently coerced.
+    return default
+
+
+# ---------------------------------------------------------------------------
+# Rate Limiting (in-memory, per-endpoint)
+# ---------------------------------------------------------------------------
+_rate_limits = {}
+_rate_lock = threading.Lock()
+
+
+class RateLimitExceeded(ValueError):
+    """Raised when a rate-limit slot cannot be acquired."""
+
+    def __init__(self, key: str):
+        self.key = key
+        super().__init__(f"Another {key} operation is already running. Please wait.")
+
+
+def rate_limit(key: str, max_concurrent: int = 1) -> bool:
+    """
+    Check if an operation identified by *key* is already at its
+    concurrency limit.  Returns ``True`` if the caller is allowed to
+    proceed, ``False`` if rate-limited.
+
+    Call ``rate_limit_release(key)`` when the operation finishes.
+    """
+    rejected: Optional[Tuple[int, int]] = None
+    with _rate_lock:
+        current = _rate_limits.get(key, 0)
+        if current >= max_concurrent:
+            rejected = (current, max_concurrent)
+        else:
+            _rate_limits[key] = current + 1
+            return True
+    record_rate_limit_rejection(
+        key,
+        current=rejected[0],
+        max_concurrent=rejected[1],
+    )
+    return False
+
+
+def rate_limit_release(key: str):
+    """Decrement the concurrency counter for *key*."""
+    with _rate_lock:
+        current = _rate_limits.get(key, 0)
+        if current > 0:
+            _rate_limits[key] = current - 1
+
+
+@contextmanager
+def rate_limit_slot(key: str, max_concurrent: int = 1):
+    """Acquire and release a dynamic rate-limit slot around a code block."""
+    if not rate_limit(key, max_concurrent):
+        raise RateLimitExceeded(key)
+    try:
+        yield
+    finally:
+        rate_limit_release(key)
+
+
+def require_rate_limit(key: str, max_concurrent: int = 1):
+    """Decorator that rejects requests when concurrency limit is reached.
+
+    Acquires the rate limit slot before calling the wrapped function and
+    releases it when the function returns (or raises). Async job routes
+    should use ``@async_job(..., rate_limit_key=...)`` instead so the
+    slot is held until the worker exits.
+    """
+    def decorator(f):
+        @functools.wraps(f)
+        def wrapper(*args, **kwargs):
+            if not rate_limit(key, max_concurrent):
+                error = RateLimitExceeded(key)
+                return jsonify({"error": str(error)}), 429
+            try:
+                return f(*args, **kwargs)
+            finally:
+                rate_limit_release(key)
+        return wrapper
+    return decorator
+
+
+def _in_virtualenv() -> bool:
+    """Return True if running inside a virtual environment.
+
+    Detects:
+      * legacy ``virtualenv`` (``sys.real_prefix``)
+      * ``venv`` / ``virtualenv>=20`` (``sys.base_prefix != sys.prefix``)
+      * an activated env exporting ``VIRTUAL_ENV`` even when Python itself
+        was launched via a symlink that fooled the prefix check
+    """
+    if hasattr(sys, "real_prefix"):
+        return True
+    if hasattr(sys, "base_prefix") and sys.base_prefix != sys.prefix:
+        return True
+    if os.environ.get("VIRTUAL_ENV"):
+        return True
+    return False

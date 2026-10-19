@@ -198,7 +198,7 @@ async function applyRelativeZoom() {
           const action = change.param.createSetValueAction(keyframe, true);
           if (compoundAction.addAction(action)) added += 1;
         }
-      }, 'Nocturnz Edit — Zoom relatif');
+      }, 'Nocturnz/Edit — Zoom relatif');
     });
     if (!success || added !== changes.length) throw new Error('Premiere n’a pas confirmé toutes les actions. Aucun résultat n’est annoncé.');
 

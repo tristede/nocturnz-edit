@@ -1,0 +1,279 @@
+"""Contract tests for the generated OpenAPI catalogues (F208)."""
+
+from __future__ import annotations
+
+import re
+from collections import Counter
+from dataclasses import is_dataclass
+from typing import Any
+
+from opencut.openapi import _ENDPOINT_SCHEMAS, _flask_rule_to_openapi_path
+from opencut.openapi_registry import discover_response_schemas
+
+HTTP_METHODS = {"get", "post", "put", "patch", "delete"}
+MUTATING_METHODS = {"post", "put", "patch", "delete"}
+VALID_SCHEMA_TYPES = {"array", "boolean", "integer", "number", "object", "string"}
+PATH_PARAM_RE = re.compile(r"{([^{}]+)}")
+RAW_FLASK_PARAM_RE = re.compile(r"<[^>]+>")
+OPERATION_ID_RE = re.compile(r"^[A-Za-z0-9_]+$")
+
+
+def _expected_operations(app) -> set[tuple[str, str]]:
+    operations: set[tuple[str, str]] = set()
+    for rule in app.url_map.iter_rules():
+        raw_rule = str(rule.rule)
+        if raw_rule.startswith("/static"):
+            continue
+        path = re.sub(
+            r"<(?:[A-Za-z_][A-Za-z0-9_]*:)?([A-Za-z_][A-Za-z0-9_]*)>",
+            r"{\1}",
+            raw_rule,
+        )
+        for method in sorted((rule.methods or set()) - {"HEAD", "OPTIONS"}):
+            operations.add((path, method.lower()))
+    return operations
+
+
+def _documented_operations(spec: dict[str, Any]) -> set[tuple[str, str]]:
+    operations: set[tuple[str, str]] = set()
+    for path, path_item in spec["paths"].items():
+        for method in path_item:
+            if method in HTTP_METHODS:
+                operations.add((path, method))
+    return operations
+
+
+def _operation_items(spec: dict[str, Any]):
+    for path, path_item in spec["paths"].items():
+        for method, operation in path_item.items():
+            if method in HTTP_METHODS:
+                yield path, method, operation
+
+
+def _schema_nodes(schema: dict[str, Any]):
+    yield schema
+    for value in schema.get("properties", {}).values():
+        if isinstance(value, dict):
+            yield from _schema_nodes(value)
+    items = schema.get("items")
+    if isinstance(items, dict):
+        yield from _schema_nodes(items)
+    for key in ("oneOf", "anyOf", "allOf"):
+        for item in schema.get(key, []):
+            if isinstance(item, dict):
+                yield from _schema_nodes(item)
+
+
+def _resolve(spec: dict[str, Any], node: dict[str, Any]) -> dict[str, Any]:
+    """Follow a local ``$ref`` into ``components``.
+
+    The canonical spec emits each schema once and references it, so response
+    bodies and error responses arrive as ``$ref`` pointers rather than inline
+    copies.
+    """
+    seen = set()
+    while isinstance(node, dict) and "$ref" in node:
+        ref = node["$ref"]
+        assert ref.startswith("#/"), ref
+        assert ref not in seen, f"circular $ref: {ref}"
+        seen.add(ref)
+        target: Any = spec
+        for part in ref.lstrip("#/").split("/"):
+            target = target[part]
+        node = target
+    return node
+
+
+def _assert_response_schema(
+    response: dict[str, Any], pointer: str, spec: dict[str, Any] | None = None
+) -> None:
+    assert isinstance(response, dict), pointer
+    if spec is not None:
+        response = _resolve(spec, response)
+    assert response.get("description"), pointer
+    content = response.get("content", {})
+    assert "application/json" in content, pointer
+    schema = content["application/json"].get("schema")
+    assert isinstance(schema, dict), pointer
+    if spec is not None:
+        schema = _resolve(spec, schema)
+
+    for node in _schema_nodes(schema):
+        node_type = node.get("type")
+        if isinstance(node_type, list):
+            assert set(node_type) <= VALID_SCHEMA_TYPES, pointer
+        elif node_type is not None:
+            assert node_type in VALID_SCHEMA_TYPES, pointer
+        if "properties" in node:
+            assert isinstance(node["properties"], dict), pointer
+        if node_type == "array":
+            assert "items" in node, pointer
+
+
+def test_flask_rule_to_openapi_path_converts_parameters():
+    path, parameters = _flask_rule_to_openapi_path(
+        "/journal/<int:entry_id>/asset/<path:asset_path>/<unknown:token>"
+    )
+
+    assert path == "/journal/{entry_id}/asset/{asset_path}/{token}"
+    assert [param["name"] for param in parameters] == [
+        "entry_id",
+        "asset_path",
+        "token",
+    ]
+    assert [param["schema"]["type"] for param in parameters] == [
+        "integer",
+        "string",
+        "string",
+    ]
+    assert all(param["in"] == "path" for param in parameters)
+    assert all(param["required"] is True for param in parameters)
+
+
+def test_root_openapi_documents_every_live_flask_route(client):
+    response = client.get("/openapi.json")
+    assert response.status_code == 200
+    spec = response.get_json()
+
+    assert spec["openapi"] == "3.0.3"
+    assert spec["info"]["title"] == "OpenCut API"
+    assert len(spec["paths"]) >= 1300
+
+    documented = _documented_operations(spec)
+    expected = _expected_operations(client.application)
+
+    assert documented == expected
+    assert not [path for path in spec["paths"] if RAW_FLASK_PARAM_RE.search(path)]
+
+    for path, path_item in spec["paths"].items():
+        expected_param_names = set(PATH_PARAM_RE.findall(path))
+        if not expected_param_names:
+            continue
+        documented_param_names = {
+            parameter.get("name")
+            for parameter in path_item.get("parameters", [])
+            if parameter.get("in") == "path"
+        }
+        assert documented_param_names == expected_param_names, path
+
+
+def test_root_openapi_operations_have_valid_ids_and_responses(client):
+    spec = client.get("/openapi.json").get_json()
+    operation_ids = []
+
+    for path, method, operation in _operation_items(spec):
+        pointer = f"{method.upper()} {path}"
+        operation_id = operation.get("operationId")
+        assert operation_id, pointer
+        assert OPERATION_ID_RE.match(operation_id), pointer
+        operation_ids.append(operation_id)
+
+        assert operation.get("summary"), pointer
+        assert operation.get("tags"), pointer
+
+        responses = operation.get("responses")
+        assert isinstance(responses, dict), pointer
+        assert "200" in responses, pointer
+        _assert_response_schema(responses["200"], f"{pointer} 200", spec)
+
+        if method in MUTATING_METHODS:
+            for status_code in ("400", "403"):
+                assert status_code in responses, pointer
+                _assert_response_schema(
+                    responses[status_code],
+                    f"{pointer} {status_code}",
+                    spec,
+                )
+
+    counts = Counter(operation_ids)
+    duplicates = sorted(item for item, count in counts.items() if count > 1)
+    assert not duplicates
+
+
+def test_f193_response_schema_mapping_is_dataclass_discovered():
+    """F193 derives response-schema bindings from registered dataclasses."""
+    records = discover_response_schemas()
+    routes = {record.route: record for record in records}
+
+    assert len(routes) >= 105
+    assert len(routes) == len(records)
+    assert all(is_dataclass(record.schema_class) for record in records)
+    assert _ENDPOINT_SCHEMAS == {
+        record.route: record.schema_class for record in records
+    }
+    assert routes["/audio/description/microsoft-draft"].module == (
+        "opencut.core.audio_description"
+    )
+    assert routes["/delivery/transfer-bundle"].schema_class.__name__ == (
+        "TransferBundleResult"
+    )
+    assert routes["/markers/import"].schema_class.__name__ == "MarkerImportResult"
+
+
+def test_f193_bulk_response_schema_mapping_covers_top_routes(client):
+    """F193 keeps typed response-schema coverage above the old F192 threshold."""
+    typed_paths = {
+        path for path, schema_cls in _ENDPOINT_SCHEMAS.items()
+        if schema_cls is not None
+    }
+    assert len(typed_paths) >= 105
+
+    spec = client.get("/openapi.json").get_json()
+    examples = {
+        ("/health", "get"): {"status", "version", "csrf_token"},
+        ("/jobs", "get"): {"jobs", "total"},
+        ("/api/gpu/status", "get"): {"available", "device", "models"},
+        ("/captions/qc/reading-profiles", "get"): {"profiles", "tokens", "defaults"},
+        ("/audio/tts/voices", "get"): {"voices", "backends", "total"},
+        ("/settings/llm", "get"): {"settings", "ok", "message"},
+        ("/ai/mood-presets", "get"): {"items", "total"},
+        ("/audio/description/microsoft-draft", "post"): {
+            "draft_format",
+            "cue_count",
+            "cues",
+            "review_required",
+            "workflow",
+        },
+        ("/delivery/transfer-bundle", "post"): {
+            "bundle_path",
+            "manifest_path",
+            "commands",
+            "source_count",
+        },
+        ("/markers/import", "post"): {
+            "format",
+            "count",
+            "markers",
+            "warnings",
+            "rejected",
+        },
+        ("/system/crash-packet", "post"): {
+            "version",
+            "output_path",
+            "bundle_sha256",
+            "entries",
+        },
+        ("/system/ocio", "get"): {"available", "version", "roles", "findings"},
+    }
+    for (path, method), expected_properties in examples.items():
+        schema = _resolve(spec, spec["paths"][path][method]["responses"]["200"][
+            "content"
+        ]["application/json"]["schema"])
+        assert schema["type"] == "object", path
+        assert expected_properties <= set(schema["properties"]), path
+
+    transfer_schema = _resolve(spec, spec["paths"]["/delivery/transfer-bundle"]["post"][
+        "responses"
+    ]["200"]["content"]["application/json"]["schema"])
+    command_items = transfer_schema["properties"]["commands"]["items"]
+    assert {"method", "available", "argv"} <= set(command_items["properties"])
+
+
+def test_api_openapi_catalogue_uses_openapi_path_parameters(client):
+    response = client.get("/api/openapi.json?refresh=1")
+    assert response.status_code == 200
+    spec = response.get_json()
+
+    assert spec["openapi"].startswith("3.1.")
+    assert len(spec["paths"]) >= 1300
+    assert not [path for path in spec["paths"] if RAW_FLASK_PARAM_RE.search(path)]

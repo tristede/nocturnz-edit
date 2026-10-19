@@ -1,0 +1,322 @@
+"""F260 UXP migration risk dashboard guardrails."""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+from opencut.core.cep_uxp_parity import (
+    PRIORITY_ROUTE_COVERAGE,
+    ROUTE_UXP_PENDING,
+    UXP_PENDING_FLOOR,
+    UXP_PENDING_REASONS,
+    build_dashboard_manifest,
+    validate_route_coverage,
+)
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+GENERATED_DASHBOARD = REPO_ROOT / "opencut" / "_generated" / "uxp_migration_dashboard.json"
+PANEL_DASHBOARD = REPO_ROOT / "extension" / "com.opencut.uxp" / "uxp-migration-dashboard.json"
+UXP_HTML = REPO_ROOT / "extension" / "com.opencut.uxp" / "index.html"
+UXP_MAIN = REPO_ROOT / "extension" / "com.opencut.uxp" / "main.js"
+RELEASE_SMOKE = REPO_ROOT / "scripts" / "release_smoke.py"
+
+
+def _read(path: Path) -> str:
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
+def test_f260_dashboard_manifest_derives_from_f198_catalogue():
+    manifest = build_dashboard_manifest()
+
+    assert manifest["dashboard_version"] == 2
+    assert manifest["source_catalogue_version"] == 1
+    # 19 since ocReadPanelBootstrapToken (the F303 CSRF bootstrap reader) was
+    # added to the host script; the generated manifest had not been regenerated
+    # since, so this count and the panel copy had drifted apart.
+    assert manifest["summary"]["function_count"] == 19
+    assert manifest["summary"]["direct_uxp"] == 14
+    assert manifest["summary"]["partial_uxp"] == 1
+    assert manifest["summary"]["cep_only"] == 2
+    assert manifest["summary"]["hybrid_candidates"] == 2
+    assert manifest["cep_only"] == ["ocAddNativeCaptionTrack", "ocQeReflect"]
+    assert {row["name"] for row in manifest["priority"]} >= {
+        "ocAddNativeCaptionTrack",
+        "ocQeReflect",
+        "ocApplySequenceCuts",
+    }
+
+    route_coverage = manifest["route_coverage"]
+    assert route_coverage["cep_source"] == "extension/com.opencut.panel/client/main.js"
+    assert route_coverage["summary"]["cep_route_count"] >= 80
+    assert route_coverage["priority_routes"] == [
+        "/install-whisper",
+        "/audio/separate",
+        "/captions/translate",
+        "/audio/enhance",
+        "/captions/animated/render",
+        "/export/preset",
+        "/full",
+    ]
+    # F362: the gate used to be permanently red on 113 unclassified routes,
+    # which meant its colour carried no information. Every CEP route is now
+    # covered, excluded, or recorded as UXP-pending with a reason, so red
+    # again means something changed.
+    assert route_coverage["gate"]["passes"] is True, route_coverage["gate"]["errors"]
+    assert route_coverage["summary"]["missing"] == 0
+    assert route_coverage["summary"]["pending"] > 0
+    assert route_coverage["summary"]["priority_covered"] == len(route_coverage["priority_routes"])
+    assert route_coverage["summary"]["priority_missing"] == 0
+
+    # Every pending route names a family, and every family has a reason.
+    families = set(route_coverage["summary"]["pending_by_family"])
+    assert families <= set(route_coverage["pending_reasons"])
+    assert all(reason.strip() for reason in route_coverage["pending_reasons"].values())
+    assert sum(route_coverage["summary"]["pending_by_family"].values()) == (
+        route_coverage["summary"]["pending"]
+    )
+
+
+def test_f260_route_gate_rejects_uncovered_routes_and_accepts_justified_exclusions():
+    priority_routes = [
+        "/install-whisper",
+        "/audio/separate",
+        "/captions/translate",
+        "/audio/enhance",
+        "/captions/animated/render",
+        "/export/preset",
+        "/full",
+    ]
+    # pending={} because this is a synthetic two-route inventory: leaving the
+    # default (real) pending map in place only ever passed while F375's rot
+    # checks did not exist, since all 113 production entries are "vanished"
+    # relative to this tiny CEP list.
+    assert validate_route_coverage(
+        ["/known", "/excluded", *priority_routes],
+        ["/known", *priority_routes],
+        {"/excluded": "legacy"},
+        {},
+    ) == []
+    errors = validate_route_coverage(["/known", "/missing", *priority_routes], ["/known", *priority_routes], {}, {})
+    assert errors
+    assert "/missing" in errors[0]
+
+
+class TestF362PendingRoutesAreTrackedRatherThanExcluded:
+    """A route nobody has ported is backlog, not an intentional exclusion.
+
+    Calling all 113 of them "excluded" would have turned the gate green by
+    retiring work nobody decided to drop. They are recorded as pending with
+    a reason per family instead, and the floor is what keeps the list from
+    quietly growing.
+    """
+
+    PRIORITY = list(PRIORITY_ROUTE_COVERAGE)
+
+    def test_a_pending_route_is_classified_not_missing(self):
+        assert validate_route_coverage(
+            ["/deferred", *self.PRIORITY],
+            list(self.PRIORITY),
+            {},
+            {"/deferred": "audio"},
+            pending_floor=1,
+        ) == []
+
+    def test_a_route_in_neither_map_still_fails(self):
+        errors = validate_route_coverage(
+            ["/brand-new", *self.PRIORITY],
+            list(self.PRIORITY),
+            {},
+            {},
+            pending_floor=0,
+        )
+        assert errors and "/brand-new" in errors[0]
+        assert "neither covered, excluded, nor pending" in errors[0]
+
+    def test_pending_cannot_grow_past_the_floor(self):
+        errors = validate_route_coverage(
+            ["/a", "/b", *self.PRIORITY],
+            list(self.PRIORITY),
+            {},
+            {"/a": "audio", "/b": "audio"},
+            pending_floor=1,
+        )
+        assert errors
+        assert "grew to 2 against a floor of 1" in errors[0]
+
+    def test_a_family_with_no_recorded_reason_is_refused(self):
+        errors = validate_route_coverage(
+            ["/x", *self.PRIORITY],
+            list(self.PRIORITY),
+            {},
+            {"/x": "not-a-real-family"},
+            pending_floor=1,
+        )
+        assert any("no recorded reason" in error for error in errors)
+
+    def test_deleting_a_cep_route_demands_the_map_entry_go_with_it(self):
+        """F375 superseded the original assertion here. It used to accept a
+        pending entry for a route absent from CEP, codifying the exact silent
+        rot F375 exists to flag: the entry stopped counting against the floor
+        without anyone deciding that. Removing the entry is now required, and
+        once it is removed the floor charge drops with it."""
+        with_rot = validate_route_coverage(
+            [*self.PRIORITY],
+            list(self.PRIORITY),
+            {},
+            {"/gone": "audio"},
+            pending_floor=0,
+        )
+        assert any("/gone" in error for error in with_rot)
+
+        assert validate_route_coverage(
+            [*self.PRIORITY],
+            list(self.PRIORITY),
+            {},
+            {},
+            pending_floor=0,
+        ) == []
+
+    def test_the_shipped_floor_matches_the_shipped_pending_list(self):
+        assert UXP_PENDING_FLOOR == len(ROUTE_UXP_PENDING)
+        assert set(ROUTE_UXP_PENDING.values()) <= set(UXP_PENDING_REASONS)
+
+    def test_a_ported_route_still_in_the_pending_map_fails_the_gate(self):
+        """F375 — a ported route's entry would otherwise linger while its row
+        reads "covered", overstating the backlog."""
+        errors = validate_route_coverage(
+            ["/ported", *self.PRIORITY],
+            ["/ported", *self.PRIORITY],
+            {},
+            {"/ported": "audio"},
+            pending_floor=1,
+        )
+        assert errors, "a covered route left in the pending map must fail"
+        assert any("/ported" in error and "already have a UXP path" in error for error in errors)
+
+    def test_a_pending_entry_for_a_route_cep_no_longer_calls_fails_the_gate(self):
+        """F375 — a deleted CEP route's entry would otherwise silently stop
+        counting against the floor without anyone deciding that."""
+        errors = validate_route_coverage(
+            [*self.PRIORITY],
+            list(self.PRIORITY),
+            {},
+            {"/removed-from-cep": "audio"},
+            pending_floor=1,
+        )
+        assert errors, "a pending entry for a vanished CEP route must fail"
+        assert any(
+            "/removed-from-cep" in error and "no longer calls" in error for error in errors
+        )
+
+    def test_the_shipped_pending_map_has_no_rot(self):
+        """The live manifest must be clean under the two new checks."""
+        manifest = build_dashboard_manifest()["route_coverage"]
+        assert manifest["gate"]["passes"] is True, manifest["gate"]["errors"]
+
+
+def test_f260_generated_and_panel_dashboards_are_in_sync():
+    live = build_dashboard_manifest()
+
+    assert GENERATED_DASHBOARD.is_file()
+    assert PANEL_DASHBOARD.is_file()
+    assert json.loads(GENERATED_DASHBOARD.read_text(encoding="utf-8")) == live
+    assert json.loads(PANEL_DASHBOARD.read_text(encoding="utf-8")) == live
+
+
+def test_f260_cli_check_passes_in_sync():
+    result = subprocess.run(
+        [sys.executable, "-m", "opencut.tools.dump_uxp_migration_dashboard", "--check"],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, (
+        f"--check should pass when in sync; stdout={result.stdout!r} "
+        f"stderr={result.stderr!r}"
+    )
+    assert "UXP migration dashboard artifacts in sync" in result.stdout
+
+
+def test_f260_cli_writes_both_artifacts(tmp_path):
+    generated = tmp_path / "generated.json"
+    panel = tmp_path / "panel.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "opencut.tools.dump_uxp_migration_dashboard",
+            "--output",
+            str(generated),
+            "--panel-output",
+            str(panel),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+        timeout=30,
+    )
+
+    assert result.returncode == 0
+    assert json.loads(generated.read_text(encoding="utf-8")) == build_dashboard_manifest()
+    assert json.loads(panel.read_text(encoding="utf-8")) == build_dashboard_manifest()
+
+
+def test_f260_settings_panel_surfaces_migration_dashboard():
+    html = _read(UXP_HTML)
+
+    assert "Migration Risk" in html
+    assert "settingsMigrationDirectValue" in html
+    assert "settingsMigrationFallbackValue" in html
+    assert "settingsMigrationRiskValue" in html
+    assert "settingsMigrationRouteValue" in html
+    assert "uxpMigrationRiskGrid" in html
+    assert "uxpRefreshMigrationRiskBtn" in html
+
+
+def test_f260_panel_loads_dashboard_json_and_renders_rows():
+    source = _read(UXP_MAIN)
+
+    assert "async function uxpLoadMigrationRisk()" in source
+    assert 'fetch(`uxp-migration-dashboard.json?ts=${Date.now()}`, { cache: "no-store" })' in source
+    assert "migrationStatusLabel" in source
+    assert "migrationStateClass" in source
+    assert "settingsMigrationStatus" in source
+    assert "route_coverage" in source
+    assert "settingsMigrationRouteValue" in source
+    assert "uxpLoadMigrationRisk();" in source
+    assert 'document.getElementById("uxpRefreshMigrationRiskBtn")?.addEventListener("click", uxpLoadMigrationRisk)' in source
+
+
+def test_f260_priority_routes_have_direct_uxp_actions():
+    source = _read(UXP_MAIN)
+    html = _read(UXP_HTML)
+
+    expected_routes = {
+        "/install-whisper": "installWhisperBtn",
+        "/audio/separate": "runStemSeparationBtn",
+        "/captions/translate": "runTranslateBtn",
+        "/audio/enhance": "runAudioEnhanceBtn",
+        "/captions/animated/render": "runAnimatedCaptionsBtn",
+        "/export/preset": "runExportPresetBtn",
+        "/full": "runFullPipelineBtn",
+    }
+    for route, button_id in expected_routes.items():
+        assert route in source
+        assert button_id in html
+        assert f'getElementById("{button_id}")?.addEventListener' in source
+
+    assert 'backend: "nllb"' in source
+    assert 'accept_restricted_license: true' in source
+    assert 'word_segments: wordSegments' in source
+    assert 'youtube: "youtube_1080p"' in source
+
+
+def test_f260_release_smoke_runs_dashboard_guardrail():
+    source = _read(RELEASE_SMOKE)
+
+    assert "tests/test_uxp_migration_dashboard.py" in source

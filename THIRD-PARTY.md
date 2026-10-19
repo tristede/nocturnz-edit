@@ -2,7 +2,7 @@
 
 ## Code du projet
 
-Code original Nocturnz Edit et icônes SVG : MIT.
+Code original Nocturnz/Edit et icônes SVG : MIT.
 
 ## auto-editor — moteur intégré par CLI
 
@@ -16,9 +16,17 @@ Code original Nocturnz Edit et icônes SVG : MIT.
 
 Le moteur est téléchargé séparément dans `.runtime/bin/`, ignoré par Git. Il n’est pas redistribué dans le dépôt. **La licence Unlicense du code auto-editor ne couvre pas automatiquement les bibliothèques embarquées dans ses binaires.** L’amont signale des licences open source distinctes pour les artefacts; FFmpeg et ses codecs figurent dans les scripts de compilation. Leur inventaire complet et les obligations de redistribution doivent être vérifiés avant de livrer un installateur qui embarquerait le binaire. Cette étape n’est pas déclarée terminée.
 
-## Autres dépôts du brief
+## Sources reprises du brief
 
-OpenCut, OpenPodCut, podclip-public-release, premiere-director, auto-zoom-premiere et jumpcut ne sont pas encore intégrés. Leur code et leurs licences seront vérifiés avant reprise, avec version et fichiers consignés ici. Le PDF initial n’est pas présent à son chemin annoncé dans cet environnement; le brief collé demeure disponible.
+Six dépôts sont copiés dans [vendor/sources](vendor/sources), avec leurs licences et notices originales : OpenCut (MIT), auto-editor 29.3.1 (Unlicense), OpenPodCut (GPL-3.0-or-later), podclip-public-release (MIT et notices tierces), premiere-director (MIT et bibliothèques tierces) et jumpcut (GPL-3.0). Les commits exacts et empreintes de chaque fichier figurent dans [vendor/manifest.json](vendor/manifest.json).
+
+Il s’agit de sources conservées, sans branchement automatique au panneau ni exécution des installateurs amont. Les sources GPL gardent leur licence; une copie complète du texte est disponible dans [third_party/GPL-3.0.txt](third_party/GPL-3.0.txt). La licence MIT de Nocturnz ne s’applique pas à ces copies. Les notices imbriquées restent applicables.
+
+Les binaires FFmpeg de Podclip et leur archive source, le binaire de signature OpenPodCut, les distributions Jumpcut, les médias et modèles ne sont pas redistribués ici. Les instructions et notices correspondantes restent conservées; cette sélection est détaillée fichier par fichier dans le manifeste.
+
+**auto-zoom-premiere** : aucune licence trouvée au commit `a5c6fb38206fc01df5c1ca9d4558a56a7ff2c83f`; référence consignée dans [vendor/upstreams.json](vendor/upstreams.json), code exclu du dépôt public.
+
+Voir [l’inventaire et les conditions de reprise](vendor/README.md) et [la correspondance des modules](vendor/module-map.json). Le PDF initial n’est pas présent à son chemin annoncé dans cet environnement; l’import suit les dépôts du brief collé.
 
 ## Hôte et environnements
 

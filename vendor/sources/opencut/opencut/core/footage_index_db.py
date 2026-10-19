@@ -1,0 +1,529 @@
+"""
+OpenCut Footage Index — SQLite + FTS5
+
+Persistent, searchable index of transcribed media files.
+Replaces the JSON-based footage_index.json with a proper database.
+"""
+
+import logging
+import os
+import sqlite3
+import threading
+import time
+
+from opencut.core.sqlite_safety import ensure_fts5_database_trusted
+from opencut.local_db_diagnostics import build_sqlite_diagnostic
+from opencut.local_db_maintenance import count_rows, prepare_destructive_result
+from opencut.local_db_migrations import migrate_user_version
+
+logger = logging.getLogger("opencut")
+
+_DB_PATH = os.path.join(os.path.expanduser("~"), ".opencut", "footage_index.db")
+_thread_local = threading.local()
+SCHEMA_VERSION = 2
+
+# Track all opened connections so close_all_connections() can close them
+# on server shutdown.  Mirrors the pattern in job_store.py — without this
+# the ThreadPoolExecutor keeps thread-local connections open for the life
+# of the process, which holds open the WAL file and prevents clean
+# shutdown on Windows.
+_ALL_CONNECTIONS: "dict[int, sqlite3.Connection]" = {}
+_CONN_LOCK = threading.Lock()
+
+
+def _coerce_limit(value, default=50):
+    try:
+        return max(1, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _prune_dead_connections() -> None:
+    with _CONN_LOCK:
+        alive_ids = {t.ident for t in threading.enumerate() if t.ident is not None}
+        dead_ids = [tid for tid in _ALL_CONNECTIONS if tid not in alive_ids]
+        for tid in dead_ids:
+            try:
+                _ALL_CONNECTIONS[tid].close()
+            except Exception:
+                pass
+            del _ALL_CONNECTIONS[tid]
+
+
+def _connection_is_usable(conn) -> bool:
+    """Return True when a cached SQLite connection is still open."""
+    if conn is None:
+        return False
+    try:
+        conn.execute("SELECT 1")
+    except sqlite3.Error:
+        return False
+    return True
+
+
+def _discard_cached_conn(conn) -> None:
+    """Drop a stale thread-local connection from the registry and close it."""
+    with _CONN_LOCK:
+        for tid, tracked in list(_ALL_CONNECTIONS.items()):
+            if tracked is conn:
+                _ALL_CONNECTIONS.pop(tid, None)
+    try:
+        conn.close()
+    except sqlite3.Error:
+        pass
+    _thread_local.conn = None
+    _thread_local.conn_path = None
+
+
+def _get_conn():
+    """Get a thread-local SQLite connection.
+
+    Mirrors ``job_store._get_conn``: the cached connection is discarded and
+    reopened when ``_DB_PATH`` changed since it was created (tests repoint
+    the path) or when it was closed behind our back (``close_all_connections``
+    from another thread), so a stale handle never outlives the path it was
+    opened against.
+    """
+    conn = getattr(_thread_local, "conn", None)
+    conn_path = getattr(_thread_local, "conn_path", None)
+    if conn is not None and (conn_path != _DB_PATH or not _connection_is_usable(conn)):
+        _discard_cached_conn(conn)
+        conn = None
+    if conn is None:
+        os.makedirs(os.path.dirname(_DB_PATH), exist_ok=True)
+        # F309: an index this install did not create is untrusted input for
+        # FTS5 MATCH on a runtime that predates the CVE-2026-11822 fixes.
+        created_here = not os.path.exists(_DB_PATH)
+        conn = sqlite3.connect(_DB_PATH, timeout=10)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.row_factory = sqlite3.Row
+        try:
+            ensure_fts5_database_trusted(conn, _DB_PATH, created_here=created_here)
+        except Exception:
+            conn.close()
+            raise
+        _thread_local.conn = conn
+        _thread_local.conn_path = _DB_PATH
+        with _CONN_LOCK:
+            _ALL_CONNECTIONS[threading.get_ident()] = conn
+    _prune_dead_connections()
+    return conn
+
+
+def close_all_connections():
+    """Close every tracked connection. Called on server shutdown.
+
+    Silently skips connections whose owning thread has already died — those
+    will be reaped by the OS. Clears thread-local refs on the current thread
+    so subsequent calls re-open fresh connections.
+    """
+    with _CONN_LOCK:
+        for conn in list(_ALL_CONNECTIONS.values()):
+            try:
+                conn.close()
+            except Exception:
+                pass
+        _ALL_CONNECTIONS.clear()
+    try:
+        if getattr(_thread_local, "conn", None) is not None:
+            _thread_local.conn = None
+            _thread_local.conn_path = None
+    except Exception:
+        pass
+
+
+def _create_schema_v1(conn: sqlite3.Connection) -> None:
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS footage (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_path TEXT UNIQUE NOT NULL,
+            transcript TEXT NOT NULL DEFAULT '',
+            indexed_at REAL NOT NULL,
+            file_mtime REAL NOT NULL DEFAULT 0,
+            duration REAL NOT NULL DEFAULT 0,
+            file_size INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+    conn.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS footage_fts USING fts5(
+            file_path,
+            transcript,
+            content=footage,
+            content_rowid=id
+        )
+    """)
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS footage_ai AFTER INSERT ON footage BEGIN
+            INSERT INTO footage_fts(rowid, file_path, transcript)
+            VALUES (new.id, new.file_path, new.transcript);
+        END
+    """)
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS footage_ad AFTER DELETE ON footage BEGIN
+            INSERT INTO footage_fts(footage_fts, rowid, file_path, transcript)
+            VALUES ('delete', old.id, old.file_path, old.transcript);
+        END
+    """)
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS footage_au AFTER UPDATE ON footage BEGIN
+            INSERT INTO footage_fts(footage_fts, rowid, file_path, transcript)
+            VALUES ('delete', old.id, old.file_path, old.transcript);
+            INSERT INTO footage_fts(rowid, file_path, transcript)
+            VALUES (new.id, new.file_path, new.transcript);
+        END
+    """)
+
+
+def _create_schema_v2(conn: sqlite3.Connection) -> None:
+    """Add multimodal columns: ocr_text and audio_tags."""
+    for col, default in (("ocr_text", "''"), ("audio_tags", "''")):
+        try:
+            conn.execute(
+                f"ALTER TABLE footage ADD COLUMN {col} TEXT NOT NULL DEFAULT {default}"
+            )
+        except sqlite3.OperationalError:
+            pass
+    conn.execute("DROP TRIGGER IF EXISTS footage_ai")
+    conn.execute("DROP TRIGGER IF EXISTS footage_ad")
+    conn.execute("DROP TRIGGER IF EXISTS footage_au")
+    conn.execute("INSERT INTO footage_fts(footage_fts) VALUES('rebuild')")
+
+    conn.execute("DROP TABLE IF EXISTS footage_fts")
+    conn.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS footage_fts USING fts5(
+            file_path,
+            transcript,
+            ocr_text,
+            audio_tags,
+            content=footage,
+            content_rowid=id
+        )
+    """)
+    conn.execute("INSERT INTO footage_fts(footage_fts) VALUES('rebuild')")
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS footage_ai AFTER INSERT ON footage BEGIN
+            INSERT INTO footage_fts(rowid, file_path, transcript, ocr_text, audio_tags)
+            VALUES (new.id, new.file_path, new.transcript, new.ocr_text, new.audio_tags);
+        END
+    """)
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS footage_ad AFTER DELETE ON footage BEGIN
+            INSERT INTO footage_fts(footage_fts, rowid, file_path, transcript, ocr_text, audio_tags)
+            VALUES ('delete', old.id, old.file_path, old.transcript, old.ocr_text, old.audio_tags);
+        END
+    """)
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS footage_au AFTER UPDATE ON footage BEGIN
+            INSERT INTO footage_fts(footage_fts, rowid, file_path, transcript, ocr_text, audio_tags)
+            VALUES ('delete', old.id, old.file_path, old.transcript, old.ocr_text, old.audio_tags);
+            INSERT INTO footage_fts(rowid, file_path, transcript, ocr_text, audio_tags)
+            VALUES (new.id, new.file_path, new.transcript, new.ocr_text, new.audio_tags);
+        END
+    """)
+
+
+def init_db():
+    """Create tables if they don't exist."""
+    conn = _get_conn()
+    migrate_user_version(
+        conn,
+        store_name="footage index",
+        target_version=SCHEMA_VERSION,
+        migrations={1: _create_schema_v1, 2: _create_schema_v2},
+    )
+    conn.commit()
+
+
+def index_file(file_path, transcript, duration=0, file_size=0,
+               ocr_text="", audio_tags=""):
+    """Add or update a file in the index.
+
+    Args:
+        file_path: absolute path to the media file
+        transcript: full transcript text
+        duration: media duration in seconds
+        file_size: file size in bytes
+        ocr_text: on-screen text extracted via OCR
+        audio_tags: space-separated audio event tags (e.g. "music speech applause")
+    """
+    init_db()
+    conn = _get_conn()
+    now = time.time()
+
+    try:
+        mtime = os.path.getmtime(file_path)
+    except OSError:
+        mtime = 0
+
+    if file_size == 0:
+        try:
+            file_size = os.path.getsize(file_path)
+        except OSError:
+            pass
+
+    conn.execute("""
+        INSERT INTO footage (file_path, transcript, indexed_at, file_mtime,
+                             duration, file_size, ocr_text, audio_tags)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(file_path) DO UPDATE SET
+            transcript = excluded.transcript,
+            indexed_at = excluded.indexed_at,
+            file_mtime = excluded.file_mtime,
+            duration = excluded.duration,
+            file_size = excluded.file_size,
+            ocr_text = excluded.ocr_text,
+            audio_tags = excluded.audio_tags
+    """, (file_path, transcript, now, mtime, duration, file_size,
+          ocr_text, audio_tags))
+    conn.commit()
+
+    logger.debug("Indexed: %s (%d chars, %d ocr, %d tags)",
+                 os.path.basename(file_path), len(transcript),
+                 len(ocr_text), len(audio_tags.split()) if audio_tags else 0)
+
+
+def search(query, limit=50):
+    """Full-text search across indexed footage.
+
+    Args:
+        query: search query string (FTS5 syntax supported)
+        limit: max results
+
+    Returns:
+        list of dicts: {file_path, transcript, snippet, rank, indexed_at, duration}
+    """
+    if not query or not query.strip():
+        return []
+    limit = _coerce_limit(limit, 50)
+
+    conn = _get_conn()
+    init_db()  # Ensure tables exist
+
+    # Escape special FTS5 characters for safety
+    safe_query = query.strip()
+    # Wrap each word in quotes for phrase-like matching
+    words = safe_query.split()
+    if len(words) > 1:
+        fts_query = " ".join(f'"{w}"' for w in words)
+    else:
+        fts_query = f'"{safe_query}"' if safe_query else safe_query
+
+    try:
+        rows = conn.execute("""
+            SELECT f.file_path, f.transcript, f.indexed_at, f.duration, f.file_size,
+                   f.ocr_text, f.audio_tags,
+                   snippet(footage_fts, 1, '<mark>', '</mark>', '...', 32) AS snippet,
+                   rank
+            FROM footage_fts
+            JOIN footage f ON f.id = footage_fts.rowid
+            WHERE footage_fts MATCH ?
+            ORDER BY rank
+            LIMIT ?
+        """, (fts_query, limit)).fetchall()
+
+        results = []
+        for row in rows:
+            results.append({
+                "file_path": row["file_path"],
+                "transcript": row["transcript"][:500],
+                "ocr_text": (row["ocr_text"] or "")[:500],
+                "audio_tags": row["audio_tags"] or "",
+                "snippet": row["snippet"] or "",
+                "rank": row["rank"],
+                "indexed_at": row["indexed_at"],
+                "duration": row["duration"],
+                "file_size": row["file_size"],
+            })
+        return results
+
+    except sqlite3.OperationalError as e:
+        # FTS5 query syntax error -- fall back to LIKE search.
+        # Escape SQL LIKE wildcards (`%`, `_`) and our escape char (`\`) so a
+        # search for "test_file" doesn't match "testXfile" via the underscore
+        # wildcard. ESCAPE clause tells SQLite which char prefixes a literal.
+        logger.warning("FTS5 query failed (%s), falling back to LIKE: %s", e, query)
+        like_query = (
+            safe_query.replace("\\", "\\\\")
+                      .replace("%", "\\%")
+                      .replace("_", "\\_")
+        )
+        rows = conn.execute("""
+            SELECT file_path, transcript, indexed_at, duration, file_size
+            FROM footage
+            WHERE transcript LIKE ? ESCAPE '\\' COLLATE NOCASE
+            LIMIT ?
+        """, (f"%{like_query}%", limit)).fetchall()
+
+        return [
+            {
+                "file_path": row["file_path"],
+                "transcript": row["transcript"][:500],
+                "snippet": "",
+                "rank": 0,
+                "indexed_at": row["indexed_at"],
+                "duration": row["duration"],
+                "file_size": row["file_size"],
+            }
+            for row in rows
+        ]
+
+
+def needs_reindex(file_path):
+    """Check if a file needs to be (re-)indexed.
+
+    Returns True if the file is not in the index or its mtime has changed.
+    """
+    conn = _get_conn()
+    init_db()
+
+    row = conn.execute(
+        "SELECT file_mtime FROM footage WHERE file_path = ?", (file_path,)
+    ).fetchone()
+
+    if row is None:
+        return True
+
+    try:
+        current_mtime = os.path.getmtime(file_path)
+    except OSError:
+        return False  # File doesn't exist, don't re-index
+
+    return abs(current_mtime - row["file_mtime"]) > 0.01
+
+
+def get_stats():
+    """Get index statistics.
+
+    Returns:
+        dict with total_files, total_size, last_indexed_at, db_size
+    """
+    conn = _get_conn()
+    init_db()
+
+    row = conn.execute("""
+        SELECT COUNT(*) as total,
+               COALESCE(SUM(file_size), 0) as total_size,
+               COALESCE(MAX(indexed_at), 0) as last_indexed
+        FROM footage
+    """).fetchone()
+
+    db_size = 0
+    try:
+        db_size = os.path.getsize(_DB_PATH)
+    except OSError:
+        pass
+
+    return {
+        "total_files": row["total"],
+        "total_size": row["total_size"],
+        "last_indexed_at": row["last_indexed"],
+        "db_size": db_size,
+    }
+
+
+def get_db_diagnostics():
+    """Return SQLite page, freelist, WAL, and size diagnostics for the index."""
+    return build_sqlite_diagnostic(_DB_PATH, store_name="footage_index")
+
+
+def clear_index(*, dry_run=False, backup=False, backup_dir=None):
+    """Remove all entries from the index."""
+    init_db()
+    conn = _get_conn()
+    affected = count_rows(conn, "footage")
+    if dry_run or backup:
+        result = prepare_destructive_result(
+            _DB_PATH,
+            store_name="footage_index",
+            operation="clear_index",
+            affected_rows=affected,
+            dry_run=bool(dry_run),
+            backup=bool(backup),
+            backup_dir=backup_dir,
+        )
+        if dry_run:
+            return result
+    conn.execute("DELETE FROM footage")
+    conn.execute("INSERT INTO footage_fts(footage_fts) VALUES ('rebuild')")
+    conn.commit()
+    logger.info("Footage index cleared")
+    if backup:
+        result["affected_rows"] = affected
+        return result
+
+
+def remove_missing_files():
+    """Remove index entries for files that no longer exist on disk.
+
+    Returns:
+        int: number of entries removed
+    """
+    conn = _get_conn()
+    init_db()
+
+    rows = conn.execute("SELECT id, file_path FROM footage").fetchall()
+    to_remove = []
+    for row in rows:
+        if not os.path.isfile(row["file_path"]):
+            to_remove.append(row["id"])
+
+    if to_remove:
+        placeholders = ",".join("?" * len(to_remove))
+        conn.execute(f"DELETE FROM footage WHERE id IN ({placeholders})", to_remove)
+        conn.commit()
+        logger.info("Removed %d missing files from footage index", len(to_remove))
+
+    return len(to_remove)
+
+
+def missing_files_plan():
+    """Return indexed file rows whose backing files are missing without deleting."""
+    init_db()
+    conn = _get_conn()
+    rows = conn.execute("SELECT id, file_path FROM footage").fetchall()
+    entries = []
+    for row in rows:
+        path = row["file_path"]
+        if os.path.isfile(path):
+            continue
+        entries.append({
+            "id": int(row["id"]),
+            "path": path,
+            "category": "footage-index-missing-file",
+            "type": "record",
+            "bytes": 0,
+            "reversible": False,
+        })
+    return {"entries": entries, "missing_count": len(entries)}
+
+
+def get_all_indexed_files():
+    """Return list of all indexed file paths."""
+    conn = _get_conn()
+    init_db()
+    rows = conn.execute("SELECT file_path FROM footage ORDER BY indexed_at DESC").fetchall()
+    return [row["file_path"] for row in rows]
+
+
+def get_indexed_file(file_path):
+    """Return one complete indexed row for *file_path*, or ``None``.
+
+    The federated media index uses this small read-only accessor to import
+    transcript, OCR, and audio-tag data without duplicating the footage DB's
+    schema or reaching into its private connection state.
+    """
+    if not isinstance(file_path, str) or not file_path.strip():
+        return None
+    conn = _get_conn()
+    init_db()
+    row = conn.execute(
+        """
+        SELECT file_path, transcript, indexed_at, file_mtime, duration,
+               file_size, ocr_text, audio_tags
+        FROM footage
+        WHERE file_path = ?
+        """,
+        (file_path,),
+    ).fetchone()
+    return dict(row) if row is not None else None

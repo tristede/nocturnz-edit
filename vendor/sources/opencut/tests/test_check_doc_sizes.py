@@ -1,0 +1,192 @@
+"""
+Tests for scripts/check_doc_sizes.py.
+
+The script enforces that project documentation size/count claims stay within
+±15% of the live filesystem or generated manifests. The tests:
+  - exercise the regex against both the bare ``(~N lines)`` form and the
+    dated ``(~N lines as of YYYY; was ~M lines through v1.9.x)`` form;
+  - confirm ``--check`` passes against the current in-sync tree;
+  - confirm drift is detected when we mutate a documented number.
+"""
+from __future__ import annotations
+
+import importlib.util
+import json
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+SCRIPT = REPO_ROOT / "scripts" / "check_doc_sizes.py"
+
+
+def _load_module():
+    """Load scripts/check_doc_sizes.py as a module.
+
+    The module uses ``@dataclass`` decorators which require the module to be
+    registered in ``sys.modules`` *before* executing — otherwise dataclasses
+    crashes with ``AttributeError: 'NoneType' object has no attribute '__dict__'``.
+    """
+    name = "scripts_check_doc_sizes"
+    if name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(name, SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class TestDocSizeRegex(unittest.TestCase):
+    """The CEP main.js regex must match both legacy and dated forms."""
+
+    def setUp(self):
+        self.mod = _load_module()
+        self.cep_re = next(
+            t.regex for t in self.mod.TARGETS
+            if t.label == "README CEP panel main.js lines"
+        )
+
+    def test_matches_bare_form(self):
+        m = self.cep_re.search("CEP panel (index.html, main.js ~7730 lines, style.css ~18495 lines)")
+        self.assertIsNotNone(m)
+        self.assertEqual(m.group(1), "7730")
+
+    def test_matches_dated_form(self):
+        text = "CEP panel (index.html, main.js ~15263 lines as of 2026-05-25; was ~7,730 lines)"
+        m = self.cep_re.search(text)
+        self.assertIsNotNone(m)
+        # Must capture the *current* (first) number, not the historic one.
+        self.assertEqual(m.group(1), "15263")
+
+    def test_readme_route_count_regex_matches_feature_overview(self):
+        route_re = next(
+            t.regex for t in self.mod.TARGETS
+            if t.label == "README feature overview API routes"
+        )
+        m = route_re.search("OpenCut v1.32.0 includes **1,523 API routes**, **8 panel tabs**")
+        self.assertIsNotNone(m)
+        self.assertEqual(m.group(1), "1,523")
+
+    def test_targets_only_live_docs(self):
+        """The checker may only read docs this repo actually maintains.
+
+        F404 widened this from README.md alone. CLAUDE.md is the first file an
+        agent reads and its panel size claims had drifted by as much as 83%
+        while nothing checked them. It is gitignored, so `_evaluate` skipping a
+        doc that does not exist is what keeps a fresh clone working. Anything
+        beyond these two is still a mistake.
+        """
+        doc_names = {
+            doc.name
+            for target in self.mod.TARGETS
+            for doc in target.docs
+        }
+        self.assertEqual(doc_names, {"README.md", "CLAUDE.md"})
+
+
+class TestDocSizeCLI(unittest.TestCase):
+    def test_check_passes_against_live_tree(self):
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "--check"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertEqual(
+            result.returncode, 0,
+            f"--check must pass in-sync tree. stdout: {result.stdout}\nstderr: {result.stderr}",
+        )
+
+    def test_check_fails_on_mutated_doc(self):
+        """Copy the live tree to a temp dir, mutate README's CEP main.js line
+        count, and confirm --check flags the drift."""
+        mod = _load_module()
+        target = next(
+            t for t in mod.TARGETS if t.label == "README CEP panel main.js lines"
+        )
+        live = target.live()
+        # Replace the current number with one 99% smaller — guaranteed >15% drift.
+        bogus_claim = max(1, int(live * 0.01))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            (tmp_root / "extension" / "com.opencut.panel" / "client").mkdir(parents=True)
+            (tmp_root / "extension" / "com.opencut.uxp").mkdir(parents=True)
+            # Live targets point inside ROOT; copy the panel files so live() works.
+            shutil.copy2(
+                REPO_ROOT / "extension/com.opencut.panel/client/main.js",
+                tmp_root / "extension/com.opencut.panel/client/main.js",
+            )
+            shutil.copy2(
+                REPO_ROOT / "extension/com.opencut.uxp/main.js",
+                tmp_root / "extension/com.opencut.uxp/main.js",
+            )
+            # Copy the real README, then rewrite the CEP main.js count to a
+            # deliberately wrong value so --check must flag the drift.
+            readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+            mutated = target.regex.sub(
+                lambda m: m.group(0).replace(m.group(1), str(bogus_claim)),
+                readme_text,
+                count=1,
+            )
+            self.assertNotEqual(readme_text, mutated, "README CEP main.js line not found to mutate")
+            (tmp_root / "README.md").write_text(mutated, encoding="utf-8")
+
+            # Run the script with REPO_ROOT replaced via cwd-relative paths.
+            script_copy = tmp_root / "check_doc_sizes.py"
+            shutil.copy2(SCRIPT, script_copy)
+            # Patch the ROOT constant by running with PYTHONPATH and re-importing.
+            patched = script_copy.read_text(encoding="utf-8").replace(
+                "ROOT = Path(__file__).resolve().parent.parent",
+                f"ROOT = Path(r'{tmp_root}')",
+                1,
+            )
+            script_copy.write_text(patched, encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, str(script_copy), "--check"],
+                cwd=tmp_root,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            self.assertEqual(
+                result.returncode, 1,
+                f"--check should fail on mutated doc. stdout: {result.stdout}\nstderr: {result.stderr}",
+            )
+
+    def test_shipped_route_claim_fails_on_one_manifest_route_drift(self):
+        """The three shipped-route claims require an exact manifest match."""
+        mod = _load_module()
+        route_labels = {
+            "README routes badge",
+            "README feature overview API routes",
+            "README architecture API routes",
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_path = Path(tmp) / "route_manifest.json"
+            manifest = json.loads(mod.ROUTE_MANIFEST.read_text(encoding="utf-8"))
+            expected_count = manifest["shipped_route_count"] - 1
+            manifest["shipped_route_count"] -= 1
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            original_manifest = mod.ROUTE_MANIFEST
+            mod.ROUTE_MANIFEST = manifest_path
+            try:
+                entries = mod._evaluate(mod.DEFAULT_TOLERANCE_PCT)
+            finally:
+                mod.ROUTE_MANIFEST = original_manifest
+
+        route_entries = [entry for entry in entries if entry.label in route_labels]
+        self.assertEqual({entry.actual for entry in route_entries}, {expected_count})
+        self.assertEqual({entry.tolerance_pct for entry in route_entries}, {0.0})
+        self.assertTrue(all(entry.over_tolerance for entry in route_entries))
+
+
+if __name__ == "__main__":
+    unittest.main()

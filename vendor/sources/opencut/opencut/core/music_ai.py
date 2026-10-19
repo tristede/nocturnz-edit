@@ -1,0 +1,465 @@
+"""
+OpenCut AI Music Generation Module v0.9.0
+
+AI-powered music and audio generation:
+- AudioCraft/MusicGen: Text-to-music (Meta, 300M-3.3B params)
+- Melody conditioning: Generate music matching a reference melody
+- Continuation: Extend existing audio with AI-generated content
+
+Heavy GPU module: MusicGen small=300M (1.2GB), medium=1.5B (6GB), large=3.3B (13GB).
+Falls back to the SFX/tone generators in music_gen.py for CPU-only systems.
+"""
+
+import logging
+import os
+import tempfile
+from contextlib import suppress
+from typing import Callable, Dict, Optional
+
+from opencut.helpers import ensure_package
+
+logger = logging.getLogger("opencut")
+
+# ---------------------------------------------------------------------------
+# Availability
+# ---------------------------------------------------------------------------
+def check_audiocraft_available() -> bool:
+    try:
+        import audiocraft  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def check_torch_cuda() -> bool:
+    try:
+        import torch
+        return torch.cuda.is_available()
+    except ImportError:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# MusicGen Text-to-Music
+# ---------------------------------------------------------------------------
+def generate_music(
+    prompt: str,
+    output_path: Optional[str] = None,
+    output_dir: str = "",
+    duration: float = 10.0,
+    model_size: str = "small",
+    temperature: float = 1.0,
+    top_k: int = 250,
+    on_progress: Optional[Callable] = None,
+) -> str:
+    """
+    Generate music from a text prompt using MusicGen.
+
+    Args:
+        prompt: Text description of desired music (e.g. "upbeat electronic dance music
+                with driving bassline and synth arpeggios").
+        duration: Length in seconds (max ~30s for small, ~60s for medium).
+        model_size: "small" (300M, 1.2GB), "medium" (1.5B, 6GB), "large" (3.3B, 13GB).
+        temperature: Sampling temperature (higher = more creative).
+        top_k: Top-k sampling parameter.
+    """
+    if not ensure_package("audiocraft", "audiocraft", on_progress):
+        raise RuntimeError(
+            "AudioCraft is unavailable in OpenCut's supported dependency matrix."
+        )
+
+    if on_progress:
+        on_progress(5, f"Loading MusicGen ({model_size})...")
+
+    import soundfile as sf
+    import torch
+    from audiocraft.models import MusicGen
+
+    model_name = f"facebook/musicgen-{model_size}"
+    model = MusicGen.get_pretrained(model_name)
+
+    model.set_generation_params(
+        duration=min(duration, 30.0 if model_size == "small" else 60.0),
+        temperature=temperature,
+        top_k=top_k,
+    )
+
+    if output_path is None:
+        directory = output_dir or tempfile.gettempdir()
+        import re
+        safe_prompt = re.sub(r'[^\w\-]', '_', prompt[:30]).strip('_')
+        output_path = os.path.join(directory, f"musicgen_{safe_prompt}.wav")
+
+    if on_progress:
+        on_progress(20, f"Generating music: '{prompt[:50]}'...")
+
+    # Generate
+    try:
+        with torch.inference_mode():
+            wav = model.generate([prompt])
+
+        # wav shape: [batch, channels, samples] at 32000Hz
+        audio_data = wav[0].cpu().numpy()
+        if audio_data.ndim == 2:
+            audio_data = audio_data.T  # [samples, channels]
+        elif audio_data.ndim == 1:
+            pass  # mono
+
+        if on_progress:
+            on_progress(85, "Saving audio...")
+
+        sf.write(output_path, audio_data, 32000)
+    finally:
+        with suppress(Exception):
+            del model
+        with suppress(Exception):
+            del wav
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    if on_progress:
+        on_progress(100, "Music generated!")
+    return output_path
+
+
+# ---------------------------------------------------------------------------
+# MusicGen with Melody Conditioning
+# ---------------------------------------------------------------------------
+def generate_music_with_melody(
+    prompt: str,
+    melody_path: str,
+    output_path: Optional[str] = None,
+    output_dir: str = "",
+    duration: float = 10.0,
+    on_progress: Optional[Callable] = None,
+) -> str:
+    """
+    Generate music matching a reference melody.
+
+    The melody audio is used as conditioning - MusicGen will generate
+    new audio that follows the same melodic contour.
+    """
+    if not ensure_package("audiocraft", "audiocraft", on_progress):
+        raise RuntimeError("AudioCraft not installed")
+
+    if not os.path.isfile(melody_path):
+        raise FileNotFoundError(f"Melody file not found: {melody_path}")
+
+    if on_progress:
+        on_progress(5, "Loading MusicGen melody model...")
+
+    import soundfile as sf
+    import torch
+    from audiocraft.data.audio import audio_read
+    from audiocraft.models import MusicGen
+
+    model = MusicGen.get_pretrained("facebook/musicgen-melody")
+    model.set_generation_params(duration=min(duration, 30.0))
+
+    if output_path is None:
+        directory = output_dir or tempfile.gettempdir()
+        output_path = os.path.join(directory, "musicgen_melody.wav")
+
+    if on_progress:
+        on_progress(15, "Loading melody reference...")
+
+    melody_wav, sr = audio_read(melody_path)
+    # Ensure 2D: [channels, samples]
+    if melody_wav.ndim == 1:
+        melody_wav = melody_wav.unsqueeze(0)
+
+    if on_progress:
+        on_progress(25, "Generating with melody conditioning...")
+
+    try:
+        with torch.inference_mode():
+            wav = model.generate_with_chroma([prompt], melody_wav.expand(1, -1, -1), sr)
+
+        audio_data = wav[0].cpu().numpy()
+        if audio_data.ndim == 2:
+            audio_data = audio_data.T
+
+        sf.write(output_path, audio_data, 32000)
+    finally:
+        with suppress(Exception):
+            del model
+        with suppress(Exception):
+            del wav
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    if on_progress:
+        on_progress(100, "Melody-conditioned music generated!")
+    return output_path
+
+
+# ---------------------------------------------------------------------------
+# Audio Continuation
+# ---------------------------------------------------------------------------
+def continue_audio(
+    audio_path: str,
+    prompt: str = "",
+    output_path: Optional[str] = None,
+    output_dir: str = "",
+    duration: float = 10.0,
+    on_progress: Optional[Callable] = None,
+) -> str:
+    """
+    Continue/extend existing audio with AI-generated content.
+    """
+    if not ensure_package("audiocraft", "audiocraft", on_progress):
+        raise RuntimeError("AudioCraft not installed")
+
+    if on_progress:
+        on_progress(5, "Loading MusicGen for continuation...")
+
+    import soundfile as sf
+    import torch
+    from audiocraft.data.audio import audio_read
+    from audiocraft.models import MusicGen
+
+    model = MusicGen.get_pretrained("facebook/musicgen-small")
+    model.set_generation_params(duration=min(duration, 30.0))
+
+    if output_path is None:
+        directory = output_dir or tempfile.gettempdir()
+        output_path = os.path.join(directory, "musicgen_continued.wav")
+
+    audio_wav, sr = audio_read(audio_path)
+    if audio_wav.ndim == 1:
+        audio_wav = audio_wav.unsqueeze(0)
+
+    if on_progress:
+        on_progress(20, "Generating continuation...")
+
+    try:
+        with torch.inference_mode():
+            if prompt:
+                wav = model.generate_continuation(audio_wav.expand(1, -1, -1), sr,
+                                                   descriptions=[prompt])
+            else:
+                wav = model.generate_continuation(audio_wav.expand(1, -1, -1), sr)
+
+        audio_data = wav[0].cpu().numpy()
+        if audio_data.ndim == 2:
+            audio_data = audio_data.T
+
+        sf.write(output_path, audio_data, 32000)
+    finally:
+        with suppress(Exception):
+            del model
+        with suppress(Exception):
+            del wav
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    if on_progress:
+        on_progress(100, "Audio continued!")
+    return output_path
+
+
+# ---------------------------------------------------------------------------
+# Capabilities
+# ---------------------------------------------------------------------------
+MUSICGEN_MODELS = [
+    {"name": "small", "label": "Small (300M)", "size": "1.2GB", "max_duration": 30},
+    {"name": "medium", "label": "Medium (1.5B)", "size": "6GB", "max_duration": 60},
+    {"name": "large", "label": "Large (3.3B)", "size": "13GB", "max_duration": 60},
+    {"name": "melody", "label": "Melody (1.5B)", "size": "6GB", "max_duration": 30},
+]
+
+
+def check_ace_step_available() -> bool:
+    try:
+        import ace_step  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def check_stable_audio_available() -> bool:
+    try:
+        import diffusers  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# ACE-Step Music Generation (full songs with vocals + lyrics)
+# ---------------------------------------------------------------------------
+def generate_music_ace_step(
+    prompt: str,
+    lyrics: str = "",
+    output_path: Optional[str] = None,
+    output_dir: str = "",
+    duration: float = 30.0,
+    on_progress: Optional[Callable] = None,
+) -> str:
+    """
+    Generate music (with optional vocals + lyrics) using ACE-Step 1.5.
+
+    Superior to MusicGen: full songs with vocals+lyrics, 10x faster,
+    4x less VRAM (<4GB), 1000+ styles, 19 languages. Apache 2.0.
+
+    Args:
+        prompt: Style/genre description (e.g. "upbeat pop, female vocalist, catchy melody").
+        lyrics: Optional lyrics for vocal generation. Empty = instrumental.
+        duration: Song length in seconds (10-600).
+    """
+    if not ensure_package("ace_step", "ace-step", on_progress):
+        raise RuntimeError("ACE-Step not installed. Run: pip install ace-step")
+
+    if on_progress:
+        on_progress(5, "Loading ACE-Step model...")
+
+    import torch
+    from ace_step import ACEStep
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = ACEStep.from_pretrained(device=device)
+
+    if output_path is None:
+        directory = output_dir or tempfile.gettempdir()
+        import re
+        safe_prompt = re.sub(r'[^\w\-]', '_', prompt[:30]).strip('_')
+        output_path = os.path.join(directory, f"ace_step_{safe_prompt}.wav")
+
+    duration = max(10.0, min(600.0, duration))
+
+    if on_progress:
+        on_progress(20, f"Generating music: '{prompt[:50]}'...")
+
+    try:
+        with torch.inference_mode():
+            result = model.generate(
+                prompt=prompt,
+                lyrics=lyrics or None,
+                duration=duration,
+            )
+
+        if on_progress:
+            on_progress(80, "Saving audio...")
+
+        # Save output
+        if not ensure_package("soundfile", "soundfile"):
+            raise RuntimeError("Failed to install soundfile")
+        import soundfile as sf
+        if isinstance(result, dict):
+            audio_data = result.get("audio")
+        elif hasattr(result, "cpu"):
+            audio_data = result  # tensor returned directly
+        else:
+            raise RuntimeError(f"Unexpected ACE-Step result type: {type(result)}")
+        if audio_data is None:
+            raise RuntimeError("ACE-Step produced no audio output")
+        if hasattr(audio_data, "cpu"):
+            audio_data = audio_data.cpu().numpy()
+        if audio_data.ndim == 2:
+            audio_data = audio_data.T
+        sr = result.get("sample_rate", 44100) if isinstance(result, dict) else 44100
+        sf.write(output_path, audio_data, sr)
+    finally:
+        # Free GPU
+        try:
+            del model
+        except Exception:
+            pass
+        try:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+
+    if on_progress:
+        on_progress(100, "Music generated with ACE-Step!")
+    return output_path
+
+
+def generate_music_stable_audio(
+    prompt: str,
+    duration: float = 30.0,
+    output_path: str = "",
+    output_dir: str = "",
+    on_progress: Optional[Callable] = None,
+) -> Dict:
+    """Generate music using Stable Audio Open (Stability AI).
+
+    Stable Audio Open generates up to 47s of stereo audio at 44.1kHz.
+    Model: stabilityai/stable-audio-open-1.0 (~1.2B params)
+    """
+    if not ensure_package("diffusers", "diffusers>=0.32", on_progress):
+        raise RuntimeError(
+            "diffusers not installed. Run: pip install 'diffusers>=0.32'\n"
+            "Requires PyTorch with CUDA support."
+        )
+    if not ensure_package("soundfile", "soundfile", on_progress):
+        raise RuntimeError("soundfile not installed. Run: pip install soundfile")
+
+    if on_progress:
+        on_progress(5, "Loading Stable Audio Open model...")
+
+    import re
+
+    import soundfile
+    import torch
+    from diffusers import StableAudioPipeline
+
+    duration = max(1.0, min(47.0, duration))
+
+    if not output_path:
+        directory = output_dir or tempfile.gettempdir()
+        safe_prompt = re.sub(r'[^\w\-]', '_', prompt[:30]).strip('_')
+        output_path = os.path.join(directory, f"stable_audio_{safe_prompt}.wav")
+
+    pipe = None
+    try:
+        if on_progress:
+            on_progress(10, "Downloading/loading Stable Audio Open pipeline...")
+
+        pipe = StableAudioPipeline.from_pretrained(
+            "stabilityai/stable-audio-open-1.0",
+            torch_dtype=torch.float16,
+        )
+        pipe.to("cuda")
+
+        if on_progress:
+            on_progress(25, f"Generating audio: '{prompt[:50]}'...")
+
+        audio = pipe(
+            prompt=prompt,
+            negative_prompt="low quality",
+            num_inference_steps=200,
+            audio_end_in_s=duration,
+        ).audios[0]  # numpy array
+
+        if on_progress:
+            on_progress(85, "Saving audio...")
+
+        # Transpose if needed: (channels, samples) -> (samples, channels)
+        if audio.ndim == 2 and audio.shape[0] < audio.shape[1]:
+            audio = audio.T
+
+        soundfile.write(output_path, audio, samplerate=44100)
+    finally:
+        with suppress(Exception):
+            del pipe
+        with suppress(Exception):
+            del audio  # noqa: F821
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    if on_progress:
+        on_progress(100, "Stable Audio generation complete!")
+
+    return {"output": output_path, "duration": duration, "backend": "stable_audio"}
+
+
+def get_music_ai_capabilities() -> Dict:
+    return {
+        "audiocraft": check_audiocraft_available(),
+        "ace_step": check_ace_step_available(),
+        "stable_audio": check_stable_audio_available(),
+        "cuda": check_torch_cuda(),
+        "models": MUSICGEN_MODELS,
+    }

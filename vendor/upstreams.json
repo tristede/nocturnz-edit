@@ -1,0 +1,11 @@
+{
+  "repositories": [
+    {"id": "opencut", "url": "https://github.com/SysAdminDoc/OpenCut", "commit": "1d9acc1be802e0e65ea6bd0f05283fac0f98bbef", "license": "MIT", "status": "import"},
+    {"id": "auto-editor", "url": "https://github.com/WyattBlue/auto-editor", "ref": "29.3.1", "commit": "43d47dc5157f0c84dd0b01a43d9406d35e0c4b4e", "license": "Unlicense", "status": "import"},
+    {"id": "openpodcut", "url": "https://github.com/YoYoZ/OpenPodCut", "commit": "1f1f527033a83ba580c9ecfc6987d5158d81c71c", "license": "GPL-3.0-or-later", "status": "import"},
+    {"id": "podclip", "url": "https://github.com/treydoe1/podclip-public-release", "commit": "5c301993ceef318b9d41d217e7f4fbcea177c198", "license": "MIT; third-party notices apply", "status": "import"},
+    {"id": "premiere-director", "url": "https://github.com/Macadaisical/premiere-director", "commit": "d855ad1fb500ca72e6dc034ce98878981b229226", "license": "MIT; bundled libraries retain their notices", "status": "import"},
+    {"id": "jumpcut", "url": "https://github.com/cameron-astor/jumpcut", "commit": "b1df31783291423cd217217c425158f8ebcd5d89", "license": "GPL-3.0", "status": "import"},
+    {"id": "auto-zoom-premiere", "url": "https://github.com/ziscolwp/auto-zoom-premiere", "commit": "a5c6fb38206fc01df5c1ca9d4558a56a7ff2c83f", "license": null, "status": "reference-only", "reason": "No license found at this commit; source not redistributed."}
+  ]
+}

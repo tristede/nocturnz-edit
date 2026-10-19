@@ -1,0 +1,1224 @@
+"""
+OpenCut Shared Helpers
+
+Utility functions used across multiple route modules: FFmpeg progress,
+output path resolution, lazy imports, job time tracking.
+"""
+
+import importlib
+import json
+import logging
+import os
+import shutil
+import subprocess as _sp
+import sys as _sys
+import tempfile
+import threading
+import time
+
+logger = logging.getLogger("opencut")
+
+# ---------------------------------------------------------------------------
+# OpenCut user data directory
+# ---------------------------------------------------------------------------
+def _resolve_opencut_dir() -> str:
+    configured = os.environ.get("OPENCUT_HOME", "").strip()
+    if configured:
+        return os.path.abspath(os.path.expanduser(os.path.expandvars(configured)))
+    return os.path.join(os.path.expanduser("~"), ".opencut")
+
+
+OPENCUT_DIR = _resolve_opencut_dir()
+
+# Ensure the configured packages directory is on sys.path (pip --target
+# fallback dir). Package data follows OPENCUT_HOME just like settings and
+# model caches, so bundled launchers and the application share one contract.
+_opencut_pkg_dir = os.path.join(OPENCUT_DIR, "packages")
+if os.path.isdir(_opencut_pkg_dir) and _opencut_pkg_dir not in _sys.path:
+    _sys.path.append(_opencut_pkg_dir)
+
+# ---------------------------------------------------------------------------
+# FFmpeg / FFprobe Path Cache
+# ---------------------------------------------------------------------------
+_ffmpeg_path = None
+_ffprobe_path = None
+_media_binary_security_cache = {}
+
+
+def _bundled_binary_path(binary: str) -> str | None:
+    """Return a packaged FFmpeg-family binary before falling back to PATH."""
+    candidates = []
+    configured_dir = os.environ.get("OPENCUT_FFMPEG_DIR", "").strip()
+    if configured_dir:
+        candidates.append(os.path.expanduser(os.path.expandvars(configured_dir)))
+
+    executable = getattr(_sys, "executable", "")
+    if executable:
+        candidates.append(os.path.dirname(os.path.abspath(executable)))
+    meipass = getattr(_sys, "_MEIPASS", "")
+    if meipass:
+        candidates.append(os.path.abspath(meipass))
+    candidates.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+    seen = set()
+    names = [binary]
+    if os.name == "nt":
+        names.append(f"{binary}.exe")
+    for base in candidates:
+        normalized = os.path.normcase(os.path.abspath(base))
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        for name in names:
+            path = os.path.join(base, "ffmpeg", name)
+            if os.path.isfile(path) and os.access(path, os.X_OK):
+                return os.path.abspath(path)
+    return None
+
+
+def _binary_identity(path: str):
+    """Return a replacement-sensitive identity for a resolved executable."""
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return None
+    return (stat.st_mtime_ns, stat.st_size)
+
+
+def _require_safe_media_binary(binary: str) -> str:
+    """Resolve and verify an FFmpeg-family executable before first use."""
+    resolved = shutil.which(binary)
+    if not resolved and os.path.isfile(binary):
+        resolved = os.path.abspath(binary)
+    candidate = resolved or binary
+    canonical = os.path.normcase(os.path.realpath(candidate))
+    identity = _binary_identity(candidate)
+    cached = _media_binary_security_cache.get(canonical)
+    if cached is not None and cached[0] == identity:
+        return candidate
+
+    from opencut.core.ffmpeg_provenance import require_security_floor
+
+    grade = require_security_floor(candidate)
+    _media_binary_security_cache[canonical] = (identity, grade)
+    return candidate
+
+
+def get_ffmpeg_path() -> str:
+    """Return a cached, CVE-floor-verified FFmpeg binary path.
+
+    Missing, unparseable, and pre-8.1.3 releases fail before any media command
+    is started. A cache entry is invalidated when the executable's mtime or
+    size changes, so replacing a PATH binary forces a fresh version probe.
+    """
+    global _ffmpeg_path
+    candidate = _ffmpeg_path or _bundled_binary_path("ffmpeg") or shutil.which("ffmpeg") or "ffmpeg"
+    if candidate == "ffmpeg" and not shutil.which(candidate):
+        logger.warning("ffmpeg not found in PATH — subprocess calls may fail")
+    _ffmpeg_path = _require_safe_media_binary(candidate)
+    return _ffmpeg_path
+
+
+def get_ffprobe_path() -> str:
+    """Return a cached, CVE-floor-verified FFprobe binary path."""
+    global _ffprobe_path
+    candidate = _ffprobe_path or _bundled_binary_path("ffprobe") or shutil.which("ffprobe") or "ffprobe"
+    if candidate == "ffprobe" and not shutil.which(candidate):
+        logger.warning("ffprobe not found in PATH — media probing may fail")
+    _ffprobe_path = _require_safe_media_binary(candidate)
+    return _ffprobe_path
+
+
+def _guard_ffmpeg_command(cmd: list) -> list:
+    """Resolve or validate the executable of an FFmpeg command list."""
+    if not cmd:
+        return cmd
+    executable = str(cmd[0])
+    basename = os.path.basename(executable).lower()
+    if basename not in {"ffmpeg", "ffmpeg.exe", "ffprobe", "ffprobe.exe"}:
+        return cmd
+    if executable.lower() in {"ffmpeg", "ffmpeg.exe"}:
+        guarded = get_ffmpeg_path()
+    elif executable.lower() in {"ffprobe", "ffprobe.exe"}:
+        guarded = get_ffprobe_path()
+    else:
+        guarded = _require_safe_media_binary(executable)
+    return [guarded, *cmd[1:]]
+
+def _ensure_opencut_dir():
+    """Create the OpenCut user directory if it doesn't exist."""
+    os.makedirs(OPENCUT_DIR, exist_ok=True)
+
+# Named constants
+DEFAULT_CRF = 18
+
+
+def output_path(input_path: str, suffix: str, output_dir: str = "") -> str:
+    """Generate output path with suffix, preserving extension."""
+    base = os.path.splitext(os.path.basename(input_path))[0]
+    ext = os.path.splitext(input_path)[1] or ".mp4"
+    directory = output_dir or os.path.dirname(input_path)
+    return os.path.join(directory, f"{base}_{suffix}{ext}")
+
+# ---------------------------------------------------------------------------
+# Deferred Temp File Cleanup
+# ---------------------------------------------------------------------------
+_cleanup_scheduled = set()
+_cleanup_schedule_lock = threading.Lock()
+# Single daemon thread handles all deferred deletions to avoid Timer thread spam.
+# It is started lazily so importing helpers has no background-thread side effect.
+_cleanup_queue: list = []
+_cleanup_event = threading.Event()
+_cleanup_thread = None
+_cleanup_thread_lock = threading.Lock()
+
+
+def _cleanup_worker():
+    """Background worker that processes deferred file deletions.
+
+    Sleeps just long enough to wake when the next entry is ready, so a
+    file scheduled with ``delay=5.0`` and one retry doesn't take 15-20s
+    to finalise (it used to poll every 5s blindly).
+    """
+    default_wait = 5.0
+    while True:
+        _cleanup_event.wait(timeout=default_wait)
+        _cleanup_event.clear()
+        now = time.time()
+        remaining = []
+        with _cleanup_schedule_lock:
+            pending = list(_cleanup_queue)
+            _cleanup_queue.clear()
+        for entry in pending:
+            path, attempt, max_attempts, ready_at, backoff = entry
+            if now < ready_at:
+                remaining.append(entry)
+                continue
+            try:
+                if os.path.isfile(path):
+                    os.unlink(path)
+                    logger.debug("Cleaned up temp file: %s", path)
+                with _cleanup_schedule_lock:
+                    _cleanup_scheduled.discard(os.path.normcase(os.path.abspath(path)))
+            except OSError:
+                if attempt < max_attempts:
+                    remaining.append((path, attempt + 1, max_attempts, now + backoff, backoff * 2))
+                else:
+                    with _cleanup_schedule_lock:
+                        _cleanup_scheduled.discard(os.path.normcase(os.path.abspath(path)))
+                    logger.warning("Failed to clean up temp file after %d attempts: %s",
+                                   max_attempts, path)
+        if remaining:
+            with _cleanup_schedule_lock:
+                _cleanup_queue.extend(remaining)
+            # Wake again near the earliest ready_at so retries don't sit
+            # idle for a whole poll interval.
+            soonest = min(entry[3] for entry in remaining)
+            default_wait = max(0.1, min(5.0, soonest - time.time()))
+        else:
+            default_wait = 5.0
+
+
+def _ensure_cleanup_thread_started():
+    """Start the deferred-cleanup worker on first scheduled cleanup."""
+    global _cleanup_thread
+    if _cleanup_thread is not None and _cleanup_thread.is_alive():
+        return
+    with _cleanup_thread_lock:
+        if _cleanup_thread is not None and _cleanup_thread.is_alive():
+            return
+        _cleanup_thread = threading.Thread(target=_cleanup_worker, daemon=True,
+                                           name="opencut-temp-cleanup")
+        _cleanup_thread.start()
+
+
+def _schedule_temp_cleanup(filepath: str, delay: float = 5.0, retries: int = 3):
+    """Schedule a temp file for deferred deletion.
+
+    On Windows, FFmpeg may still hold a file handle when the job thread
+    finishes.  This retries deletion with exponential backoff.
+    Deduplicates: won't schedule the same path twice.
+    Uses a single background thread instead of spawning Timer threads.
+    """
+    norm = os.path.normcase(os.path.abspath(filepath))
+    with _cleanup_schedule_lock:
+        if norm in _cleanup_scheduled:
+            return
+        _cleanup_scheduled.add(norm)
+        _cleanup_queue.append((filepath, 1, retries, time.time() + delay, delay))
+    _ensure_cleanup_thread_started()
+    _cleanup_event.set()
+
+# ---------------------------------------------------------------------------
+# Disk Space Preflight Check
+# ---------------------------------------------------------------------------
+def _is_network_path(path: str) -> bool:
+    """Best-effort detection of a network/UNC location (fail-open eligible)."""
+    p = str(path or "")
+    return p.startswith("\\\\") or p.startswith("//")
+
+
+def _nearest_existing_dir(path: str) -> str:
+    """Walk up to the nearest existing directory so disk_usage probes the real
+    mount point even when the target output dir does not exist yet."""
+    candidate = path if os.path.isdir(path) else os.path.dirname(os.path.abspath(path))
+    seen = set()
+    while candidate and candidate not in seen and not os.path.isdir(candidate):
+        seen.add(candidate)
+        parent = os.path.dirname(candidate)
+        if parent == candidate:
+            break
+        candidate = parent
+    return candidate or os.path.dirname(os.path.abspath(path))
+
+
+def check_disk_space(path: str, min_bytes: int = 500 * 1024 * 1024) -> dict:
+    """Check available disk space at path. Returns dict with 'ok', 'free_bytes', 'free_mb'.
+
+    Args:
+        path: Directory or file path to check (uses its mount point).
+        min_bytes: Minimum required free space in bytes (default 500 MB).
+    """
+    try:
+        check_dir = _nearest_existing_dir(path)
+        usage = shutil.disk_usage(check_dir)
+        return {
+            "ok": usage.free >= min_bytes,
+            "free_bytes": usage.free,
+            "free_mb": round(usage.free / (1024 * 1024)),
+            "required_mb": round(min_bytes / (1024 * 1024)),
+        }
+    except Exception as e:
+        # Fail OPEN only for un-probeable network/UNC locations (a genuine
+        # network drive can raise even when it has space). For a local path we
+        # cannot probe, fail CLOSED so a full/inaccessible local disk surfaces
+        # as a clean rejection instead of a half-written mid-render failure.
+        network = _is_network_path(path)
+        logger.warning(
+            "Disk space check failed for %s: %s (failing %s)",
+            path, e, "open (network path)" if network else "closed (local path)",
+        )
+        return {"ok": network, "free_bytes": 0, "free_mb": 0, "required_mb": 0,
+                "check_error": str(e), "probe_failed": True}
+
+
+# ---------------------------------------------------------------------------
+# Shared FFmpeg Runner
+# ---------------------------------------------------------------------------
+def _current_request_id() -> str:
+    try:
+        from opencut.core.request_correlation import get_request_id
+
+        return get_request_id()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _subprocess_env_kwargs(request_id: str = "") -> dict:
+    try:
+        from opencut.core.request_correlation import subprocess_env
+
+        env = subprocess_env(request_id or None)
+    except Exception:  # noqa: BLE001
+        env = None
+    return {"env": env} if env else {}
+
+
+def _log_subprocess_output(label: str, text: str, *, request_id: str = "",
+                           job_id: str = "", level: int = logging.DEBUG,
+                           cap: int = 4096) -> None:
+    if not text:
+        return
+    body = str(text)
+    if cap > 0 and len(body) > cap:
+        body = "...[truncated] " + body[-cap:]
+    try:
+        from opencut.core.request_correlation import prefix_subprocess_output
+
+        body = prefix_subprocess_output(body, request_id or None)
+    except Exception:  # noqa: BLE001
+        pass
+    tag = f"[{job_id}] " if job_id else ""
+    logger.log(level, "%s%s:\n%s", tag, label, body)
+
+
+def run_ffmpeg(cmd: list, timeout: int = 3600, stderr_cap: int = 0,
+               job_id: str = "") -> str:
+    """Run FFmpeg command, raise RuntimeError on failure. Returns stderr.
+
+    When ``job_id`` is supplied, or when the current thread is running
+    an ``@async_job`` worker (via :func:`opencut.jobs.get_current_job_id`),
+    the spawned process is registered with the job subsystem via
+    :func:`opencut.jobs._register_job_process` so the standard cancel
+    path (``POST /cancel/<job_id>``) kills the child cleanly.  Previously,
+    ``run_ffmpeg`` used a blocking ``subprocess.run`` that couldn't be
+    interrupted — a user cancel on a 30-minute encode would mark the job
+    cancelled while FFmpeg ran to completion, pinning a worker slot
+    indefinitely. Callers outside a job still get the blocking run path.
+
+    Unregistration happens in the ``finally`` block regardless of
+    whether the child exited normally, by timeout, or via cancel.
+    """
+    cmd = _guard_ffmpeg_command(cmd)
+    if not job_id:
+        try:
+            from opencut.jobs import get_current_job_id
+
+            job_id = get_current_job_id() or ""
+        except Exception:  # noqa: BLE001 - tracking is optional
+            job_id = ""
+    request_id = _current_request_id()
+    env_kwargs = _subprocess_env_kwargs(request_id)
+
+    # Log the full command at DEBUG so failed FFmpeg jobs can be
+    # reproduced from ~/.opencut/server.log without guessing the args.
+    if logger.isEnabledFor(logging.DEBUG):
+        safe_cmd = " ".join(str(c) for c in cmd)
+        tag = f"[{job_id}] " if job_id else ""
+        logger.debug("%sFFmpeg cmd: %s", tag, safe_cmd)
+
+    # Fast path: no job tracking requested — preserve the original
+    # subprocess.run semantics so existing callers see no behaviour
+    # change.
+    if not job_id:
+        result = _sp.run(cmd, capture_output=True, timeout=timeout, **env_kwargs)
+        stderr = result.stderr.decode(errors="replace")
+        if stderr_cap > 0 and len(stderr) > stderr_cap:
+            stderr = "...[truncated] " + stderr[-stderr_cap:]
+        if stderr and logger.isEnabledFor(logging.DEBUG):
+            _log_subprocess_output("FFmpeg stderr", stderr,
+                                   request_id=request_id, cap=stderr_cap or 4096)
+        if result.returncode != 0:
+            _log_subprocess_output("FFmpeg stderr", stderr[-500:],
+                                   request_id=request_id, level=logging.WARNING,
+                                   cap=500)
+            raise RuntimeError(f"FFmpeg error: {stderr[-500:]}")
+        return stderr
+
+    # Tracked path: use Popen + register so cancel can terminate us.
+    try:
+        from opencut.jobs import _register_job_process, _unregister_job_process
+    except Exception:  # noqa: BLE001
+        # Jobs module unavailable — fall back to plain run.
+        result = _sp.run(cmd, capture_output=True, timeout=timeout, **env_kwargs)
+        stderr = result.stderr.decode(errors="replace")
+        if stderr_cap > 0 and len(stderr) > stderr_cap:
+            stderr = "...[truncated] " + stderr[-stderr_cap:]
+        if stderr and logger.isEnabledFor(logging.DEBUG):
+            _log_subprocess_output("FFmpeg stderr", stderr,
+                                   request_id=request_id, job_id=job_id,
+                                   cap=stderr_cap or 4096)
+        if result.returncode != 0:
+            _log_subprocess_output("FFmpeg stderr", stderr[-500:],
+                                   request_id=request_id, job_id=job_id,
+                                   level=logging.WARNING, cap=500)
+            raise RuntimeError(f"FFmpeg error: {stderr[-500:]}")
+        return stderr
+
+    proc = _sp.Popen(cmd, stdout=_sp.PIPE, stderr=_sp.PIPE, **env_kwargs)
+    _register_job_process(job_id, proc)
+    try:
+        try:
+            _stdout, stderr_bytes = proc.communicate(timeout=timeout)
+        except _sp.TimeoutExpired:
+            proc.kill()
+            try:
+                _stdout, stderr_bytes = proc.communicate(timeout=5)
+            except _sp.TimeoutExpired:
+                stderr_bytes = b""
+            # Surface the tail of captured stderr — plain "timed out" without
+            # any context hides the actual failure reason (wrong codec,
+            # missing font, DRM, etc.) that usually precedes the stall.
+            tail = (stderr_bytes or b"").decode(errors="replace")[-500:].strip()
+            if tail:
+                _log_subprocess_output("FFmpeg stderr before timeout", tail,
+                                       request_id=request_id, job_id=job_id,
+                                       level=logging.WARNING, cap=500)
+            suffix = f" — last stderr: {tail}" if tail else ""
+            raise RuntimeError(
+                f"FFmpeg timed out after {timeout}s and was killed{suffix}"
+            )
+        stderr = (stderr_bytes or b"").decode(errors="replace")
+        if stderr_cap > 0 and len(stderr) > stderr_cap:
+            stderr = "...[truncated] " + stderr[-stderr_cap:]
+        if stderr and logger.isEnabledFor(logging.DEBUG):
+            _log_subprocess_output("FFmpeg stderr", stderr,
+                                   request_id=request_id, job_id=job_id,
+                                   cap=stderr_cap or 4096)
+        if proc.returncode != 0:
+            _log_subprocess_output("FFmpeg stderr", stderr[-500:],
+                                   request_id=request_id, job_id=job_id,
+                                   level=logging.WARNING, cap=500)
+            raise RuntimeError(f"FFmpeg error: {stderr[-500:]}")
+        return stderr
+    finally:
+        try:
+            _unregister_job_process(job_id)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+# ---------------------------------------------------------------------------
+# FFmpeg filtergraph / concat escaping
+#
+# FFmpeg parses filtergraph option values in TWO passes: the filtergraph
+# parser first strips the surrounding quotes and resolves one level of
+# backslash escaping, then each filter's option parser re-splits the result
+# on ``:`` (and ``=``).  A value placed inside single quotes therefore still
+# needs option-level escaping of ``:`` — quoting alone is not enough.  These
+# helpers centralise the (easy-to-get-wrong) escaping so feature modules stop
+# re-implementing it inconsistently.  See tests/test_ffmpeg_escaping.py.
+# ---------------------------------------------------------------------------
+def escape_filter_path(path: str) -> str:
+    """Escape a filesystem path for a SINGLE-QUOTED FFmpeg filter option.
+
+    Intended use::
+
+        vf = f"subtitles='{escape_filter_path(p)}'"
+        vf = f"ass='{escape_filter_path(p)}'"
+
+    Handles the two real-world breakers on Windows: drive-letter colons
+    (``C:/...`` must become ``C\\:/...`` so the option parser doesn't treat
+    the colon as an option separator) and apostrophes in the path.
+    """
+    p = str(path).replace("\\", "/")
+    p = p.replace(":", "\\:")
+    # A literal apostrophe must survive the filtergraph single-quote pass AND
+    # the option-level parser: close the quote, emit an option-escaped quote,
+    # reopen the quote  ->  \'\''
+    p = p.replace("'", "\\'\\''")
+    return p
+
+
+def escape_drawtext(text: str) -> str:
+    """Escape literal text for a SINGLE-QUOTED FFmpeg ``drawtext`` value.
+
+    Intended use — always pair with ``expansion=none`` for literal text::
+
+        vf = f"drawtext=expansion=none:text='{escape_drawtext(s)}':..."
+
+    ``expansion=none`` is required because, under drawtext's default
+    expansion, a literal ``%`` cannot be escaped at all (FFmpeg rejects it
+    with "Stray %"), and leaving expansion on would let caption text
+    containing ``%{...}`` be interpreted as a drawtext expression.  With
+    expansion disabled, ``%`` is literal and only the filtergraph/option
+    layer needs escaping: backslash (escape first), the ``:`` option
+    separator, and the apostrophe (two-level close/reopen, see
+    :func:`escape_filter_path`).
+    """
+    return (str(text)
+            .replace("\\", "\\\\")
+            .replace(":", "\\:")
+            .replace("'", "\\'\\''"))
+
+
+def drawtext_font_option(font_family: str = "Arial", text_hint: str = "") -> str:
+    """Return a deterministic font option for FFmpeg ``drawtext`` filters.
+
+    Portable FFmpeg builds may include Fontconfig support without shipping a
+    Fontconfig database.  In that environment a family-only ``font=`` option
+    can fail even though the host has usable fonts.  Reuse OpenCut's existing
+    caption font resolver and prefer an explicit file path whenever one is
+    available; this also keeps Windows drive-letter escaping in one place.
+    """
+    try:
+        from opencut.core.caption_styles import resolve_caption_font
+
+        resolution = resolve_caption_font(font_family, text_hint)
+        if resolution.font_path:
+            return f"fontfile='{escape_filter_path(resolution.font_path)}'"
+        return f"font='{escape_drawtext(resolution.font_family)}'"
+    except Exception:  # noqa: BLE001 - filters remain buildable without font discovery.
+        return ""
+
+
+def _concat_quote(path: str) -> str:
+    """Escape one path for an FFmpeg concat-demuxer ``file '...'`` line.
+
+    The concat demuxer parses each line once (single level): inside single
+    quotes everything is literal except ``'`` itself, which is inserted via
+    the POSIX close/reopen idiom ``'\\''``.  CR/LF are stripped because the
+    list is line-based.
+    """
+    cleaned = str(path).replace("\r", "").replace("\n", "")
+    return cleaned.replace("'", "'\\''")
+
+
+def _concat_file_line(path: str) -> str:
+    """Format one escaped FFmpeg concat-demuxer file entry."""
+    return f"file '{_concat_quote(path)}'\n"
+
+
+def write_concat_list(paths, file_path: str) -> str:
+    """Write a UTF-8 FFmpeg concat-demuxer list and return ``file_path``.
+
+    Centralises two recurring bugs in the feature modules: writing the list
+    with the platform default codec (cp1252 on Windows, which corrupts or
+    rejects non-ASCII filenames the concat demuxer then can't open) and
+    missing single-quote escaping of paths.
+    """
+    with open(file_path, "w", encoding="utf-8") as f:
+        for p in paths:
+            f.write(_concat_file_line(p))
+    return file_path
+
+
+# ---------------------------------------------------------------------------
+# Cut-boundary audio fades
+# ---------------------------------------------------------------------------
+# Every module that removes or compresses material rebuilds the timeline by
+# trimming segments and concatenating them. A concat splices two unrelated
+# waveforms sample-to-sample, and unless both happen to sit at a zero crossing
+# the step discontinuity is audible as a click or pop on every edit. A fade
+# shorter than a syllable removes it without being heard as a fade.
+EDGE_FADE_DEFAULT_MS = 5.0
+EDGE_FADE_MAX_MS = 100.0
+# Below this a segment is short enough that fading both edges would shape most
+# of its content, so it is left alone.
+_EDGE_FADE_MIN_SEGMENT_RATIO = 4.0
+
+
+def edge_fade_ms(requested=None) -> float:
+    """Clamp a requested cut-boundary fade to the supported range.
+
+    ``None`` selects the default. Zero (or anything that does not parse as a
+    number) disables the fade, which is how callers opt out per request.
+    """
+    if requested is None:
+        return EDGE_FADE_DEFAULT_MS
+    try:
+        value = float(requested)
+    except (TypeError, ValueError):
+        return 0.0
+    if value != value or value in (float("inf"), float("-inf")):
+        return 0.0
+    if value <= 0:
+        return 0.0
+    return min(value, EDGE_FADE_MAX_MS)
+
+
+def build_edge_fade_filter(
+    segment_duration: float,
+    fade_ms=None,
+    *,
+    fade_in: bool = True,
+    fade_out: bool = True,
+) -> str:
+    """Return ``afade`` filters that de-click one segment's cut boundaries.
+
+    Returns an empty string when the fade is disabled, when the segment is too
+    short to carry one, or when neither edge was requested — callers append the
+    result to an existing audio chain, so an empty string is a safe no-op.
+    """
+    ms = edge_fade_ms(fade_ms)
+    if ms <= 0 or not (fade_in or fade_out):
+        return ""
+    try:
+        duration = float(segment_duration)
+    except (TypeError, ValueError):
+        return ""
+    if duration != duration or duration <= 0:
+        return ""
+
+    seconds = ms / 1000.0
+    edges = int(fade_in) + int(fade_out)
+    # Keep the faded portion a small fraction of the segment.
+    if duration < seconds * edges * _EDGE_FADE_MIN_SEGMENT_RATIO:
+        return ""
+
+    parts = []
+    if fade_in:
+        parts.append(f"afade=t=in:st=0:d={seconds:.6f}")
+    if fade_out:
+        parts.append(f"afade=t=out:st={duration - seconds:.6f}:d={seconds:.6f}")
+    return ",".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Shared Package Installer
+# ---------------------------------------------------------------------------
+def ensure_package(pkg: str, pip_name: str = None, on_progress=None) -> bool:
+    """Import package, auto-install via safe_pip_install if missing. Returns True on success."""
+    import importlib
+    try:
+        importlib.import_module(pkg)
+        return True
+    except ImportError:
+        pip_name = pip_name or pkg
+        from opencut.dependency_support import dependency_support
+
+        support = dependency_support(pip_name)
+        if not support["supported"]:
+            logger.warning("Unsupported dependency request for %s: %s", pip_name, support["reason"])
+            if on_progress:
+                on_progress(0, support["reason"])
+            return False
+        # Installing abandoned software on demand is allowed, but never silent.
+        from opencut.dependency_support import maintenance_status
+
+        maintenance = maintenance_status(pip_name)
+        if maintenance["abandoned"]:
+            logger.warning("Installing unmaintained dependency: %s", maintenance["warning"])
+            if on_progress:
+                on_progress(0, maintenance["warning"])
+        if on_progress:
+            on_progress(5, f"Installing {pip_name}...")
+        logger.info(f"Installing missing dependency: {pip_name}")
+        from opencut.security import safe_pip_install
+        try:
+            safe_pip_install(pip_name)
+        except RuntimeError:
+            return False
+        try:
+            importlib.import_module(pkg)
+            return True
+        except ImportError:
+            return False
+
+
+def require_package(pkg: str, pip_name: str = None, on_progress=None) -> None:
+    """Like ``ensure_package`` but raises on failure instead of returning False.
+
+    Use this instead of bare ``ensure_package(...)`` calls that ignore the
+    return value — a subsequent ``import`` would crash with an unhelpful
+    ``ImportError`` anyway.  This produces a clear ``RuntimeError`` with
+    install instructions.
+    """
+    if not ensure_package(pkg, pip_name=pip_name, on_progress=on_progress):
+        display = pip_name or pkg
+        from opencut.dependency_support import dependency_support
+
+        support = dependency_support(display)
+        if not support["supported"]:
+            raise RuntimeError(support["reason"])
+        raise RuntimeError(
+            f"{display} is required but could not be installed. "
+            f"Install manually: pip install {display}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Shared Video Info Helper
+# ---------------------------------------------------------------------------
+def get_video_info(filepath: str) -> dict:
+    """Get video width, height, fps, duration via ffprobe. Returns safe defaults on error."""
+    import json as _json
+    cmd = [
+        get_ffprobe_path(), "-v", "quiet", "-select_streams", "v:0",
+        "-show_entries", "stream=width,height,r_frame_rate,duration",
+        "-show_entries", "format=duration",
+        "-of", "json", filepath,
+    ]
+    _defaults = {"width": 1920, "height": 1080, "fps": 30.0, "duration": 0}
+    try:
+        result = _sp.run(cmd, capture_output=True, timeout=30)
+    except (_sp.TimeoutExpired, FileNotFoundError, OSError) as exc:
+        # ffprobe missing, hung, or unavailable — degrade gracefully so
+        # callers get safe defaults instead of an unhandled 500.
+        logger.warning("ffprobe call failed for %s: %s — using defaults", filepath, exc)
+        return _defaults
+    if result.returncode != 0:
+        logger.warning("ffprobe failed (rc=%d) for %s — using defaults", result.returncode, filepath)
+        return _defaults
+    try:
+        data = _json.loads(result.stdout.decode(errors="replace"))
+        streams = data.get("streams", [])
+        if not streams:
+            logger.warning("ffprobe returned no streams for %s — using defaults", filepath)
+            return _defaults
+        s = streams[0]
+        fps_p = s.get("r_frame_rate", "30/1").split("/")
+        try:
+            num = float(fps_p[0])
+            den = float(fps_p[1]) if len(fps_p) == 2 else 1.0
+            fps = num / den if den > 0 else 30.0
+        except (ValueError, ZeroDivisionError, IndexError):
+            fps = 30.0
+        duration = float(s.get("duration", 0))
+        if duration <= 0:
+            duration = float(data.get("format", {}).get("duration", 0))
+        return {
+            "width": int(s.get("width", 1920)),
+            "height": int(s.get("height", 1080)),
+            "fps": fps,
+            "duration": duration,
+        }
+    except Exception as e:
+        logger.warning("Failed to parse ffprobe output for %s: %s — using defaults", filepath, e)
+        return _defaults
+
+
+# ---------------------------------------------------------------------------
+# Lazy Import Helper
+# ---------------------------------------------------------------------------
+def _try_import(name: str):
+    """
+    Import a module by name, returning None on failure.
+
+    Replaces the 50+ try/except ImportError blocks scattered throughout
+    the codebase with a single-line call.
+
+    Usage:
+        torch = _try_import("torch")
+        if torch is None:
+            return jsonify({"error": "torch not installed"}), 400
+    """
+    try:
+        return importlib.import_module(name)
+    except ImportError:
+        return None
+
+
+def _try_import_from(package: str, name: str):
+    """
+    Import *name* from *package*, trying relative then absolute.
+
+    Usage:
+        check_whisper = _try_import_from("opencut.core.captions", "check_whisper_available")
+    """
+    try:
+        mod = importlib.import_module(package)
+        return getattr(mod, name)
+    except (ImportError, AttributeError):
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Output Path Helpers
+# ---------------------------------------------------------------------------
+def _resolve_output_dir(filepath: str, requested_dir: str = "") -> str:
+    """
+    Determine the best output directory for generated files.
+
+    Priority:
+    1. Explicitly requested directory (from panel/API)
+    2. Same directory as the source file
+    3. User's temp directory (last resort)
+    """
+    from opencut.security import validate_path
+
+    # Try requested directory first
+    if requested_dir:
+        requested_dir = requested_dir.strip().strip('"').strip("'")
+        try:
+            requested_dir = validate_path(requested_dir)
+        except ValueError:
+            logger.warning("Invalid output dir rejected: %s", requested_dir)
+            requested_dir = ""
+        else:
+            if os.path.isdir(requested_dir):
+                return requested_dir
+            else:
+                try:
+                    os.makedirs(requested_dir, exist_ok=True)
+                    return requested_dir
+                except OSError as e:
+                    logger.debug("Failed to create output dir %s: %s", requested_dir, e)
+
+    # Try source file's directory — use os.access instead of creating a
+    # test file, which can leave artifacts if the process is killed.
+    source_dir = os.path.dirname(os.path.abspath(filepath))
+    if source_dir and os.path.isdir(source_dir) and os.access(source_dir, os.W_OK):
+        return source_dir
+
+    # Fallback to temp directory
+    fallback = os.path.join(tempfile.gettempdir(), "opencut_output")
+    os.makedirs(fallback, exist_ok=True)
+    return fallback
+
+
+_UNIQUE_PATH_MAX_ATTEMPTS = 100
+
+
+def _unique_output_path(path: str) -> str:
+    """
+    If *path* already exists on disk, append _2, _3, ... before the extension
+    until we find a name that doesn't collide.  Caps at ``_UNIQUE_PATH_MAX_ATTEMPTS``
+    (100) to prevent infinite loops from filesystem errors or races.
+    """
+    if not os.path.exists(path):
+        return path
+    base, ext = os.path.splitext(path)
+    for counter in range(2, _UNIQUE_PATH_MAX_ATTEMPTS + 2):
+        candidate = f"{base}_{counter}{ext}"
+        if not os.path.exists(candidate):
+            return candidate
+    raise RuntimeError(
+        f"Could not find unique output path after {_UNIQUE_PATH_MAX_ATTEMPTS} attempts: {path}"
+    )
+
+
+def _make_sequence_name(filepath: str, suffix: str = "") -> str:
+    """Generate a sequence name from the source filename."""
+    base = os.path.splitext(os.path.basename(filepath))[0]
+    if len(base) > 60:
+        base = base[:57] + "..."
+    name = f"OpenCut - {base}"
+    if suffix:
+        name += f" ({suffix})"
+    return name
+
+
+# ---------------------------------------------------------------------------
+# FFmpeg Command Builder
+# ---------------------------------------------------------------------------
+class FFmpegCmd:
+    """Fluent builder for FFmpeg command lists.
+
+    Usage:
+        cmd = (FFmpegCmd()
+               .input(filepath)
+               .video_codec("libx264", crf=18, preset="fast")
+               .audio_codec("aac", bitrate="192k")
+               .filter_complex(fc, maps=["[outv]", "[outa]"])
+               .faststart()
+               .output(out_path)
+               .build())
+    """
+
+    def __init__(self):
+        self._inputs = []
+        self._pre_input = []      # flags before first -i (e.g. -ss for input seeking)
+        self._vf = []             # -vf filters
+        self._af = []             # -af filters
+        self._fc = []             # -filter_complex
+        self._vcodec = []
+        self._acodec = []
+        self._maps = []
+        self._extra = []
+        self._output = None
+        self._hide_banner = True
+        self._overwrite = True
+
+    def input(self, path, **kwargs):
+        """Add an input file. kwargs become options before -i (e.g. ss="10")."""
+        opts = []
+        for k, v in kwargs.items():
+            opts.extend([f"-{k}", str(v)])
+        self._inputs.append((opts, path))
+        return self
+
+    def video_codec(self, codec, crf=None, preset=None, pix_fmt="yuv420p"):
+        """Set video codec. Use codec="copy" for stream copy."""
+        self._vcodec = ["-c:v", codec]
+        if codec != "copy":
+            if crf is not None:
+                self._vcodec.extend(["-crf", str(crf)])
+            if preset:
+                self._vcodec.extend(["-preset", preset])
+            if pix_fmt:
+                self._vcodec.extend(["-pix_fmt", pix_fmt])
+        return self
+
+    def audio_codec(self, codec, bitrate=None):
+        """Set audio codec. Use codec="copy" for stream copy."""
+        self._acodec = ["-c:a", codec]
+        if codec != "copy" and bitrate:
+            self._acodec.extend(["-b:a", bitrate])
+        return self
+
+    def copy_streams(self):
+        """Copy all streams without re-encoding."""
+        self._vcodec = ["-c", "copy"]
+        self._acodec = []
+        return self
+
+    def no_video(self):
+        """Strip video stream."""
+        self._extra.extend(["-vn"])
+        return self
+
+    def pre_input(self, key, value=None):
+        """Add a flag before all -i inputs (e.g. -ss for input seeking)."""
+        self._pre_input.append(f"-{key}" if not key.startswith("-") else key)
+        if value is not None:
+            self._pre_input.append(str(value))
+        return self
+
+    def video_filter(self, vf):
+        """Set -vf (simple video filter). Cannot combine with filter_complex."""
+        self._vf = ["-vf", vf]
+        return self
+
+    def audio_filter(self, af):
+        """Set -af (simple audio filter). Cannot combine with filter_complex."""
+        self._af = ["-af", af]
+        return self
+
+    def filter_complex(self, fc, maps=None):
+        """Set -filter_complex with optional -map entries.
+        Overrides any -vf/-af set earlier (FFmpeg doesn't allow both)."""
+        self._fc = ["-filter_complex", fc]
+        self._vf = []  # filter_complex supersedes simple filters
+        self._af = []
+        if maps:
+            for m in maps:
+                self._maps.extend(["-map", m])
+        return self
+
+    def map(self, *streams):
+        """Add -map entries."""
+        for s in streams:
+            self._maps.extend(["-map", s])
+        return self
+
+    def seek(self, start=None, end=None):
+        """Add -ss / -to seek options (placed before output)."""
+        if start is not None:
+            self._extra.extend(["-ss", str(start)])
+        if end is not None:
+            self._extra.extend(["-to", str(end)])
+        return self
+
+    def faststart(self):
+        """Add -movflags +faststart for MP4 streaming."""
+        self._extra.extend(["-movflags", "+faststart"])
+        return self
+
+    def frames(self, n):
+        """Limit output to n video frames."""
+        self._extra.extend(["-vframes", str(n)])
+        return self
+
+    def option(self, key, value=None):
+        """Add arbitrary -key [value] option."""
+        self._extra.append(f"-{key}" if not key.startswith("-") else key)
+        if value is not None:
+            self._extra.append(str(value))
+        return self
+
+    def format(self, fmt):
+        """Set output format (-f)."""
+        self._extra.extend(["-f", fmt])
+        return self
+
+    def output(self, path):
+        """Set output file path (always last in command)."""
+        self._output = path
+        return self
+
+    def build(self):
+        """Build the command list."""
+        cmd = [get_ffmpeg_path()]
+        if self._hide_banner:
+            cmd.append("-hide_banner")
+        if self._overwrite:
+            cmd.append("-y")
+        cmd.extend(self._pre_input)
+        for opts, path in self._inputs:
+            cmd.extend(opts)
+            cmd.extend(["-i", path])
+        # filter_complex takes priority; otherwise use simple vf/af
+        if self._fc:
+            cmd.extend(self._fc)
+        else:
+            cmd.extend(self._vf)
+            cmd.extend(self._af)
+        cmd.extend(self._maps)
+        cmd.extend(self._vcodec)
+        cmd.extend(self._acodec)
+        cmd.extend(self._extra)
+        if self._output:
+            cmd.append(self._output)
+        return cmd
+
+
+# ---------------------------------------------------------------------------
+# FFmpeg Progress Runner
+# ---------------------------------------------------------------------------
+def _run_ffmpeg_with_progress(job_id: str, cmd: list, duration_sec: float):
+    """
+    Run an FFmpeg command via Popen, parsing ``-progress pipe:1`` output
+    to update job progress.  Returns a (returncode, stderr) tuple.
+    Registers the process for kill-on-cancel support.
+
+    The process is unregistered in a ``finally`` block, so even an unhandled
+    exception in the progress loop releases the slot in ``_job_processes``
+    and the stderr drain thread is always joined before returning.
+    """
+    from opencut.jobs import _is_cancelled, _register_job_process, _unregister_job_process, _update_job
+
+    cmd = _guard_ffmpeg_command(cmd)
+
+    full_cmd = list(cmd) + ["-progress", "pipe:1"]
+    request_id = _current_request_id()
+    env_kwargs = _subprocess_env_kwargs(request_id)
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug("[%s] FFmpeg progress cmd: %s", job_id,
+                     " ".join(str(c) for c in full_cmd))
+    proc = _sp.Popen(full_cmd, stdout=_sp.PIPE, stderr=_sp.PIPE, text=True,
+                     encoding="utf-8", errors="replace", **env_kwargs)
+    _register_job_process(job_id, proc)
+
+    stderr_lines = []
+    _max_stderr_bytes = 32768  # 32 KB cap on accumulated stderr
+
+    # Drain stderr in a background thread to prevent pipe deadlock:
+    # if FFmpeg writes >4KB stderr (Windows) while stdout blocks, both
+    # pipes stall permanently.
+    def _drain_stderr():
+        try:
+            data = proc.stderr.read()
+            if data:
+                stderr_lines.append(data[-_max_stderr_bytes:])
+                if logger.isEnabledFor(logging.DEBUG):
+                    _log_subprocess_output(
+                        "FFmpeg progress stderr",
+                        data[-_max_stderr_bytes:],
+                        request_id=request_id,
+                        job_id=job_id,
+                    )
+        except Exception as e:
+            logger.debug("Error draining FFmpeg stderr for job %s: %s", job_id, e)
+
+    stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
+    stderr_thread.start()
+
+    last_pct = 0
+
+    try:
+        try:
+            for line in proc.stdout:
+                if _is_cancelled(job_id):
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=3)
+                    except Exception:
+                        proc.kill()
+                    break
+
+                line = line.strip()
+                if line.startswith("out_time_us="):
+                    try:
+                        us = int(line.split("=", 1)[1])
+                        if duration_sec > 0:
+                            pct = min(int((us / 1_000_000) / duration_sec * 100), 99)
+                            if pct > last_pct:
+                                last_pct = pct
+                                _update_job(job_id, progress=pct,
+                                            message=f"Processing... {pct}%")
+                    except (ValueError, ZeroDivisionError):
+                        pass
+        except Exception as e:
+            logger.debug("Error reading FFmpeg stdout for job %s: %s", job_id, e)
+
+        try:
+            proc.wait(timeout=10)
+        except Exception as e:
+            logger.debug("FFmpeg process did not exit cleanly for job %s, killing: %s", job_id, e)
+            try:
+                proc.kill()
+            except OSError:
+                pass
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                pass
+    finally:
+        # Ensure stderr drain always completes, even if the loop above raised.
+        stderr_thread.join(timeout=10)
+        # Always release the registered slot — leaking a stale Popen here
+        # would let a subsequent cancel target an unrelated process if the
+        # OS recycles the PID.
+        try:
+            _unregister_job_process(job_id)
+        except Exception:  # noqa: BLE001
+            pass
+
+    # ``proc.returncode`` can still be None if both wait() calls timed out;
+    # callers expect a numeric return code (non-zero == failure) so map
+    # the unknown state to a sentinel rather than silently passing None.
+    rc = proc.returncode if proc.returncode is not None else -1
+    stderr_text = "".join(stderr_lines)
+    if rc != 0 and stderr_text:
+        _log_subprocess_output("FFmpeg progress stderr", stderr_text[-500:],
+                               request_id=request_id, job_id=job_id,
+                               level=logging.WARNING, cap=500)
+    return rc, stderr_text
+
+
+# ---------------------------------------------------------------------------
+# Job Time Estimation
+# ---------------------------------------------------------------------------
+_JOB_TIMES_FILE = os.path.join(OPENCUT_DIR, "job_times.json")
+_job_times_lock = threading.Lock()
+
+
+def _get_file_duration(filepath):
+    """Get media file duration in seconds via ffprobe. Returns 0 on failure."""
+    if not filepath or not os.path.isfile(filepath):
+        return 0
+    try:
+        cmd = [get_ffprobe_path(), "-v", "error", "-show_entries", "format=duration",
+               "-of", "json", filepath]
+        result = _sp.run(cmd, capture_output=True, text=True, timeout=10)
+        data = json.loads(result.stdout)
+        return float(data["format"]["duration"])
+    except Exception as e:
+        logger.debug("Failed to get duration for %s: %s", filepath, e)
+        return 0
+
+
+def _load_job_times():
+    """Load historical job timing data. Must be called under _job_times_lock."""
+    try:
+        if os.path.isfile(_JOB_TIMES_FILE):
+            with open(_JOB_TIMES_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception as e:
+        logger.debug("Failed to load job times file: %s", e)
+    return {}
+
+
+def _record_job_time(job_type, duration_sec, file_duration_sec):
+    """Record how long a job took for future estimates. Thread-safe."""
+    with _job_times_lock:
+        times = _load_job_times()
+        if job_type not in times:
+            times[job_type] = []
+        times[job_type].append({
+            "job_secs": round(duration_sec, 1),
+            "file_secs": round(file_duration_sec, 1) if file_duration_sec else 0,
+            "ratio": round(duration_sec / max(file_duration_sec, 0.1), 3) if file_duration_sec else 0,
+            "ts": time.time()
+        })
+        # Keep last 20 entries per type
+        times[job_type] = times[job_type][-20:]
+        _ensure_opencut_dir()
+        fd, tmp_path = tempfile.mkstemp(
+            dir=OPENCUT_DIR, suffix=".tmp", prefix="job_times_"
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(times, f, indent=2)
+            os.replace(tmp_path, _JOB_TIMES_FILE)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+
+
+def compute_estimate(job_type: str, file_duration: float) -> dict:
+    """Compute a time estimate for a job type. Used by /system/estimate-time."""
+    with _job_times_lock:
+        times = _load_job_times()
+    entries = times.get(job_type, [])
+    if not entries:
+        return {"estimate_seconds": None, "confidence": "none", "message": "No historical data"}
+    ratios = [e["ratio"] for e in entries if e["ratio"] > 0]
+    if ratios and file_duration > 0:
+        avg_ratio = sum(ratios) / len(ratios)
+        estimate = file_duration * avg_ratio
+        confidence = "high" if len(ratios) >= 5 else "medium" if len(ratios) >= 2 else "low"
+    else:
+        avg_times = [e["job_secs"] for e in entries]
+        estimate = sum(avg_times) / len(avg_times)
+        confidence = "low"
+    return {
+        "estimate_seconds": round(estimate, 1),
+        "confidence": confidence,
+        "based_on": len(entries),
+        "message": f"~{int(estimate)}s based on {len(entries)} previous runs"
+    }

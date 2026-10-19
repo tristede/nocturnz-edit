@@ -1,0 +1,179 @@
+from __future__ import annotations
+
+import importlib.util
+import json
+import sys
+import tomllib
+from pathlib import Path
+
+from opencut import dependency_support
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _load_matrix_script():
+    path = REPO_ROOT / "scripts" / "check_dependency_matrix.py"
+    spec = importlib.util.spec_from_file_location("test_dependency_matrix_script", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_pyproject_and_runtime_publish_one_python_range():
+    project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+
+    assert project["requires-python"] == dependency_support.PYTHON_REQUIRES
+    assert dependency_support.PYTHON_VERSIONS == ("3.11", "3.12", "3.13", "3.14")
+    assert "Programming Language :: Python :: 3.14" in project["classifiers"]
+    dependency_support.assert_extra_names(project["optional-dependencies"])
+
+
+def test_noisereduce_is_not_declared_or_advertised():
+    project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    optional_dependencies = project["optional-dependencies"]
+
+    assert all(
+        "noisereduce" not in requirement.lower()
+        for requirements in optional_dependencies.values()
+        for requirement in requirements
+    )
+    assert "noisereduce" not in dependency_support.DEPENDENCY_EXTRAS
+    assert dependency_support.dependency_support("noisereduce")["install_hint"] == ""
+
+
+def test_platform_specific_gpu_support_is_explicit():
+    assert dependency_support.extra_support("ai-gpu", platform_name="win32")["supported"] is True
+    assert dependency_support.extra_support("ai-gpu", platform_name="linux")["supported"] is True
+    mac = dependency_support.extra_support("ai-gpu", platform_name="darwin")
+    assert mac["supported"] is False
+    assert "win32, linux" in mac["reason"]
+
+
+def test_nemo_asr_support_is_explicitly_unavailable_until_hub_conflict_clears():
+    linux = dependency_support.extra_support("nemo-asr", platform_name="linux")
+    assert linux["supported"] is False
+    assert "huggingface-hub<1" in linux["reason"]
+    assert "CVE-2026-15717" in linux["reason"]
+    for platform_name in ("win32", "darwin"):
+        status = dependency_support.extra_support("nemo-asr", platform_name=platform_name)
+        assert status["supported"] is False
+        assert status["reason"] == linux["reason"]
+
+
+def test_macos_python_314_caption_wheel_gap_is_explicit():
+    for extra in ("standard", "captions"):
+        status = dependency_support.extra_support(
+            extra,
+            version=(3, 14),
+            platform_name="darwin",
+        )
+        assert status["supported"] is False
+        assert "onnxruntime cp314 wheel" in status["reason"]
+
+    video = dependency_support.extra_support(
+        "video",
+        version=(3, 14),
+        platform_name="darwin",
+    )
+    assert video["supported"] is True
+
+
+def test_macos_generic_target_excludes_onnx_ai_lanes():
+    for version in ((3, 11), (3, 12), (3, 13), (3, 14)):
+        for extra in ("ai", "all"):
+            status = dependency_support.extra_support(
+                extra,
+                version=version,
+                platform_name="darwin",
+            )
+            assert status["supported"] is False
+            assert "onnxruntime >=1.26" in status["reason"]
+
+
+def test_python_ceiling_rejects_unverified_future_runtime():
+    assert dependency_support.python_supported((3, 11)) is True
+    assert dependency_support.python_supported((3, 14)) is True
+    assert dependency_support.python_supported((3, 10)) is False
+    assert dependency_support.python_supported((3, 15)) is False
+    result = dependency_support.extra_support("standard", version=(3, 15))
+    assert result["supported"] is False
+    assert "Python 3.11-3.14" in result["reason"]
+
+
+def test_versioned_requirement_hits_the_same_platform_gate_as_bare_name():
+    """A spec like nemo_toolkit[asr]>=2.7.3,<2.8 (as passed by
+    security.runtime_security_requirement) must not bypass the security hold
+    that applies to bare nemo_toolkit."""
+    versioned = dependency_support.dependency_support("nemo_toolkit[asr]>=2.7.3,<2.8")
+    bare = dependency_support.dependency_support("nemo_toolkit")
+
+    assert versioned == bare
+    if dependency_support.normalise_platform() != "linux":
+        assert versioned["supported"] is False
+        assert "CVE-2026-15717" in versioned["reason"]
+
+
+def test_whisperx_conflict_never_emits_an_install_command():
+    status = dependency_support.dependency_support("whisperx")
+
+    assert status["supported"] is False
+    assert "torchvision <0.24" in status["reason"]
+    assert "Torch >=2.10" in status["reason"]
+    assert status["install_hint"] == ""
+
+
+def test_dependency_dashboard_uses_canonical_support_contract(client):
+    response = client.get("/system/dependencies?fresh=1")
+    assert response.status_code == 200
+    payload = response.get_json()
+
+    assert payload["whisperx"]["supported"] is False
+    assert payload["whisperx"].get("install_hint", "") == ""
+    assert "Torch >=2.10" in payload["whisperx"]["support_reason"]
+    assert payload["pyannote.audio"]["supported"] is True
+    if not payload["pyannote.audio"]["installed"]:
+        assert payload["pyannote.audio"]["install_hint"] == (
+            'python -m pip install -e ".[diarize]"'
+        )
+    nemo_support = dependency_support.extra_support("nemo-asr")
+    assert payload["nemo-toolkit"]["supported"] is nemo_support["supported"]
+    assert payload["nemo-toolkit"]["support_reason"] == nemo_support["reason"]
+    if not nemo_support["supported"]:
+        assert payload["nemo-toolkit"].get("install_hint", "") == ""
+
+
+def test_matrix_script_reports_machine_readable_contract(capsys):
+    module = _load_matrix_script()
+
+    exit_code = module.main(["--json", "--extra", "standard"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["status"] == "ok"
+    assert payload["results"] == [{"extra": "standard", "reason": "", "status": "supported"}]
+
+
+def test_matrix_script_reports_security_blocked_extra_as_unavailable(capsys):
+    module = _load_matrix_script()
+
+    exit_code = module.main(["--json", "--extra", "nemo-asr"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["results"][0]["status"] == "unsupported"
+    assert "CVE-2026-15717" in payload["results"][0]["reason"]
+
+
+def test_local_matrix_covers_every_os_and_python_lane():
+    module = _load_matrix_script()
+
+    assert set(module.matrix_lanes()) == {
+        (version, platform_name)
+        for platform_name in dependency_support.PLATFORMS
+        for version in dependency_support.PYTHON_VERSIONS
+    }
+
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    assert "scripts/check_dependency_matrix.py --matrix" in readme

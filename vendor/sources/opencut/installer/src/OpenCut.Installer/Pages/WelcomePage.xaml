@@ -1,0 +1,134 @@
+<Page x:Class="OpenCut.Installer.Pages.WelcomePage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:models="clr-namespace:OpenCut.Installer.Models"
+      Background="Transparent">
+
+    <Grid Margin="44,28,44,34">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <ScrollViewer Grid.Row="0"
+                      VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled"
+                      CanContentScroll="True">
+            <Grid Margin="0,0,8,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="1.25*" />
+                    <ColumnDefinition Width="0.95*" />
+                </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0" Style="{StaticResource SetupHeroBorder}" Margin="0,0,18,0">
+                <StackPanel>
+                    <Border Background="{DynamicResource HeroBadgeBrush}" BorderBrush="{DynamicResource HeroBadgeStrokeBrush}" BorderThickness="1"
+                            CornerRadius="6" Padding="10,4" HorizontalAlignment="Left">
+                        <TextBlock x:Name="InstallModeBadgeText" Text="Fresh install"
+                                   Foreground="{DynamicResource Blue}" FontSize="11"
+                                   FontFamily="{DynamicResource UIFont}" FontWeight="SemiBold" />
+                    </Border>
+
+                    <Image x:Name="Logo" Source="/Assets/logo.png" Width="76" Height="76"
+                           AutomationProperties.Name="OpenCut logo"
+                           RenderOptions.BitmapScalingMode="HighQuality"
+                           HorizontalAlignment="Left" Margin="0,24,0,16"
+                           Opacity="0">
+                        <Image.RenderTransform>
+                            <TranslateTransform />
+                        </Image.RenderTransform>
+                    </Image>
+
+                    <TextBlock Text="Install OpenCut" Style="{StaticResource PageTitleText}" />
+                    <TextBlock x:Name="VersionText"
+                               Text="{Binding Source={x:Static models:AppConstants.AppVersion}, StringFormat='v{0}'}"
+                               Foreground="{DynamicResource Blue}" FontSize="14"
+                               FontFamily="{DynamicResource UIFont}" FontWeight="SemiBold"
+                               Margin="0,8,0,0" />
+                    <TextBlock Margin="0,14,0,0"
+                               Text="Set up the local OpenCut server and Premiere panel in one guided flow. When setup finishes, you can open the panel and start working."
+                               Style="{StaticResource BodyText}" />
+
+                    <Border Style="{StaticResource SetupCardBorder}" Margin="0,22,0,0">
+                        <StackPanel>
+                            <TextBlock Text="Premiere panel" Foreground="{DynamicResource TextBrush}"
+                                       FontSize="14" FontWeight="SemiBold" />
+                            <TextBlock Text="Installs the CEP panel and configures Adobe for first launch."
+                                       Style="{StaticResource CaptionText}" Margin="0,4,0,0" />
+                            <Border Height="1" Background="{DynamicResource Surface1}" Margin="0,12" />
+                            <TextBlock Text="Local install" Foreground="{DynamicResource TextBrush}"
+                                       FontSize="14" FontWeight="SemiBold" />
+                            <TextBlock Text="Keeps the server, FFmpeg, and optional tools in one dedicated folder."
+                                       Style="{StaticResource CaptionText}" Margin="0,4,0,0" />
+                            <Border Height="1" Background="{DynamicResource Surface1}" Margin="0,12" />
+                            <TextBlock Text="Ready to launch" Foreground="{DynamicResource TextBrush}"
+                                       FontSize="14" FontWeight="SemiBold" />
+                            <TextBlock Text="Shows install activity, then offers to launch the server."
+                                       Style="{StaticResource CaptionText}" Margin="0,4,0,0" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </Border>
+
+                <StackPanel Grid.Column="1">
+                <Border Style="{StaticResource SetupCardBorder}" Margin="0,0,0,14">
+                    <StackPanel>
+                        <TextBlock Text="Setup Status" Style="{StaticResource SectionTitleText}" FontSize="18" />
+                        <TextBlock x:Name="InstallStatusText"
+                                   Text="No earlier install detected. OpenCut will use the default location and keep the first-run flow simple."
+                                   Style="{StaticResource BodyText}" Margin="0,10,0,0" />
+                        <TextBlock x:Name="InstallPathText"
+                                   Text="C:\Program Files\OpenCut"
+                                   Foreground="{DynamicResource Subtext1}" FontSize="12.5"
+                                   FontFamily="{DynamicResource MonoFont}" Margin="0,14,0,0"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource SetupCardBorder}">
+                    <StackPanel>
+                        <TextBlock Text="What This Setup Includes" Style="{StaticResource SectionTitleText}" FontSize="18" />
+                        <TextBlock Text="OpenCut server + FFmpeg"
+                                   Foreground="{DynamicResource TextBrush}" FontSize="13.5"
+                                   FontWeight="SemiBold" Margin="0,10,0,0" />
+                        <TextBlock Text="Core processing services, local tooling, and launch scripts."
+                                   Style="{StaticResource CaptionText}" Margin="0,4,0,0" />
+
+                        <TextBlock Text="Premiere integration"
+                                   Foreground="{DynamicResource TextBrush}" FontSize="13.5"
+                                   FontWeight="SemiBold" Margin="0,14,0,0" />
+                        <TextBlock Text="CEP panel setup with install-time options for Adobe-friendly configuration."
+                                   Style="{StaticResource CaptionText}" Margin="0,4,0,0" />
+
+                        <TextBlock Text="Optional AI extras"
+                                   Foreground="{DynamicResource TextBrush}" FontSize="13.5"
+                                   FontWeight="SemiBold" Margin="0,14,0,0" />
+                        <TextBlock Text="Whisper models and optional helpers for system Python 3.11-3.14 can be added on the next step."
+                                   Style="{StaticResource CaptionText}" Margin="0,4,0,0" />
+                    </StackPanel>
+                </Border>
+                </StackPanel>
+            </Grid>
+        </ScrollViewer>
+
+        <Grid Grid.Row="1" Margin="0,22,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <Button x:Name="UninstallLink" Grid.Column="0"
+                    Content="Open Uninstaller" Visibility="Collapsed"
+                    Style="{StaticResource LinkButton}" Click="UninstallLink_Click" />
+
+            <Button Grid.Column="2" Content="Cancel"
+                    Style="{StaticResource SecondaryButton}"
+                    Click="Cancel_Click" Margin="0,0,10,0" />
+            <Button x:Name="InstallActionButton" Grid.Column="3" Content="Install OpenCut"
+                    Style="{StaticResource PrimaryButton}"
+                    Click="Next_Click" />
+        </Grid>
+    </Grid>
+</Page>

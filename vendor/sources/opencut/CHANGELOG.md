@@ -1,0 +1,4399 @@
+# Changelog
+
+Notable changes to OpenCut. The git history carries the detailed record.
+
+## Unreleased
+
+### Fixed: the packaged server shipped without its generated manifests
+
+- Every release built with PyInstaller was missing all sixteen files under
+  `opencut/_generated`, because `collect_data_files` gathers one subpackage at
+  a time and the spec named only `opencut.data`. Route validation, feature
+  readiness, extended MCP tools and the CLI route allowlist all quietly fell
+  back to defaults, and the only visible sign was one warning about
+  `route_manifest.json`. Reported in issue #8.
+- The spec now derives the data-bearing subpackages from the source tree, so a
+  new one cannot be forgotten, and the server reports every missing manifest at
+  startup instead of degrading in silence. A test compares the built artifact
+  against the source tree.
+
+### Fixed: saved editing defaults are applied again
+
+- A survey keyed on the stored file rather than the accessor found seven
+  settings under `~/.opencut` that reached no consumer. Changing the chapter
+  count, the minimum multicam cut length, the footage-index transcription model
+  or the loudness target in Settings saved the value, served it back, and then
+  the job used a literal instead.
+- Those four now reach the work. Two more, colour-match profiles and auto-zoom
+  presets, have no reader anywhere on either side and are recorded for removal
+  with a migration that cleans them off disk.
+- A new registry states what every persisted setting is for, and a test fails
+  when a stored setting has no consumer or a route stops reading one.
+
+### Fixed: the live-updates bridge reported success before it was listening
+
+- Starting the bridge answered "running on port 5680" the moment the thread was
+  spawned. If the port was taken, the bind failed a moment later, the error was
+  logged and dropped, and the panel sat waiting on a socket that never existed.
+  `/ws/status` reported a plain "stopped", so a port collision looked the same
+  as a bridge nobody had started.
+- Starting now waits for the bind and reports what happened, including the port
+  actually bound rather than the one requested. A failure comes back with its
+  reason and stays readable afterwards. The CEP panel connects to the reported
+  port instead of assuming 5680, which mattered because the backend searches
+  5680-5689 and skips the HTTP port.
+
+### Fixed: the release provenance document described a policy the code had abandoned
+
+- It told readers a tagged FFmpeg release `>= 8.1.1` was acceptable on an open
+  release lane. The code had closed that lane outright, raised the floor to
+  8.1.3, moved the snapshot floor to 2026-07-06, and the installers had moved to
+  a 2026-08-03 git snapshot. Four statements, all wrong, and the test guarding
+  the document asserted the stale strings literally so it kept passing.
+- The document now states the real policy, and
+  `python -m opencut.tools.check_provenance_docs --check` compares it against
+  the code on every release. Changing a floor, a lane, or a bundled pin without
+  updating the document fails the gate and names the field. The same check
+  covers advisory waivers and the recorded dependency floor raises.
+
+### Fixed: the console no longer warns about a production deployment
+
+- A loopback server printed "WARNING: This is a development server. Do not use
+  it in a production deployment." on every start, plus a second copy of the
+  address OpenCut had already printed. One user pasted that into a bug report
+  about something else entirely.
+- The same threaded server still handles loopback traffic; it is just built
+  without the banner. `/system/status` now reports which server is running, so
+  a bug report can say. Remote binds still use Waitress.
+
+### Added: the Adobe version snapshot can go stale loudly
+
+- `adobe_premierepro_versions.json` records when it was captured and nothing
+  ever read it, so the file sat untouched for months while the UXP migration
+  was planned against it. The release gate now fails when it is more than 90
+  days old, and distinguishes that from a snapshot whose upstream fetch failed.
+
+### Added: the UXP panel now installs
+
+- Every installer shipped only the CEP panel while the README advertised a UXP
+  one for Premiere 25.6+. Adobe ends ExtendScript support in Premiere Pro in
+  September 2026 and the CEP panel routes every host mutation through it, so the
+  only installable panel was the one being retired.
+- `install.py`, `Install.ps1`, the Inno Setup script and the Windows installer
+  all place the UXP panel now, and all of them remove it again on uninstall.
+  `python -m opencut.tools.build_uxp_ccx` builds a distributable package.
+- Premiere ignores a plugin installed this way until you enable Settings >
+  Plugins > Developer Mode, which is a preference no installer can set. The
+  README says so. Signed `.ccx` distribution through Creative Cloud needs an
+  Adobe identity this project does not have yet.
+
+### Fixed: the plugin registry pointed at a namespace the project does not own
+
+- The marketplace fetched its index from `raw.githubusercontent.com/opencut/...`.
+  That GitHub organisation exists and belongs to someone else, and the
+  repository did not exist at all, so whoever created it would have become the
+  plugin index for every OpenCut install.
+- The default now sits in a namespace the maintainer controls, and the index
+  itself has to carry a signature from a key shipped with the release before a
+  single entry is read. An index that fails to verify is refused and does not
+  replace the last one that passed. Since each entry supplies its own publisher
+  key, and publisher trust is granted on first use, nothing installs from an
+  index that was not authenticated.
+
+### Fixed: a packaged server no longer borrows another Python's packages
+
+- The frozen build used to run the first `python` it found on PATH and import
+  whatever site-packages that interpreter reported. When the versions did not
+  match, a native module compiled for the wrong Python aborted the process with
+  no traceback, which is how the server "just stopped" in issue #8. It also
+  meant any writable folder on PATH containing a python.exe got executed at
+  startup.
+- Optional dependencies now come from the bundled runtime and
+  `~/.opencut/packages`. Borrowing an external interpreter is opt-in through
+  `OPENCUT_EXTERNAL_SITE_PACKAGES`, and even then its Python version has to
+  match the build's.
+
+### Added: crash records
+
+- `~/.opencut/crash.log` was read by the crash packet, the issue reporter and
+  the crash-log download, and written by nothing. An unhandled exception in any
+  thread now leaves a record there, and a native crash leaves a faulthandler
+  traceback, both with the loaded paths that would explain a bad import.
+
+### Fixed: GPU install instructions named a CUDA build too old for current cards
+
+- The README, requirements.txt, the source installer and the FlashVSR hint each
+  pointed at the CUDA 12.1 wheel index, which has no kernels for RTX 50-series
+  cards, so following the documentation produced the exact failure in issue #7.
+  All four now come from one place and name a build that covers current
+  hardware, with a test that fails if they drift apart again.
+
+### Fixed: two servers could bind the same port on Windows
+
+- The port check set `SO_REUSEADDR` before binding, which on Windows also
+  allows binding over a socket another process is actively using. A busy port
+  read as free, a second server started on it, and the second overwrote the PID
+  file that pointed at the first. The panel saw the result as intermittent
+  "service unavailable". Also reported in issue #8.
+- A live listener is now detected directly, TIME_WAIT sockets left by a killed
+  server are still reusable, and OpenCut refuses to start a second server
+  against a running one rather than moving to another port and sharing its
+  databases.
+
+### Fixed: a supported GPU reported as unavailable
+
+- Selecting an RTX 50-series card failed every job with "GPU index 0 is not
+  available", while listing index 0 as available in the same sentence. The
+  adapter was fine; the installed PyTorch build simply had no kernels for it.
+  Reported in issue #7.
+- Adapters now carry their compute capability on both detection paths, and
+  OpenCut checks it against the architectures the installed build was compiled
+  for. An adapter the build cannot run is reported as such in Settings before a
+  job starts, and the message names the wheel that would work instead of
+  suggesting a different device. ONNX Runtime is no longer asked for a CUDA
+  provider that a CPU-only install does not have.
+
+## 1.55.1: Installer crash fix
+
+### Fixed: setup no longer dies on the Options page
+
+- Clicking Next on the License page could kill the installer with an unhandled
+  NullReferenceException before the Options page ever drew. WPF raises change
+  events while a page is still being constructed, and the disk-space estimate
+  ran against controls that didn't exist yet. Reported in issue #6.
+- The Complete page carried the same latent pattern on its launch checkbox.
+  Every state-change handler in the setup pages now waits until the page has
+  finished building, and a test keeps it that way.
+
+## 1.55.0: The workspace gets out of the way
+
+### Changed: hierarchy replaces decoration
+
+- CEP and UXP now share a quieter editorial system built from flat sections,
+  hairline dividers and one clear accent colour. Decorative card outlines,
+  shadows and rounded containers no longer compete with the work.
+- Body text and controls start at 14 pixels. Page titles, section labels,
+  supporting copy and metadata now have distinct sizes and weights.
+- The desktop header is 56 pixels tall, the navigation rail is 164 pixels wide
+  and standard controls are 34 pixels high with a 4 pixel corner radius.
+- Section spacing is tighter and more consistent. Labels align beside their
+  controls on wide panels, then stack cleanly when the panel narrows.
+
+### Changed: each page shows less, but says more
+
+- Duplicate descriptions, repeated connection summaries and ornamental status
+  pills are gone. Status text remains available where it affects the next
+  action.
+- Settings opens on the controls themselves instead of an overview card. Value
+  readouts and trust states use plain text rather than nested badges.
+- The Cut page keeps media selection in one compact row and gives the selected
+  source a larger preview area. Repeated media actions were consolidated.
+- Search, Deliverables, Agent and command-palette empty states now use short
+  prompts and quieter metadata instead of stacks of outlined boxes.
+
+### Fixed: responsive state still behaves like the application
+
+- Clip controls remain reachable before a clip is selected, so timeline and
+  file selection still work from a fresh panel.
+- Collapsible sections now honour their closed state even when the shared layout
+  assigns a grid display.
+- The current page title remains visible in narrow UXP panels.
+
+### Tested: every supported presentation state
+
+- Ten page references under `extension/design/quiet-editor-system-v2/` cover
+  Cut, Captions, Audio, Video, Timeline, Search, Deliverables, Agent, Settings
+  and Export.
+- The headless rendered suite checks CEP and UXP across wide and narrow sizes,
+  dark, light, automatic and forced-colours states. All 72 checks pass.
+
+## 1.54.0: The panel can talk to its backend again
+
+### Fixed: the CEP panel can obtain a security token again
+
+- The panel built its bootstrap-secret reader with a host-bridge wrapper
+  captured at script-evaluation time, before the bridge existed, so the reader
+  was permanently inert. Every action then failed with "Invalid or missing CSRF
+  token". The reader now resolves the bridge when it is called.
+- A panel that starts before the backend has written its secret now re-reads it
+  and retries once when the server withholds the token, instead of staying
+  broken until the panel is reloaded.
+
+### Fixed: the light theme is readable again
+
+- Settings-tab text that carried dark-only colour values rendered on the light
+  background at contrast ratios near 1:1, which meant the Plugin Trust,
+  Dependency Health, model inventory and journal empty states showed as blank
+  space. They now use the theme's own text colours.
+- Input placeholders, muted body text, keyboard-shortcut chips, the About links
+  and the Settings checkbox labels all clear the AA contrast bar in light mode.
+
+### Fixed: the media buttons on the Cut tab are reachable at every panel width
+
+- "Browse File…" and "Use Timeline Selection" were cut off with no scrollbar at
+  any panel width between roughly 700 and 1270 pixels, which includes the size
+  the panel opens at by default. The row wraps now, so every button stays on
+  screen.
+- The connection summary beside it no longer truncates mid-word: "Reconnect
+  backend" was rendering as "Reconnect backer".
+
+### Fixed: flags sent as text are honoured
+
+- Turning an option off in a request that spelled the value as text was
+  ignored on 21 endpoints, so opting out of the heavy lip-sync and
+  voice-conversion models, or out of automatic fingerprint indexing, ran them
+  anyway.
+
+### Changed: two test gates that were passing while broken
+
+- The ExtendScript host harness now runs as part of the release gate. It had
+  been failing on a clean checkout with nothing to run it.
+- The Premiere-plugin half of the panel lint now fails on warnings instead of
+  reporting success and moving on.
+
+
+### Changed: the panel matches Premiere's appearance by default
+
+- New installs now follow whether Premiere is running its light or dark skin,
+  instead of always opening dark. The setting is under Settings, Appearance,
+  and choosing Light or Dark explicitly still overrides the host.
+
+### Fixed: the connection summary reads properly at any panel width
+
+- The three-column summary beside the media buttons squeezed each value down to
+  two or three characters at the default panel size. It now uses as many
+  columns as actually fit.
+
+### Changed: more of the queue is usable
+
+- 552 of the 769 background operations were rejected by the job queue even
+  though they ran fine when started directly. All of them can be queued now,
+  apart from publishing, storage moves, plugin installs, agent planning and
+  live preview, which are listed with the reason each one is excluded.
+
+### Changed: quieter, plainer wording in the panel
+
+- Panel copy no longer uses dashes mid-sentence or reaches for "unlock" where a
+  plain verb reads better.
+
+## 1.53.0: A quieter editor shell
+
+### Changed: One visual system across every page
+
+- Simplified CEP and UXP typography, spacing, borders, and control grouping.
+- Reworked the rendered pages around a flat dark-first workspace with hairline
+  section rules, one clear primary action, and readable labels.
+- Added the quiet editor reference mockup at
+  `extension/design/quiet-editor-system-v1/cut.png`.
+
+### Tested: The shared shell stays aligned
+
+- CEP and UXP load byte-identical shared workbench styles.
+- Full headless rendering passed 69 checks with one documented forced-colors
+  skip.
+
+## 1.52.0: The panels report what is actually happening
+
+### Changed: The workspace opens on live state
+
+- CEP and UXP no longer mount a fabricated project, workstation, queue, or
+  recent job. The opening view now keeps the real connection state and gives
+  people a clear route into their live workspace.
+- Both panels share the same shell source and regression guard, so one host
+  cannot quietly drift back to placeholder state.
+
+### Improved: The workbench is calmer at every size
+
+- Reworked the header, workspace context, action hierarchy, empty states, and
+  status surfaces across dark and light themes. Narrow panels keep the same
+  actions without crowding or clipped labels.
+- Focus, disabled, selected, reduced-motion, and forced-colors states now stay
+  legible in the live shell. Forty rendered references were refreshed against
+  the finished state.
+
+### Improved: The Windows installer explains risk before acting
+
+- The WPF installer now uses one visual system across welcome, install,
+  progress, options, and uninstall pages. Scrollbars, shadows, warning states,
+  and progress feedback follow the active theme.
+- Unsafe or already-populated install paths are blocked inline with a useful
+  recovery message. Uninstall data removal is explicit and runs only after the
+  existing backup step, without opening a confirmation dialog.
+
+### Fixed: Regional UXP locales stop probing files that do not ship
+
+- Locale requests now resolve to the bundled English or Spanish catalogue
+  before loading. Regional browser settings no longer generate avoidable 404s.
+
+### Tested: Release checks exercise the finished surfaces
+
+- Added boundaries against fabricated panel state, stale forced-colors
+  selectors, unsafe installer paths, and confirmation-dialog regressions.
+  Headless CEP and UXP rendering now verifies the live shell in wide, narrow,
+  dark, light, and forced-colors configurations.
+
+## 1.51.0 - The copy the panels actually ship
+
+### Fixed - The MCP route catalogue is checked against the app, not just itself
+
+- `dump_mcp_extended_tools --check` compares the committed catalogue to a
+  freshly generated one, so deleting a route handler updated both sides and
+  stayed green. Every one of the 1,467 generated tools is now checked against
+  the app's own view functions and URL rules, and one GET per route family is
+  dispatched through the real backend instead of a stub.
+
+### Fixed - Greyed-out controls say what they are waiting for
+
+- The Timeline, Deliverables and Rename actions ship disabled and, until now,
+  silent: no tooltip, nothing for a screen reader, no hint that the panel
+  wanted a clip or a loaded sequence. Each one now carries the precondition
+  it is actually waiting on, shown while it is disabled and replaced by its
+  own tooltip once it becomes usable.
+
+### Fixed - The UXP progress bar is visible in the light theme
+
+- The progress track was a 7.5% white wash and the fill was the dark accent
+  gradient, both of which vanish on a light card. CEP got its light
+  counterparts in the F369 pass; UXP did not, and no test noticed because the
+  rendered goldens are all dark-theme captures. Both panels now flip.
+
+### Fixed - The English next to a locale key is gated too
+
+- The fallback string in every `t(key, fallback)` call is what users read
+  when the locale has not loaded, and 35 of them disagreed with en.json. A
+  whole family still called the local service "the server" where the locale
+  says "backend", including the two connection-dot aria-labels. They now
+  match, and `scripts/i18n_lint.py` fails on any that drift again.
+- Two keys were being used for the wrong string. The speech-enhancement
+  status line printed a literal "{output}" because its locale value carried
+  a placeholder the caller never filled, and the issue-report flow threw one
+  key's message into the handler that formats the same key, so the detail
+  read "Issue report could not be opened: {error}".
+- The Spanish update-check message told people to click "Check Again" on a
+  panel whose button reads "Comprobar de nuevo".
+- One noun for the search index on both panels: the flow from the Clear
+  Index button to the toast says "footage index", and "footage library"
+  means the media it is built from. The Whisper model dropdowns in Settings,
+  Captions, and filler detection use one label per model.
+
+### Changed - Status copy reads as sentences, not dashes
+
+- Twenty-six status lines joined two clauses with a spaced hyphen: "Search
+  ready - 12 results.", "Job queued - watch the progress bar above.". They
+  are two sentences now. The Whisper model dropdown in Settings uses the same
+  parenthetical labels as the captions dropdown instead of a third format.
+- The compact status lines that genuinely join fields (a chapter's timecode
+  and title, a publisher and its fingerprint) keep the separator and are
+  listed by key in the test that enforces the rest.
+
+### Fixed - Failures say what to do next
+
+- Nine strings across the two panels showed "Error: " and the raw backend
+  message with no next step, and five more substituted the words "Unknown
+  error" into a sentence. They now name a recovery: reconnect Premiere from
+  the status bar, re-export the interchange file, refresh engine
+  availability, check the backend status in Settings. The raw detail moves to
+  the end of the sentence, the way the panel's other recovery copy already
+  did it.
+
+### Fixed - Restart Backend and Clear Cache ask first
+
+- Restart Backend posted `/shutdown` on the click, so a misclick in Settings
+  dropped every running and queued job with no way back. Clearing the Whisper
+  model cache was the same one-click delete. Both now open the panel's own
+  confirm dialog, name what stops or gets deleted, and back out on Escape or
+  a click outside the card.
+
+### Fixed - CEP collapsible card headers work from the keyboard
+
+- Section headers on the CEP panel toggled on click only. They had no button
+  role, no tab stop, no announced expanded state, and no Enter or Space
+  handling, so keyboard and screen-reader users could not open the Settings
+  subsections UXP already exposed. The toggle moved into
+  `client/collapsible-cards.js` with the semantics UXP uses, and the header
+  now shows a focus ring.
+
+### Fixed - First-paint panel text matches what the locale says
+
+- Both panels ship English text inline next to every `data-i18n` key. That
+  copy is what users see before i18n finishes loading and whenever a key is
+  missing, and 123 of those strings had drifted away from the locale value,
+  some far enough to rename a feature: the Cut workspace heading read "Studio
+  Workspace" where the locale said "Cut Pass", four caption dropdowns were
+  labelled "Whisper Model" against a locale that says "Model", and the
+  connection dot said "Server disconnected" while the locale said "Backend".
+- `scripts/i18n_lint.py` now compares every inline fallback (and every
+  translated `title`, `alt`, `placeholder`, `label`, `aria-label`) against
+  en.json for both panels and fails on any disagreement, so the two cannot
+  drift apart again.
+- The four different sentences describing one update-check retry now all name
+  the button that actually exists, "Check Again". Two of them told people to
+  click Refresh, which is not on that card.
+
+### Changed - One name per thing across both panels
+
+- The shorts feature is called Magic Clips wherever it appears. It used to be
+  "Auto Shorts" on the CEP tab, "Shorts Pipeline" in UXP, and "Magic Clips"
+  in the toasts both panels raise about it.
+- Filler cleanup is "Remove Filler Words" on both panels instead of "Clean
+  Filler Words", "Clean Fillers", and "Detect & Remove Fillers".
+- The Clear Index flow says "footage index" from the button through the
+  confirm dialog to the toast. The confirm used to be titled "Clear footage
+  search library?" with a "Clear Library" button and a "Footage index
+  cleared" toast.
+- The local service is the backend, not the server, in the two UXP strings
+  that still called it one.
+- Both settings cards for engine preferences are called Engine Routing.
+- Captions burn-in is "Burn-In" everywhere it is a label, and the Whisper
+  model dropdown in UXP uses the same readable labels as CEP instead of raw
+  model ids.
+- Model names match upstream: Mel-Band RoFormer, BS-RoFormer, Real-ESRGAN.
+- faster-whisper install failures name faster-whisper, matching the rest of
+  that flow.
+
+### Fixed - Copy mechanics: one ellipsis, one FCC sentence, no stray placeholders
+
+- Both panels now write "…" everywhere instead of mixing it with "...". The
+  CEP locale had 26 ASCII holdouts against 101 typographic ones; UXP had it
+  the other way round in its locale while its own HTML already used "…". The
+  shipped fallback strings in HTML and JS moved with the locale values.
+- The UXP FCC caption notice was two locale keys concatenated around a bare
+  date span, so no translator could reorder the sentence and the opening
+  parenthesis had no partner in either key. It is one string with a {date}
+  slot now, rendered once at init and again when the backend reports its own
+  compliance date.
+- "Step 1/2: " no longer hides its separating space at the end of a locale
+  value where the first translator to trim would run the prefix into the
+  step label. The join owns the space.
+- Clip pickers say "Select a clip…" instead of "-- Select a clip --", and
+  the status strip says "GPU: N/A" / "Jobs: N/A" rather than two dashes,
+  matching the "N/A" it already used elsewhere.
+- The cancel-failure toast dropped its curly apostrophe and em dash, and the
+  UXP install-status lines say what they mean: "Not installed. faster-whisper
+  installs on first use."
+
+### Fixed - Cancel actually stops FFmpeg and queued work
+
+- `run_ffmpeg` now registers the worker thread's job when callers forget to
+  pass `job_id`, so Cancel kills the child instead of leaving it running
+  until the encode finishes.
+- Shorts A/B variants poll cancellation between renders and stop the rest of
+  the set rather than finishing every variant after the user hit Cancel.
+- A queue entry that hits the stuck-job timeout now cancels the child job
+  instead of marking the queue failed and leaving the worker occupied.
+- If the worker pool refuses a new job (for example during shutdown), the
+  job record is marked error immediately. It used to sit in `running` until
+  the two-hour stuck-job sweeper noticed.
+
+### Fixed - UXP Apply actually runs the matched command
+
+- Natural-language parse returns `{route, params, confidence}`. Apply only
+  knew how to send cuts and markers to Premiere, so the common match (silence
+  removal, fillers, transcribe) showed the JSON and then a dead-end toast.
+  Apply now posts the matched route on the current clip, the same way CEP
+  already did after the confirm dialog.
+
+### Fixed - Light theme no longer keeps dark chips, menus, and waveforms
+
+- The CEP light-theme section had an unprefixed dark chrome block sitting
+  inside it, so stage-card icons, feature-gated badges, progress tracks,
+  wizard checkbox hover, footage-search selection, and dropdown shadows
+  stayed dark-on-light. Those rules are now scoped or given light
+  counterparts, and the waveform canvas reads theme tokens.
+- Studio workbench clips, sequence chips, and result thumbs now flip with
+  the light timeline in both panels. The workbench action focus ring is a
+  real outline instead of a 10% alpha glow.
+- UXP toasts, onboarding, idle status pills, result paths, and the
+  workspace guide kicker no longer keep near-white ink on light surfaces.
+  Number keys 1-8 switch CEP tabs from the page, not only when the body
+  itself is focused.
+
+### Fixed - User-facing copy no longer names internal IDs
+
+- Apply, settings, and caption strings no longer tell people to regenerate
+  F260, call ocAddNativeCaptionTrack, send `/video/shorts-pipeline`, or
+  type confirm_token. Plugin uninstall still asks for the plugin name;
+  migration failures ask for a reinstall; captions talk about Premiere
+  tracks. Pointillism and Spanish Pestañas are spelled correctly.
+
+### Fixed - Third-party XML imports refuse DTDs
+
+- Final Draft `.fdx` and GPX tracks are size-capped and rejected if they
+  carry a DTD or entity declaration, matching the caption interchange
+  guard. A crafted file can no longer expand entities in the local server
+  process.
+
+## 1.50.0 - Gates that mean something
+
+### Changed - The UXP route gate says something again
+
+- The gate that checks CEP routes against the UXP panel had been failing on
+  113 routes for long enough that its colour carried no information. Calling
+  them exclusions would have turned it green by retiring work nobody decided
+  to drop, so they are now recorded as UXP-pending instead, grouped into nine
+  families with a written reason each. A CEP route that is in neither the
+  covered, excluded, nor pending set still fails the gate, so a new route
+  cannot ship unclassified, and a floor stops the pending list growing
+  without someone raising it on purpose. Porting a route lowers the count.
+
+### Fixed - A failing release gate now says why
+
+- `release_gate.py verify` held every step's captured output and raised with
+  the failing step's name alone, which is how an intermittent
+  `panel-rendered` failure went unattributable. The failed payload is written
+  to `build/release-failure.json` and the failing steps' output goes into the
+  error itself. It cannot be mistaken for a receipt: different filename,
+  `fail` status, and `validate_receipt` refuses it.
+
+### Fixed - Release notes state the tool count that shipped
+
+- The MCP catalogue was resynced from 88 to 98 tools inside the 1.49.0
+  window. The manifest and the generated documentation block both moved and
+  the release note did not, so it advertised a count that release never
+  shipped. A scoped check now compares the claim in the current version's
+  section against the registry.
+
+### Changed - The name reads clearly where people meet it first
+
+- The README title and the repository description now use **OpenCut for
+  Premiere Pro**. The naming section already settled that the product keeps
+  the name OpenCut and that the qualified form is used wherever a name has to
+  stand on its own, which is exactly what a page title and a search result
+  are.
+
+### Changed - Two promised measurements are now actually measured
+
+- The cut-boundary fade was covered by tests that checked the filter string
+  and never listened to the result. A tone is now rendered across a real cut
+  and the sample-level step at the join is measured: without the fade the
+  splice jumps further than the waveform ever moves on its own, with it the
+  join disappears into that motion.
+- Batched transcription was claimed to preserve word timestamps and segment
+  shape. Decoding the same speech both ways shows the words and their timings
+  agree while the segmentation does not, because the batched pipeline
+  re-windows the audio. The test pins the word-level contract captions
+  actually rest on and records the segment difference as expected.
+
+## 1.49.0 - Local Qwen3-VL video scoring
+
+### Added: Local Qwen3-VL video scoring
+
+- `/analyze/video/qwen3vl` now uses a local Ollama vision model when the
+  requested Qwen3-VL model is installed. The route reports a dependency-gated
+  503 with an install hint when Ollama is unavailable.
+- Analysis samples decision-point frames for each transcript segment and
+  returns transcript and visual scores with a fixed 65% transcript, 35% visual
+  relevance blend. Highlights now send sampled frames to local Ollama vision
+  models without requiring an API key.
+- Added the Qwen3-VL model card and regenerated route, readiness, and model
+  inventories. The shipped route count is now 1,564, with 29 terminal stubs
+  remaining.
+
+### Added - The largest route families now have named entry points
+
+- Added an `opencut surfaces` catalog for the CLI route command, ten command
+  palette entries, and ten curated MCP tools covering the ten largest
+  integration-only families measured at the start of F354.
+- Regenerated the route, MCP, agent-skill, and extended-tool manifests. Direct
+  surface coverage rose from 17.9% to 19.8%, and the CLI now owns ten primary
+  route surfaces instead of zero.
+
+### Added - The release lane now carries a PEP 751 lock
+
+- Added the generated `pylock.toml` for the current Windows Python 3.13
+  release lane, sourced from the universal hashed release lock.
+- Release smoke now validates the PEP 751 package set and artifact hashes
+  offline. The existing universal lockfiles remain the source for cross-platform
+  lanes and are checked as the authority behind the new artifact.
+
+### Fixed - The UXP panel now reaches its rendered test surface
+
+- Moved host-write verification setup before cut-executor construction. The
+  previous order raised a temporal-dead-zone error during module startup, so
+  UXP never wired its tabs, readiness controls, or live fixtures.
+- Refreshed the 37 Chromium visual baselines after inspecting the stable 2 to 4
+  percent machine rendering drift. The normal rendered gate now passes 62 cases
+  with one intentional skip at the existing 1 percent comparison threshold.
+
+### Fixed - The panel's npm dependency audit is clean
+
+- Raised the panel overrides for `brace-expansion`, `js-yaml`, and `nanoid` to
+  their fixed releases. The committed npm lockfile now installs without any
+  reported advisories.
+
+### Fixed - The plugin verifier no longer pins vulnerable cryptography
+
+- OpenCut now requires `cryptography` 50.x, which fixes three certificate and
+  PKCS#7 verification advisories reported against the old 48.0.1 lock. The
+  simple and hash-pinned dependency locks are synchronized to 50.0.0.
+
+### Fixed - Five features told you to install packages that would not have helped
+
+- OmniVoice TTS, ROSE inpaint, Sammie-Roto, ReEzSynth and FlashVSR were listed
+  as needing an install, with `pip install rose-inpaint` and similar shown as
+  the command to run. Those package names were placeholders, and the routes
+  return "not implemented" even with a dependency present, so no install could
+  ever have switched them on. They are now described as what they are: routes
+  that have not been built yet. The readiness check behind them reads the
+  handler rather than guessing from an install hint, so a route that answers
+  "not implemented" can no longer be advertised as one dependency away, and an
+  info or models endpoint sitting next to an unbuilt feature no longer makes it
+  look available.
+
+### Fixed - Three routes were missing from the MCP and OpenAPI catalogues
+
+- Queue coverage and the two APV encode routes shipped without the generated
+  catalogues being refreshed, so clients enumerating tools saw 1,474 instead of
+  1,477 and the OpenAPI contract described 1,593 operations against a live
+  1,596.
+
+### Fixed - Cuts that only cover part of a clip now actually cut on Premiere 26.3
+
+- The UXP panel could only remove clips that fell entirely inside a cut range.
+  Anything overlapping an edge fell through to Premiere's older ripple delete,
+  which on 26.3 reports success and changes nothing, so those cuts quietly did
+  not happen. A clip crossing one edge of the range is now trimmed back to that
+  edge with its source point corrected, in the same undoable step as the
+  removals, and the cut range is left empty without shifting anything else.
+  Cutting a hole in the middle of a single clip still needs a razor that
+  Premiere's scripting API does not offer, and is still reported rather than
+  attempted. Every cut is checked against the exact clip boundaries it was
+  supposed to produce; if the timeline disagrees, the run stops there and says
+  what it found instead of piling more edits on top. Non-destructive mode never
+  trims, since the point of it is keeping the media.
+
+- The older CEP panel had the same gap and now cuts the same ranges the same
+  way. Before this, a reviewed cut gave you a different timeline depending on
+  which panel you had open, and the one most people are running was the one
+  leaving cuts unmade. Both panels now refuse the same case for the same
+  reason, and both check the result against the clip boundaries they promised.
+
+### Fixed - Reconnect message called the backend a server
+
+- The panel says "backend" everywhere else. One error toast said "server",
+  which is the term the docs deliberately avoid because it reads like
+  something remote.
+
+### Added - The share of routes you can actually reach can no longer fall
+
+- Only 280 of the 1,563 shipped HTTP routes are reachable from the panels, the
+  command palette, the CLI, or the MCP catalogue. That number has been measured
+  and printed for a long time while quietly sliding, because nothing checked
+  it. The release gate now holds it: coverage can't drop below where it stands
+  today, and a route family that ships reachable from nothing has to either get
+  a surface or have someone write down why it doesn't have one. Improving the
+  number is never a failure. The check also prints the ten biggest unreachable
+  families, which is what a decision about triaging or dropping them needs.
+
+### Added - Repeat detection now says which take to keep
+
+- Finding repeated takes told you where they were but not which one was any
+  good, so review had nothing to preselect and the tool always assumed the
+  last attempt won. Each group of attempts is now ranked on hesitation words,
+  whether the sentence was finished, and how steady the delivery was, and the
+  review list preselects the best one and cuts the rest. It works with nothing
+  configured; a language model can override the pick, and when one is absent
+  or fails the reason is shown rather than hidden.
+
+
+### Added - Coding agents get told how the MCP server works
+
+- The MCP server exposes 98 tools, and an agent meeting them for the first
+  time had to work out the house rules from raw schemas every session: that a
+  tool may hand back a job rather than a result, that edits are proposed and
+  reviewed before anything touches the timeline, and that configuration routes
+  are left out on purpose. Those rules, a map of the tools by what they do,
+  and a worked transcribe-review-export run now ship alongside the server and
+  regenerate from the tool list, so they cannot drift away from it.
+
+
+### Changed - Licence metadata follows the current packaging standard
+
+- The project declared its MIT licence in the form Python packaging deprecated,
+  alongside a classifier saying the same thing a second time. Both are now a
+  single SPDX expression with the licence file named explicitly, so tools that
+  read the package get one unambiguous answer instead of two partial ones.
+
+
+### Added - Check what you downloaded
+
+- OpenCut is not code-signed, so Windows shows a warning on every install and
+  every update, and nothing vouches for the file you fetched. The install
+  documentation now says that plainly, shows the exact clicks to get past the
+  warning, and gives the command to check the file. Releases carry a digest
+  file listing the SHA-256 of every downloadable artifact so you can compare
+  before running anything.
+
+
+### Added - A caption fix no longer re-renders the whole video
+
+- Editing one caption and burning in again re-encoded the entire timeline,
+  which is the single most repeated complaint about captioning in Premiere.
+  A re-burn now works out which stretches of the video the edit actually
+  changed, re-encodes only those, and copies the rest straight from the
+  previous render, so the untouched footage comes back byte for byte
+  identical. A one-cue edit in a minute of 720p footage finished in about
+  two fifths of the time a full re-render took, and the saving grows with
+  the length of the video.
+- Burn-in output now carries a regular keyframe every couple of seconds.
+  Without it a short render can end up with a single keyframe and there is
+  nowhere to cut, so the first edit would have had to re-render everything
+  anyway.
+- When the edit touches too much of the video to be worth splitting up, or
+  the pieces cannot be joined cleanly, it falls back to a full render and
+  reports why rather than returning a timeline of the wrong length.
+
+
+### Fixed - Face detection was broken by the OpenCV version OpenCut declares
+
+- OpenCV 5 removed the Haar cascade API and ships no bundled cascade files.
+  Two features gated on that file existing rather than on whether a detector
+  was available, so on the declared wheel `detect_face_in_image` reported a
+  face filling the whole frame for every image, including images with no face
+  at all, and screenshot framing dropped all face regions. Both now ask the
+  compatibility layer for a working backend, which prefers YuNet. The morph-cut
+  path also read a cascade flag constant that no longer exists.
+
+### Fixed - One-line edits produced whole-file diffs
+
+- The repository stores text with LF, but nothing declared that, so editors on
+  Windows quietly rewrote entire files. A single added translation string had
+  landed as a 5,745-line change, which buries real edits in noise. A line
+  ending policy now covers the source types this project edits, with Windows
+  batch files and binary assets called out, and the stored text was normalized
+  in one mechanical pass.
+
+### Security - Every known FFmpeg advisory is now graded
+
+- The bundled FFmpeg check graded 5 of the 17 advisories it knew about and said
+  so, which was honest but left twelve unanswered. Each remaining advisory now
+  carries the upstream commit that fixed it, confirmed against the FFmpeg
+  repository to exist and to touch the component the advisory names, plus the
+  date it landed. The check also reports the components a build does not
+  compile in, so a build that cannot reach the affected code is cleared on that
+  basis rather than on its version number.
+
+### Added - Apply reviewed cuts without deleting anything
+
+- Cut review offered only "remove the clips" or "do nothing", and editors are
+  right to be wary of automatic deletion. Cuts can now be applied as disabled
+  clips instead: nothing leaves the timeline, and any clip can be switched back
+  on in Premiere. The check that confirms a write actually happened was
+  extended to notice this, since disabling changes no clip count or boundary.
+  Disable mode never quietly deletes instead. A range it cannot express that
+  way is skipped and reported.
+
+### Changed - Timeline cuts use the current Premiere editing API
+
+- Applying cuts went through a call that newer Premiere builds accept and then
+  ignore. The panel now uses the documented editing action, run as a single
+  undoable step. Ranges that cut into the middle of a clip still use the older
+  path, and the result says which was used, so a cut that took the older route
+  is visible rather than silent.
+
+
+### Fixed - Say where the panel actually appears on Premiere 2026
+
+- Premiere 2026 moved CEP panels to their own **Extensions (Legacy)** menu, so
+  an install that worked perfectly looks like it failed: the plain Extensions
+  menu is empty. Nothing in the docs mentioned it, and the same confusion has
+  been filed as a bug against comparable projects. The launch steps, the
+  troubleshooting section, and both installers' completion output now name the
+  2026 menu path alongside the older one. The naming section was also refreshed
+  against the unrelated browser-based OpenCut, which is now around 85K stars
+  and no longer "relaunching".
+
+### Added - A guardrail against cut lists that make the timeline unusable
+
+- Aggressive silence settings on a long recording produce thousands of tiny
+  clips, and a sequence with that many edits becomes too slow to scrub — which
+  users report as a bug against the plugin that made the cuts. The silence
+  response now reports the edit count and, above roughly 500, says plainly what
+  that costs and what to do instead. An optional `merge_gap` joins cuts
+  separated by less than a given interval before write-back, trading a little
+  retained silence for a sequence that can actually be edited.
+
+### Added - Multicam cutting grammar
+
+- Multicam switching exposed a single minimum-duration knob, which cannot
+  express the things editors actually distrust about automated multicam: it cut
+  only between talking heads and switched to every interruption. Cut generation
+  now takes a wide-shot cadence (by cut count, elapsed time, or both), a
+  cut-on-interruption toggle for overlapping speech, and per-speaker minimum
+  durations. An inserted wide takes its time from the shot it splits so the
+  timeline stays contiguous, and a shot too short to survive being split is
+  left alone. Every option is off by default. The README now states that
+  switching works from a single mixed audio track, which is the thing the
+  paid Premiere alternatives require isolated per-speaker microphones for.
+
+### Added - Silence work can be scoped to in/out points, or tighten instead of cut
+
+- Silence detection took no time range, so it always spanned the whole file and
+  a sequence selection could not be honoured. Detection now accepts optional
+  in/out points and reports only silences inside them, with timestamps still
+  absolute to the source; media outside the selection inverts into one
+  continuous speech segment and is left exactly as it was. A tighten mode
+  shortens each pause to a target duration instead of removing it, keeping the
+  rhythm of speech while dropping the dead air, and anchors the kept portion at
+  the head of the pause so preceding speech never moves.
+
+### Security - A newer FFmpeg release is no longer assumed to carry older fixes
+
+- The advisory gate accepted any release numerically above the last affected
+  one, so FFmpeg 9.0.1 passed on ordering alone. That inference is unsound: the
+  9.0 series branched from master on 2026-06-26, *before* the July 2026 fix
+  commits landed, so a 9.0.x build contains them only if they were backported.
+  Grading now distinguishes a later patch within the affected series (the
+  advisory's own declared fix) from a newer series, which needs its branch point
+  or recorded backport evidence and is refused without either. The release lane
+  is stated as deliberately closed in code with its reason, replacing a comment
+  about an 8.1.3 that upstream never published, and the README no longer tells
+  users to install a version that does not exist.
+
+### Added - Dependencies report whether upstream is still alive
+
+- A package can install and import perfectly while being abandoned, and nothing
+  in the product could say so: OpenCut pip-installed DeepFilterNet on demand
+  years after its last release. Engine entries and the dependency dashboard now
+  carry an upstream URL, last release, last repository activity, and a dated
+  maintenance verdict, each re-verifiable at the recorded URL rather than
+  asserted. Installing an abandoned package still works but warns first and
+  names a maintained alternative, and a test fails if an unmaintained engine
+  ever becomes the highest-priority choice in its domain.
+
+### Added - One canonical source for strings both panels show
+
+- The CEP and UXP panels kept independent locale namespaces sharing only 26 key
+  names, which hid the real overlap: 258 identical English strings sat under
+  different key names across 562 panel keys, so a new language meant
+  translating each of them twice and the copies drifted whenever one panel was
+  edited. `scripts/sync_shared_locales.py` now derives that shared set, records
+  which panel keys own each string, and fails release smoke when a mapped
+  string drifts apart or when new cross-panel duplication is left unregistered.
+  `--propagate LANG` writes one translated file into both panels, so a language
+  is translated once. Call sites are untouched — renaming hundreds of key
+  references across two panels would carry real regression risk for no
+  translator-visible gain.
+
+### Fixed - One lint configuration for the editor, the hook, and the gate
+
+- `[tool.ruff]` declared only line length and target version, so an
+  editor-integrated ruff applied its default rules while the pre-commit hook
+  and the release gate each restated a different selection — the gate's set was
+  strictly larger. The union now lives in `[tool.ruff.lint]` and all three read
+  it. pytest gained `testpaths` and `--strict-markers` so a bare run collects
+  the suite and a mistyped marker fails instead of silently selecting nothing.
+
+### Added - Restoration and Mel-Band separators in the engine registry
+
+- The separator registry listed music-stem models only, while the route's own
+  default model had no registry entry at all and never appeared in engine
+  listings. Mel-Band RoFormer is now registered as the default-priority
+  separator, and the pinned audio-separator package's denoise and de-reverb
+  checkpoints are selectable through the same `model` parameter, with their
+  own output stems. Both are the local answer to metered cloud speech cleanup.
+
+### Fixed - Long-file transcripts flag repetition loops
+
+- Whisper-family decoders degrade on hour-plus audio by looping one phrase for
+  the rest of the file. The result reads as plausible and the cut stage then
+  deletes footage from it, so the failure was silent and destructive. The
+  decoder's anti-degeneration thresholds are now set explicitly instead of
+  inherited, and a backend-independent pass marks runs of near-identical
+  consecutive segments as needing human review, recording the count in ASR
+  provenance. Detection only flags — a looped span still holds whatever the
+  model heard, so nothing is discarded.
+
+### Fixed - The i18n gate follows extracted controllers
+
+- The locale lint scanned a hand-listed set of panel scripts, so extracting a
+  controller out of main.js silently removed its keys from the scan and the
+  gate then reported 35 live keys as dead — the results and update controllers
+  had been invisible to it. The lint and the migration test now read every
+  panel runtime script, which also surfaced nine workflow preflight/approval
+  keys that were consumed but never added to `en.json`. Dead keys and missing
+  keys are both back to zero.
+
+### Changed - The CEP-only host functions carry a dated 26.3 verdict
+
+- The three functions holding up the UXP migration were audited against the
+  pinned Premiere 26.3 typings. Cut application has a typed successor —
+  `SequenceEditor.createRemoveItemsAction`, an undoable Action rather than the
+  bare `rippleDelete()` call measured no-op'ing on 26.3 — now catalogued with
+  its signature. Native caption-track creation has no 26.3 equivalent:
+  `CaptionTrack` only reads, renames, and mutes, and the Transcript import
+  action targets a project item rather than a sequence caption track. QE
+  reflection has no UXP surface at all and is reclassified as retiring rather
+  than porting. Regenerating the manifests also picked up a host function that
+  had been missing from the dashboard since the CSRF bootstrap work.
+
+### Security - The FFmpeg advisory gate states what it did not check
+
+- The per-CVE matrix graded five advisories and reported a clean verdict, while
+  twelve more from the same July 2026 disclosure batch — published against
+  FFmpeg through 8.1.2, including the Vulkan HEVC and VobSub paths — appeared
+  nowhere in the tree. Grading needs a specific upstream fix commit whose
+  ancestry can be checked, so the ungraded remainder is now enumerated instead
+  of being silently absent. `RESULT: OK` reads "clears all 5 graded advisories"
+  and names the 12 it did not check, the verdict carries machine-readable
+  coverage, and a graded entry without a real fix commit fails the suite.
+
+### Changed - The project glossary now reaches the decoder
+
+- Glossary terms were applied as find/replace over a finished transcript, so a
+  name the decoder never emitted in a recognisable form could not be repaired.
+  The glossary's target spellings are now passed to the decoder as hotwords, so
+  the term is recognised in the first place; the find/replace pass still runs
+  as the second layer. A faster-whisper without hotword support falls back to
+  `initial_prompt`, and one with neither transcribes as before. ASR provenance
+  records which layer handled the glossary.
+
+### Added - Long files transcribe through batched inference
+
+- faster-whisper's batched pipeline now decodes audio at or above ten minutes,
+  where upstream reports roughly a 4x speedup and where transcription cost
+  actually lands. Short clips keep the sequential decoder, since batching there
+  buys little and spends VRAM. `batched: false` forces sequential, and
+  `batch_size` / `batch_threshold_seconds` tune the policy. The transcript's
+  ASR provenance records which decoder ran and why, because batched and
+  sequential decoding can segment the same audio differently. A faster-whisper
+  without the batched pipeline transcribes at the old speed instead of failing.
+
+### Fixed - Cut boundaries no longer click
+
+- Rendering a cut splices two non-adjacent waveforms sample-to-sample, and
+  unless both sides sit at a zero crossing the step is audible as a click on
+  every edit. Interior cut boundaries now get a 5 ms fade, measured on a tone
+  fixture to cut the sample discontinuity by roughly 94%. It applies to
+  transcript-driven cut renders, silence speed-up, and dead-time speed ramps;
+  the outer edges of a file are left alone because they are not splices. Send
+  `fade_ms` to change the length or `0` to opt out. Cuts written back to a
+  Premiere sequence are unaffected — Premiere owns those transitions.
+
+### Fixed - CSRF rejections are actionable instead of a dead end
+
+- A refused mutation returned a bare `{"error": "Invalid or missing CSRF
+  token"}`. The panel picks its recovery hint from the structured `code`
+  field, so the message rendered with no way forward — the shape reported in
+  issue #5. Rejections now carry `CSRF_INVALID` plus a suggestion that
+  distinguishes a token that was never issued from one that went stale, the
+  panel maps that code to a reconnect hint, and README troubleshooting names
+  the error string with recovery steps.
+
+### Security - urllib3 floor raised above the 2026-05 advisories
+
+- The declared `urllib3` floor moves from `>=2.6.3` to `>=2.7.0`. The previous
+  floor, chosen for CVE-2026-21441, still admitted CVE-2026-44431 (sensitive
+  headers forwarded across origins on proxied low-level redirects) and
+  CVE-2026-44432 (decompression-bomb safeguards bypassed in parts of the
+  streaming API), both fixed only in 2.7.0. The lockfiles already pinned
+  2.7.0; the advisory policy now records both ids.
+
+### Fixed - Terminal 501 routes no longer count as shipped
+
+- Route readiness now recognizes a top-level 501 success path before any
+  optional-dependency marker. FlashVSR, ROSE, Sammie-Roto-2, OmniVoice, and
+  ReEzSynth are correctly reported as strategic stubs, reducing the shipped
+  total to 1,563. Route-manifest generation and drift checks now update and
+  validate feature readiness from the same in-memory route snapshot.
+
+### Changed - Sourced CEP support horizon
+
+- The migration policy now cites Adobe's November 2025 Premiere Pro 25.6
+  statement and treats approximately November 2026 as a planning inference,
+  not an announced removal date. CEP export and NLP remain maintained for
+  security, reliability, and user-blocking fixes while successor workflows
+  continue to land in UXP.
+
+### Added - Feature-level CEP/UXP parity gate
+
+- A generated panel manifest now inventories the 185 CEP and 80 UXP backend
+  routes visible at their audited entrypoints, records the 61 shared routes,
+  and expands every divergence into an owner, classification, and
+  justification. Release smoke fails when a new CEP-only route is not assigned
+  to the UXP migration backlog or when any parity annotation becomes stale.
+
+### Fixed - Premiere host writes prove their effect
+
+- CEP, UXP, and Bolt host mutations now return one read-back contract with
+  Premiere version, attempted/reported/verified counts, and the independent
+  API used to inspect the result. A non-throwing host call that leaves the
+  timeline or project unchanged fails explicitly instead of producing a
+  success toast; host operations without a stable read API are labelled
+  unverified. The latest evidence is included in issue and support bundles.
+
+### Added - APV (IETF RFC 9924) mezzanine encode
+
+- `POST /video/encode/apv` and `GET /video/encode/apv/info` expose the APV
+  all-intra professional codec through the `liboapv` encoder the bundled
+  FFmpeg already ships. Unlike the existing AV1/VVC delivery lanes, APV is
+  built for repeated decode/encode generations, which is exactly what an
+  editing round-trip produces. Three mezzanine presets, `.mp4` or raw `.apv`
+  output, audio copied through untouched, and a probe-based availability
+  report so a build without the encoder returns a dependency error rather
+  than a failed job.
+
+### Changed - Dependency pins and audit diagnosability
+
+- `mediapipe` now admits the 1.0 GA release; the previous `<1` ceiling pinned
+  face-tracked reframe to the pre-GA line.
+- The `transformers` floor moves to 5.10, clearing CVE-2026-9856
+  (`save_pretrained` path traversal via `chat_template` keys, affecting
+  through 5.9.x). OpenCut never calls `save_pretrained`, so this is hygiene
+  for transitive callers and does not resolve the separate
+  `huggingface-hub<1` conflict.
+- The security-audit module logged nothing when request enrichment failed, so
+  a persistently degraded audit record looked identical to a healthy one.
+  Those three paths now log at debug without changing control flow.
+
+### Added - SQLite FTS5 memory-safety floor
+
+- CVE-2026-11822 corrupts memory when an FTS5 `MATCH` runs against a crafted
+  database file (fixed in SQLite 3.53.2). The linked SQLite version is now
+  reported in `/system/status` and release smoke, and on a runtime below the
+  floor OpenCut refuses to open a search index it did not create. Indexes this
+  install owns — including ones written before provenance stamping existed —
+  keep working on every runtime, so the guard does not strand existing users.
+
+### Added - Queue allowlist coverage is now measurable
+
+- `GET /queue/coverage` reports every parameterless async POST route with its
+  allowlist status, plus totals and any stale allowlist entries; release smoke
+  prints the same summary and fails only on a stale entry, since whether a
+  route *should* be queueable stays a curation decision. `POST /queue/add`
+  now rejects with a structured `ENDPOINT_NOT_QUEUEABLE` naming the endpoint
+  instead of a bare message. First measurement: 216 of 768 async POST routes
+  are queueable.
+
+### Fixed - Face detection survives the declared OpenCV 5 dependency
+
+- OpenCV 5 moved the Haar and HOG detectors into `opencv_contrib`, which the
+  declared `opencv-python>=5,<6` wheel does not ship, so every direct
+  `cv2.CascadeClassifier` call raised `AttributeError` for anyone installing
+  the project as specified. That silently broke face-tracked auto-zoom, face
+  blur, multi-subject and smart reframe, redaction, thumbnail selection,
+  talking-head detection, and diarization's face fallback. All 17 call sites
+  across 13 modules now resolve through one shared detector that prefers the
+  YuNet DNN backend, falls back to Haar where it still exists, and otherwise
+  reports no faces so callers keep their existing centre-crop fallback.
+
+### Changed - FFmpeg acceptance is now decided per CVE
+
+- The security floor graded builds against one global snapshot date, so a
+  differently-branched build dated after the floor was accepted without
+  containing the fixes, and a build that simply did not compile the affected
+  component could not be accepted at all. Each advisory now carries its own
+  upstream fix commit, the date it landed on master, the last affected
+  release, and the `configure` tokens that decide whether the vulnerable
+  component is even present. A build passes only when every advisory is fixed
+  or provably not applicable; an undated snapshot still fails closed, because
+  absence of evidence never waives an advisory. The `configure` probe runs only
+  when the version alone is insufficient, so the common path still costs one
+  subprocess call.
+
+### Fixed - Panel CSRF bootstrap on host-embedded panels
+
+- The CEP panel is a `file://` document, so its requests carry `Origin: null`
+  and `/health` correctly withheld the CSRF token — a hostile local page
+  presents the same opaque origin. The panel connected, reported healthy, and
+  then failed every action with "Invalid or missing CSRF token". The server now
+  publishes an owner-only bootstrap secret that only a local process can read;
+  the panel proves itself by reading it through ExtendScript, which a web page
+  cannot do, so the origin blocklist stays fully effective. A refused bootstrap
+  is now recorded as a `csrf_bootstrap_withheld` audit event naming the origin
+  and is visible through `GET /system/audit-log`.
+
+### Fixed - Panel transport no longer swallows failures
+
+- The CEP transport discarded every JSON parse failure and every callback
+  exception, so panel-side faults vanished without a trace. Parse failures,
+  callback exceptions, network errors, timeouts, and a withheld CSRF bootstrap
+  are now reported with the request path and status; reporting is on by default
+  so a caller cannot opt out of diagnosability.
+
+## 1.48.0 - Durable media automation and review surfaces
+
+### Added - MCP Apps review and progress surface
+
+- Apps-capable clients can discover a versioned `ui://` review/progress
+  resource with restrictive CSP metadata and structured, path-redacted tool
+  results. Unsupported clients keep the existing text response; fixed
+  refresh, cancellation, and approval actions remain allowlisted.
+
+### Added - Federated offline media search
+
+- Configured project roots now reconcile transcript, OCR, audio-tag, and
+  available visual-sidecar metadata in one versioned local database, with
+  incremental scans, move/delete/content-change handling, retention pruning,
+  normalized timestamps, capability states, and redacted REST/CLI/MCP output.
+
+### Added - Deterministic audio-reactive renderer
+
+- `/video/audio-reactive` now creates a durable cancellable job and renders
+  beat-driven FFmpeg effects from local PCM/onset analysis without BeatNet or
+  model downloads. Bounded presets, keyframe metadata, no-audio handling, and
+  atomic partial-output cleanup are covered by media and route contract tests.
+
+### Added - Adobe UXP compatibility drift gate
+
+- Generated compatibility metadata now records used Premiere UXP APIs,
+  minimum host/package versions, sync/async behavior, fallbacks, source
+  locations, and 25.6/26.2/26.3 host fixtures. Release smoke reports package
+  drift and rejects undeclared static API calls without requiring Premiere.
+
+### Fixed - Durable incremental auto-indexing
+
+- `/search/auto-index` now creates a persisted, resumable background job for
+  changed files, reports progress and per-file errors, and records explicit
+  up-to-date or invalid-path skips in the completed result.
+
+### Added - MCP Tasks adapter
+
+- The stateless MCP server now advertises `io.modelcontextprotocol/tasks` and
+  maps durable OpenCut jobs to `tasks/get`, `tasks/update`, and `tasks/cancel`.
+  Clients that do not declare the extension retain the existing `job_id`
+  polling contract.
+
+### Added - Rendered WCAG scans
+
+- CEP and UXP rendered regression states now run an axe WCAG 2.2 AA scan
+  across tabs, themes, and breakpoint boundaries; the scan has no suppressions
+  and the covered light-theme contrast/focus issues are fixed.
+
+### Fixed - MCP HTTP conformance
+
+- Modern HTTP requests now validate `MCP-Protocol-Version`, `Mcp-Method`, and
+  operation-specific `Mcp-Name` headers against the JSON-RPC body, with the
+  standardized `-32020`/`-32021`/`-32022` error assignments and HTTP 400
+  responses for protocol validation failures. Legacy HTTP remains compatible,
+  and the optional MCP SDK extra is bounded to the tested 1.x line.
+
+### Fixed - Docker Compose onboarding
+
+- The MCP profile now trusts the Compose service names by default, allowing
+  its authenticated backend round-trip without manual environment editing.
+- Removed the misleading Docker GPU profile because the locked image is
+  CPU-only and has no CUDA/NVENC runtime; NVIDIA acceleration remains in the
+  native `ai-gpu` installation lane.
+
+### Fixed - Example plugin compatibility
+
+- The shipped Clip Notes and Timecode Watermark manifests now declare the
+  plugin API they support, and the timecode filter probes the source frame
+  rate instead of assuming 25 fps.
+
+### Fixed - Tracked auto-zoom application
+
+- CLI and REST auto-zoom application now share a keyframed FFmpeg filter that
+  interpolates tracked zoom anchors and keeps the detected subject in frame.
+
+### Fixed - Source installer uninstall cleanup
+
+- `Install.ps1 -Uninstall` now uses the resolved supported Python interpreter,
+  removes its generated launchers, shortcut, and CEP debug values, and reports
+  locked artifacts with a close-and-retry message instead of a raw exception.
+
+### Fixed - WPF installer upgrade recovery
+
+- WPF installs now snapshot the existing install and integration state, run a
+  detected prior uninstaller during upgrades, replace the install root cleanly
+  to prune stale files, and restore the snapshot if a later step fails.
+
+### Fixed - Installer helper resolution
+
+- Windows installer helpers now launch through validated System32 paths, and
+  optional Python tools use a validated absolute Python 3.11-3.14 executable.
+- User PATH edits preserve expandable variables such as `%USERPROFILE%` and
+  retain the original string/expand-string registry kind.
+
+### Fixed - Source installer verification status
+
+- `install.py` now stops after a failed critical verification and exits with a
+  non-zero status instead of printing a successful installation banner.
+
+### Fixed - Linux package runtime paths
+
+- AppImage and Flatpak launchers now point the application at their declared
+  user-data directory and bundled FFmpeg directory; the package build stages
+  and verifies both `ffmpeg` and `ffprobe` before creating artifacts.
+
+### Fixed - RTX 50-series faster-whisper startup
+
+- Blackwell/RTX 50-series adapters now force faster-whisper to `float16` when
+  automatic compute-type selection is unsafe, report that substitution through
+  GPU status and ASR provenance, and return an actionable typed error if both
+  CUDA and CPU recovery fail.
+
+### Audited - Remaining core module surface
+
+- The 625-module core surface now has a clean compile and Ruff pass; all 120
+  modules not referenced by the breadth gate still import successfully in a
+  fresh process. Test-reference coverage is 80.8%, above the 75% release floor.
+- UXP English/Spanish locale parity is clean at 1,927 keys, including duplicate,
+  placeholder, and common-diacritic checks. Qualitative Spanish review and live
+  Premiere-host behavior remain explicitly blocked in `Roadmap_Blocked.md`.
+
+### Added - Selectable GPU adapters
+
+- GPU-backed workers and model helpers now honor a persisted CUDA adapter
+  index, with CEP and UXP Settings selectors plus `OPENCUT_GPU_INDEX` for
+  headless startup. `/system/gpu`, `/system/status`, and structured invalid
+  selection errors expose the selected adapter and available-device list.
+
+## 1.47.0 - Reachable installs and a stack you can trust
+
+### Added - Subtitle resynchronisation
+
+- Existing SRT files can now be matched to a video transcript to correct a
+  constant offset or clock drift. The REST route, CLI, and CEP/UXP captions
+  surfaces show a no-write preview first and require explicit apply approval
+  before writing a sidecar result.
+
+### Added - Bulk transcript correction
+
+- CEP and UXP transcript editors can now preview and apply literal find/replace
+  corrections across a transcript, undo the last applied pass, and persist
+  repeated terms in an opaque per-project glossary that is reapplied after
+  future transcription without modifying the raw ASR cache.
+
+### Added - OTIO transitions and interchange boundaries
+
+- OTIO export now emits and round-trips explicit transitions, and timeline
+  diff reports detect transition additions, removals, and changes.
+- Interchange documentation now states that OTIO carries timeline data but no
+  caption schema; captions remain separate SRT/VTT/ASS artifacts.
+
+### Added - Kdenlive and Shotcut MLT export
+
+- The timeline API and `opencut silence --format mlt` now write deterministic
+  MLT projects with source ranges, speed changes, and keyframed volume for
+  Kdenlive and Shotcut.
+
+### Fixed - Panel copy and onboarding shell
+
+- Panel descriptions now use the established em dash and backend terminology;
+  the unreachable static wizard body is removed while its server-backed
+  onboarding shell remains, and cut write-back reports the requested cut
+  count.
+
+### Fixed - Literal error interpolation
+
+- Panel error and failure messages now insert backend text through a shared
+  function-based interpolator, preserving replacement-pattern characters such
+  as `$&`, `$```, and `$$`.
+
+### Chore - Panel lint warning ceiling
+
+- The panel lint command now permits the recorded 23-warning baseline but
+  fails when the warning count grows beyond 24.
+
+### Fixed - UXP WebSocket teardown
+
+- UXP unload now closes the live WebSocket and clears its reconnect timer
+  alongside the existing SSE, theme, settings, and media-scan cleanup.
+
+### Fixed - UXP full-report job ownership
+
+- Full report generation now uses the shared single-job controller, keeping
+  sequence preflight and every selected deliverable inside one lock so a
+  second action cannot overlap the package run.
+
+### Fixed - Ordered UXP Sequence Index filters
+
+- Sequence Index search, facet, and sort responses now use a monotonic request
+  generation so a slow earlier response cannot overwrite the latest results or
+  clear the busy state owned by a newer request.
+
+### Added - Reproducible performance benchmark runner
+
+- The opt-in `opencut benchmark run` lane now records pinned fixture hashes
+  and licenses, dependency/model versions, host compatibility, timing and
+  memory samples, quality metrics, truthful unavailable-backend skips, and
+  tolerance-aware same-host receipt comparisons.
+
+### Added - Production breakpoint state coverage
+
+- Rendered CEP and UXP regression coverage now exercises every production
+  command-center breakpoint at minus one, exact, and plus one pixels in dark
+  and light themes, checking overflow, keyboard focus, semantic state nodes,
+  and accessible-name sources.
+
+### Added - Compiled resumable workflow plans
+
+- Workflow saves now retain a source-independent definition and workflow runs
+  compile immutable, typed plans with readiness, media-stream, disk, output,
+  network, and side-effect preflight evidence before processing starts.
+- CEP runs review destructive or external steps before approval, while durable
+  artifact checksums let interrupted workflows resume without repeating a
+  completed idempotent step.
+
+### Added - UXP first-run portability and support tools
+
+- UXP now offers a server-backed Getting Started tour that connects a new
+  user to media selection, the first Cut & Clean pass, and reviewable timeline
+  handoff while keeping unavailable host capabilities explicit.
+- Settings exports carry a schema version and future bundles are rejected
+  before mutation with an actionable response; Settings also exposes a local
+  redacted support-bundle export alongside the reviewed issue-report path.
+
+### Added - Explainable highlight scoring
+
+- Virality and highlight responses now expose named signals, normalized weights,
+  and point contributions, with an ordinal-within-video scope note.
+- The Wave H panel can analyze candidate paths once, then re-weight and
+  re-rank the cached signals locally without another media analysis.
+
+### Added - Reversible Magic Cleanup chain
+
+- CEP and UXP now expose one review-first cleanup control that previews silence
+  ranges, FFmpeg denoise, loudness normalization, and caption generation before
+  writing any artifacts.
+- The reviewed plan is content-bound and applies through one journaled sequence
+  import, while unavailable FFmpeg or caption backends remain explicitly
+  marked as skipped instead of being presented as completed.
+
+### Added - Exclusive speaker-boundary multicam cuts
+
+- Multicam generation now consumes pyannote 4's `exclusive_speaker_diarization`
+  output when available, reports the boundary source, and falls back explicitly
+  to ASR segments when the optional diarization stack is unavailable.
+- The UXP multicam control defaults to speaker boundaries and both Premiere
+  panel surfaces explain the reviewable boundary-driven workflow; fixture tests
+  cover overlapping turns and one-frame boundary accuracy.
+
+### Changed - Restate native Premiere overlap
+
+- README, MCP positioning, and CEP/UXP copy now name Premiere's native
+  Sequence Index, Single-Word Captions, pause/filler deletion, Media
+  Intelligence search, loudness matching, and bulk bleep/mute instead of
+  presenting those workflows as missing from the host.
+- The command palette keeps those operations available while ranking the
+  differentiated scope, review, artifact, and headless-access paths first.
+
+### Added - Bundled CEP production artifact
+
+- The CEP panel now compiles its ordered classic runtime into a minified
+  `client/dist/opencut-panel.js` bundle, carries locale assets into `dist/`,
+  and launches Premiere from the generated index.
+- Build verification rejects copied source artifacts and installer staging
+  refuses to package the extension without the production bundle.
+
+### Added - Timeline interchange for large cut passes
+
+- Cut lists above the configurable panel threshold now become one linked FCP
+  7 XML timeline import, preserving synchronized video and every source audio
+  channel while reporting the requested cut count.
+
+### Added - UXP route migration dashboard
+
+- The generated migration dashboard now inventories literal CEP capability
+  routes against UXP dispatch paths, records transport exclusions, and shows
+  unresolved and priority gaps in UXP Settings instead of reporting only host
+  function coverage.
+
+### Added - UXP priority capability routes
+
+- The UXP panel now exposes direct job-backed controls for Whisper installation,
+  stem separation, speech enhancement, caption translation, animated captions,
+  full cleanup, and single-clip export presets, including the required NLLB
+  license opt-in and word-timing validation.
+
+### Added - Route surface classification
+
+- The generated route manifest now declares panel, command-palette, CLI,
+  curated MCP, or integration-only reachability for every route and fails its
+  surface gate when a route is missing a valid classification.
+
+### Changed - Pin FFmpeg to the post-July security snapshot
+
+- The bundled Windows media runtime is now Gyan's `git-full` snapshot
+  `2026-08-03-git-01a25f74cc`, with its binary package and corresponding
+  source archive SHA-256 values recorded in the provenance gate and installer
+  receipt.
+- The release lane now rejects 8.1.2 until upstream publishes 8.1.3. The
+  snapshot floor moved to 2026-07-06 and names CVE-2026-64832, -64833, -64835,
+  and -66041 plus their upstream fix commits.
+
+### Changed - auto-editor resolves the native binary
+
+- Upstream rewrote auto-editor in Nim and stopped publishing to PyPI at 29.3.1
+  (2025-11-04), so the pinned package receives no fixes and none of the 2026
+  capabilities. OpenCut now resolves the native binary through
+  `OPENCUT_AUTO_EDITOR`, then `~/.opencut/bin`, then `PATH`, and only falls
+  back to the frozen pip package.
+- The availability check honors the same resolution, so a machine with the
+  binary and no pip package reports the feature as available. The "not
+  installed" message names the download and the environment variable, and the
+  pip pin is documented as legacy-only.
+
+### Changed - Stem separation defaults to a maintained backend
+
+- `python-audio-separator` (Mel-Band / BS-RoFormer, SCNet, MDX23C) is declared
+  in the `audio` and `torch-stack` extras and is the `/audio/separate` default.
+  It was already wired into the route but appeared in no extra, so its only
+  install guidance was a runtime error string.
+- Demucs was archived upstream on 2024-04-24. It remains available as a legacy
+  backend - a request naming a Demucs-only model still routes to it - but the
+  dependency dashboard, model cards, and panel now label it as legacy rather
+  than recommended, and the "not installed" message points at the maintained
+  backend.
+
+### Added - Installed-versus-declared dependency gate
+
+- `scripts/check_installed_versions.py` compares every installed distribution
+  against the specifier OpenCut declares for it, across every extra. Nothing
+  previously compared the declared lanes to what was importable, so the suite
+  could report green on a stack that violated the project's own constraints.
+  It runs as a `release_smoke.py` step and is covered by
+  `tests/test_declared_floors.py`.
+- PySceneDetect is now on 0.7.x (a breaking release), and the adapter is
+  exercised against a generated clip through the 0.7 API. `cryptography` is
+  back at its declared 48.0.1 lock and `Pillow` meets its 12.3.0 security
+  floor. The stale `edge-tts`, `pytest-cov`, and `pre-commit` ceilings were
+  raised to admit the versions the suite actually runs on.
+
+### Fixed - Generated feature readiness now proves implementation
+
+- 27 auto-generated feature records reported `available` with no
+  `impl_module`, so the stub scanner had nothing to inspect - the exact blind
+  spot that once let terminal-stub adapters advertise as runnable. Adapter
+  identity is now derived from what the probe imports, what the routes it
+  gates import (including module-level bindings), and finally a same-named
+  `opencut/core` module verified on disk. All 72 records resolve.
+- The generator refuses to emit a manifest containing an `available` record
+  whose `impl_module` is empty or does not resolve to a real module.
+
+### Fixed - Two CLI commands crashed on valid input
+
+- `opencut scene-detect` passed a `method=` keyword no backend accepts, so the
+  default `ffmpeg` run and `--method pyscenedetect` both raised `TypeError`.
+  Each method now dispatches to its own entry point, and `--threshold` defaults
+  to the backend's own value because the scales differ (0-1 vs ~15-50).
+- `opencut scene-detect --method ml` reported "Scenes found: 0" for every video
+  because it normalized a `SceneInfo` dataclass as list-or-dict. Boundaries are
+  now expanded into contiguous scene ranges.
+- `generate_multicam_xml` accepts every cut shape OpenCut produces:
+  `{start, end}` dicts, the `{time, duration}` dicts that
+  `generate_multicam_cuts` emits, and the `TimeSegment` objects that
+  `opencut podcast` passes - which previously raised `AttributeError` and
+  discarded the whole diarization pass.
+
+### Fixed - The test suite now runs from a fresh clone
+
+- Sixteen `docs/*.md` files, the UXP API notes, and a shipped built-in skill
+  were excluded by `.gitignore` while tests and package data read them, so the
+  advertised green baseline was reproducible only on the maintainer's machine.
+  They are tracked now, and `.gitignore` un-ignores documentation under
+  `docs/`, `extension/`, and `opencut/` by rule rather than by allowlist.
+- The fresh-clone check no longer looks at markdown links alone: it also scans
+  backticked and quoted path references in tracked docs, and every
+  `REPO_ROOT`-anchored path the test suite reads, failing when one exists
+  locally but is absent from a clone.
+
+### Fixed - Uninstall could delete a drive root or a media folder
+
+- The chosen install path is now normalized and vetted before it is stored: it
+  must be fully qualified, a bare drive root gets its own `OpenCut` folder,
+  Windows/system/profile directories are refused, and a directory that already
+  holds unrelated files asks for confirmation first.
+- The uninstaller re-checks the same rule before its recursive delete and
+  before `rmdir /s /q`, and refuses rather than deleting an unsafe root.
+
+### Fixed - Install.ps1 terminated Premiere Pro
+
+- The port cleanup in `Install.ps1` took the last column of every `netstat`
+  row mentioning the backend port, which includes ESTABLISHED rows whose PID
+  belongs to the connected client - Premiere Pro, while the panel is open.
+  Re-running install or uninstall therefore killed Premiere and lost unsaved
+  project work. Port cleanup now selects listeners only, via
+  `Get-NetTCPConnection` with a column-wise `netstat` fallback.
+
+### Fixed - WPF installer left modern Premiere without PlayerDebugMode
+
+- The WPF installer now enables PlayerDebugMode for CSXS 7-18 instead of 7-12,
+  so the CEP panel loads on Premiere CC 2023 and newer. `Install.ps1`,
+  `OpenCut.iss`, and `install.py` already covered the full range; a lockstep
+  test now fails if any of the four install paths drifts.
+
+### Fixed - UXP controls that silently did nothing
+
+- Loudness Match now measures the reference clip first and normalizes only the
+  input to that measured LUFS value, instead of batch-normalizing both files to
+  a fixed -14 LUFS.
+- Chat actions returned by the assistant are dispatched through the job
+  controller against an allowlist of routes, rather than only being counted in
+  a toast.
+- The unused Auto Zoom target-aspect control was removed; it was read but never
+  sent to the backend.
+- The OTIO export clip fallback uses `||` so an empty Cut-tab path falls through
+  to the Video-tab path, matching the button's own enable condition.
+
+### Fixed - SMPTE timecode sync
+
+- tc-sync now honors SMPTE drop-frame separators and normalizes source frame
+  counts using each camera's frame rate before computing offsets and common
+  ranges.
+
+### Fixed - Quality metric isolation
+
+- VMAF log paths now use the shared FFmpeg filter-path escaper, including
+  apostrophe-safe quoting, and a timed-out metric no longer aborts the other
+  measurements in the report.
+
+### Fixed - IMSC validator log capture
+
+- IMSC validation now collects only ttconv diagnostics, de-duplicates repeated
+  findings, and ignores unrelated records propagated by the application root
+  logger.
+
+### Fixed - Sequence-index payload validation
+
+- Sequence-index rows now coerce metadata list items to strings, while
+  non-finite timeline numbers are rejected with a clear 400 response instead
+  of reaching frame conversion and producing a server error.
+
+### Fixed - Terminal job retention
+
+- In-memory terminal jobs now age from their completion timestamp, preserving
+  recently finished long-running jobs for status polling and cleanup parity
+  with the persistent job store.
+
+### Fixed - Port-holder safety
+
+- The netstat fallback now verifies that the listener is serving OpenCut before
+  attempting a force-kill; unrelated listeners are left untouched so startup
+  can select an alternate port.
+
+### Fixed - User-data read-modify-write races
+
+- Per-file reentrant locks now cover tombstone pruning/restoration, assistant
+  dismissal updates, and workflow/preset/favorites route mutations so
+  concurrent requests cannot overwrite each other's durable state.
+
+### Fixed - Queue and workflow terminal-state handling
+
+- Queue execution now waits through the configured job-stuck timeout before
+  starting the next entry, and interrupted jobs finish queue and workflow
+  polling immediately instead of being reported as timeouts.
+
+### Fixed - Shutdown WAL cleanup
+
+- Job-store and journal SQLite connections can be closed from the shutdown
+  thread, checkpoint their WAL files before closing, and report cleanup
+  failures instead of silently hiding them.
+
+### Fixed - Versioned Whisper settings
+
+- The production Whisper-settings loader now runs the JSON migration framework,
+  translates legacy `device` values into `cpu_mode`, and persists a schema
+  marker without exposing migration metadata through the settings API.
+
+### Changed - Remove unused noisereduce dependency
+
+- The standard/audio/all dependency lanes and runtime install dashboard no
+  longer declare or advertise the unused `noisereduce` package; UXP denoise
+  fallback now selects the supported FFmpeg `afftdn` method.
+
+### Changed - Safer default pytest selection
+
+- Default pytest runs now exclude `integration` and `slow` tests; pass
+  `-m integration` when explicitly opting into network/FFmpeg coverage.
+
+### Added - Workflow cancellation coverage
+
+- Workflow tests now verify that cancellation between steps preserves the
+  completed step result and reports the correct partial `steps_completed` count.
+
+### Refactored - Shared route response helpers
+
+- Consolidated JSON-body validation and optional-backend 503 responses into a
+  single route helper module, preserving the Wave H dependency error contract.
+
+## 1.46.0 - Earned claims
+
+### Fixed - Honest update-check failures
+
+- Update checks now return an unknown latest version when GitHub is
+  unavailable, avoid caching failed responses, and retry on the next request.
+  CEP and UXP panels surface the failure and point to their Refresh controls.
+- Successful checks now include bounded release notes, release name, publish
+  time, and a canonical release URL for the Settings/About notice.
+
+### Added - Persistent update notices
+
+- CEP and UXP Settings/About surfaces now retain update availability, release
+  notes, verified release-page actions, version-scoped dismissal, and retryable
+  offline/error guidance without opening a browser automatically.
+
+### Fixed - CEP control wiring
+
+- Deliverable folders now open through a guarded ExtendScript host function
+  with visible errors, silence previews use the active threshold controls,
+  demo footage follows the normal selection lifecycle, and multicam writes
+  create recovery checkpoints and reject host error payloads.
+
+### Fixed - Photon IMF clean-package parsing
+
+- IMF validation now ignores Photon's clean “has no errors or warnings”
+  summaries and records only line-leading `ERROR`/`FATAL` severity records as
+  failures, while preserving explicit warnings.
+
+### Fixed - Server startup ownership
+
+- A server now claims its PID/port before recovering durable jobs. Instances
+  forced onto an alternate port leave the live server's running jobs and
+  persistent queue untouched instead of creating duplicate recovery work.
+
+### Fixed - Timecode sync output placement
+
+- Default JSON and EDL timelines now sit beside the first source file with the
+  correct timeline extension instead of being written under a hidden,
+  extension-named directory.
+
+### Fixed - Test profile isolation
+
+- Test persistence now uses an isolated home and per-test queue, review, and
+  subtitle stores. A fail-closed filesystem guard rejects any attempted write
+  to the developer's real `~/.opencut` profile.
+
+### Fixed - Lip-sync test coverage
+
+- The audio-feature extraction test now fails on extraction errors or missing
+  result fields instead of swallowing every exception and assertion failure.
+
+### Fixed - Route-count documentation checks
+
+- README route claims now compare against the manifest's shipped-route count,
+  with exact-match enforcement and regression coverage for one-route drift.
+
+### Fixed - Sequence-index CSV safety
+
+- CSV exports now prefix formula-like text cells with a single quote so names,
+  paths, tags, and transcript excerpts remain inert when opened in a spreadsheet.
+
+### Fixed - Quality-report JSON safety
+
+- Lossless PSNR results now use a documented finite `99.0 dB` cap and retain a
+  note explaining the cap, so async quality reports never emit bare `Infinity`.
+
+### Fixed - Non-ASCII token rejection
+
+- CSRF, remote-auth, and review-link token checks now reject non-ASCII input as
+  an ordinary authentication failure, preserving 403 behavior and audit logging.
+
+### Fixed - LLM input type validation
+
+- LLM settings and connectivity-test routes now reject non-string provider,
+  model, key, and URL values as structured 400 `INVALID_INPUT` responses
+  without appending crash-log entries.
+
+### Fixed - Discarded-expression cleanup
+
+- The release lint gate now includes Ruff `B018`. Dead metadata probes and
+  dimension calculations were removed, B-roll filenames now contribute match
+  terms, and screen-recording classification now honors supported codecs.
+
+### Fixed - Literal drawtext escaping
+
+- Literal text overlays now use the shared FFmpeg escaper with
+  `expansion=none`, covering paths, colons, apostrophes, backslashes, and
+  percent-expression text across the core renderers. Intentional timecode and
+  counter expressions remain explicitly on normal expansion.
+
+### Fixed - Scripting-console reflection escape
+
+- The scripting console now refuses reflection modules (`operator` and
+  `functools`), private/dunder attribute access, and dunder strings assembled
+  from literals before execution. OpenCut namespace helpers and JSON/time
+  helpers are callable proxies without reachable Python `__globals__`, and
+  caller context is limited to inert data. Regression coverage exercises the
+  exploit payload through all three scripting route aliases.
+
+### Fixed - Settings bundle workflow round-trip
+
+- Settings imports now validate workflows through the canonical endpoint
+  validator, preserving exported `{endpoint, params}` steps without requiring
+  cosmetic labels. Import responses report per-section imported/skipped counts
+  and reasons, and both CEP and UXP panels surface skipped items in their
+  import toasts.
+
+### Fixed - Cancellation terminal-state race
+
+- A worker exception raised while a job is being cancelled no longer changes
+  the live or persisted job back to `error`. Late resource-sampler peaks are
+  retained, and cancellation emits exactly one terminal webhook.
+
+### Fixed - CEP cancellation lifecycle cleanup
+
+- User cancellation now settles registered `onCancel` and `onFinally` hooks
+  immediately after the active job is cleared, so feature guards and controls
+  reset even when the backend terminal event is intentionally no longer
+  polled.
+
+### Fixed - UXP deliverable clip payloads
+
+- UXP deliverables now walk the active sequence and send real clip arrays in
+  the backend's canonical track shape. Header-only exports report that no
+  clips were found instead of claiming a populated handoff document.
+
+### Fixed - Default beat-synced output path
+
+- Beat-synced assembly now places its implicit `.mp4` output beside the source
+  music file instead of treating the extension as a directory name.
+
+### Fixed - Expression exponentiation bound
+
+- Expression validation now refuses unbounded or nested exponentiation before
+  evaluation, and the sandbox `pow()` helper applies the same magnitude cap.
+
+### Fixed - MCP HTTP transport policy
+
+- The MCP HTTP sidecar now validates Host and Origin headers, requires an auth
+  or backend CSRF token for POST requests on loopback, and rejects oversized
+  JSON bodies before reading them.
+
+### Fixed - Forced-colors selector liveness
+
+- Forced-colors rules now target the panels' live toast and progress classes,
+  and regression coverage rejects selectors that match no rendered markup.
+
+### Fixed - Literal drawtext text
+
+- Instant replay and motion-graphics renderers now escape colons, backslashes,
+  and apostrophes through the shared helper with drawtext expansion disabled.
+
+### Fixed - Queueable multicam and LUT routes
+
+- LUT blending and multicam cut/XML routes now use tracked async jobs, so
+  queued work completes with a terminal job status instead of running
+  synchronously and being reported as missing a job ID.
+
+### Fixed - Workflow cancellation propagation
+
+- Cancelling a workflow now cancels its active child job and registered
+  process, and timed-out workflow steps cancel their child before returning.
+
+### Fixed - UXP social upload cleanup
+
+- Social upload now catches job-poll failures, shows the upload error, and
+  always clears its processing banner and loading button state.
+
+### Fixed - UXP cancellation race
+
+- A status response that resolves after a UXP job is cancelled no longer
+  triggers completion callbacks or a second completion-hook pass.
+
+### Added - Windows High Contrast (forced-colors) coverage
+
+- Both panels gained `@media (forced-colors: active)` rules. In that mode the
+  OS discards author colours, so every state the panels carried as a
+  background tint alone — active tab, disabled control, focus ring, status
+  severity, progress fill, card edges — became indistinguishable. Each is
+  restored with a system colour plus a non-colour cue (border, outline, or a
+  leading glyph for error/warning/success).
+- The CEP overrides live in `command-center.css`, the last stylesheet the
+  panel loads, because the three sheets after `style.css` otherwise won the
+  cascade and the disabled cue never applied.
+- `panel-regression.spec.mjs` gained forced-colors describes that drive both
+  surfaces with the mode emulated and assert selection, focus, disabled state,
+  and navigation still resolve to *different* computed values — proving the
+  rules take effect rather than merely existing.
+- `tests/test_forced_colors_coverage.py` is the always-on guard for hosts
+  without a browser, and runs in the release gate.
+
+### Changed - The plugin compatibility contract is versioned
+
+- `api_version == 1` was a hard equality check: the first host API bump would
+  have rejected every installed plugin with "unsupported value 1", and an
+  author had no way to declare support for more than one generation. Plugins
+  now declare a range (`min_api_version`/`max_api_version`, defaulting to the
+  single-point range a v1 manifest already implies) and the host publishes
+  `host_api_range()`. Existing v1 manifests keep their exact semantics and
+  load untouched.
+- `schema_version` versions the manifest *file* separately from the runtime
+  API, so a manifest can gain fields without a contract change. A manifest
+  schema newer than the host understands is refused rather than partially
+  read.
+- Incompatibility is reported before activation with a remediation line — what
+  the plugin targets, what the host implements, and whether to upgrade OpenCut
+  or the plugin — instead of a bare validation failure.
+
+### Added - `plugins doctor`
+
+- `opencut plugins doctor` (and `GET /plugins/doctor`) validate every
+  installed plugin against this host's plugin API and report healthy /
+  incompatible / invalid counts with per-plugin reasons and fixes. The CLI
+  exits non-zero when anything is unhealthy so scripts can gate on it.
+
+### Fixed - "Validated IMSC 1.3" output was rejected by the reference implementation
+
+- The default caption style emitted `tts:backgroundColor="rgba(0,0,0,0.8)"`.
+  TTML's `<color>` takes an integer 0-255 alpha, not CSS's 0-1 float, so
+  `ttconv` — the W3C reference implementation — reported "Bad Syntax" and
+  discarded the property on **every** document OpenCut labelled conformant.
+  The style now emits `rgba(0,0,0,204)`.
+
+### Added - Standards labels are earned from independent validators
+
+- `opencut/core/standards_validators.py` adapts three reference
+  implementations and returns a machine-readable `ValidationReport`:
+  `ttconv` + `imschrm` for IMSC 1.3 and the IMSC Hypothetical Render Model,
+  Netflix Photon's `IMPAnalyzer` for IMF packages (`OPENCUT_PHOTON_JAR`), and
+  a BS.1770 loudness check against a tone whose expected LUFS is derived from
+  the standard's own K-weighting coefficients rather than fitted to what
+  OpenCut measures.
+- The IMSC adapter captures `ttconv`'s own log output as findings. That
+  matters because the reader reports malformed properties through its logger
+  instead of raising — a parse that "succeeded" can still have silently
+  dropped an invalid attribute, which is exactly how the defect above
+  survived.
+- An absent validator reports `available: false` and `passed: null`. "Not
+  checked" never reads as "passed", and the new `standards-conformance`
+  release step reports `warn` rather than `ok` when a validator is missing.
+- New `opencut[standards]` extra installs the caption validators; the README
+  capability claim now names what validated it.
+
+### Fixed - Every operation was documented as needing no CSRF token
+
+- `require_csrf` uses `functools.wraps`, which copies the wrapped function's
+  name onto the wrapper, so the name-based detector behind the OpenAPI
+  `security` block and `/api/routes`'s `csrf_required` flag never matched a
+  single route — all 1,568 were reported as unprotected. The decorator now
+  stamps an explicit `_opencut_requires_csrf` marker and 1,171 operations
+  document the `X-OpenCut-Token` requirement.
+
+### Changed - One OpenAPI source with explicit compatibility adapters
+
+- `opencut/core/openapi_source.py` builds the canonical OpenAPI **3.1.1**
+  document. `/api/openapi.json` serves it directly, `/openapi.json` serves a
+  3.0.3 rendering produced by `downgrade_to_30()` (nullable unions, `const`,
+  `prefixItems`), and `/architecture/openapi` delegates to the same source
+  instead of being a third generator with colliding operation ids and Flask
+  converter class names in place of JSON-Schema types.
+- Response schemas are emitted once under `components/schemas` and `$ref`-ed
+  rather than inlined per operation, alongside shared `components/responses`
+  for 400/403/404/429/500 that all point at one `OpenCutError` schema.
+- Request bodies for the curated MCP operations come from those tools' own
+  `inputSchema`, so REST and MCP describe the same operation from one
+  hand-reviewed source and cannot drift apart.
+
+### Added - OpenAPI typed-coverage ratchet
+
+- `python -m opencut.tools.dump_openapi_contract` writes
+  `opencut/_generated/openapi_contract.json` recording typed request, typed
+  response, error-typed, and CSRF-documented operation counts plus the
+  component schema names. `--check` fails when the manifest is stale *or* when
+  any counter regressed, and a new `openapi-contract` release-smoke step runs
+  it.
+- `tests/test_openapi_typed_contract.py` proves both endpoints describe the
+  same operations, validates every component schema as JSON Schema 2020-12,
+  generates a valid payload per typed request body and a deliberately invalid
+  one, and checks a real error response against the documented error schema.
+
+### Added - MCP across the 2026-07-28 protocol boundary
+
+- `server/discover` is implemented, so a client can learn the supported
+  protocol versions, capabilities, identity, and JSON Schema dialect without
+  any handshake or session state.
+- Clients state their protocol version per request in `_meta`
+  (`io.modelcontextprotocol/protocolVersion`). Results for `2026-07-28` carry
+  the required `resultType: "complete"` and `_meta` server identity; list
+  results also carry the `ttlMs`/`cacheScope` cache hints. OpenTelemetry
+  `traceparent`/`tracestate`/`baggage` values are echoed back.
+- A request naming an unsupported protocol version is rejected with `-32022`
+  (`UnsupportedProtocolVersion`, inside the range the spec reserves) and the
+  supported list, instead of being answered on a guess.
+- Legacy clients are unaffected: `initialize` and `notifications/initialized`
+  still work, `initialize` echoes the requested version when supported, and
+  pre-2026 results deliberately omit the newer fields.
+- Capabilities are reported closed. `subscriptions/listen`, the tasks
+  extension, sampling, and roots are **not** advertised and return `-32601`,
+  because none of them are implemented.
+- The `mcp` extra no longer caps at `<2`. OpenCut never imports the SDK — the
+  server speaks JSON-RPC directly — and a test now enforces that no-import
+  invariant, which is what makes the open range safe.
+- `GET /mcp/info` reports the protocol versions, schema dialect, and
+  capabilities alongside the already-generated tool counts, and the UXP MCP
+  card no longer bakes stale counts into its copy.
+
+### Fixed - The MCP stdio and HTTP transports had drifted apart
+
+- Both transports now share one `dispatch_jsonrpc()`. The HTTP handler was
+  missing `notifications/initialized` entirely and answered notifications as
+  if they were requests.
+
+### Fixed - VMAF was unavailable on Windows and lossless PSNR read as a failure
+
+- `measure_vmaf()` interpolated the JSON log path straight into the
+  filtergraph, so the drive colon in `C:/...` broke the lavfi parser and every
+  VMAF measurement failed with "No option name near ...". The path is now
+  single-quoted *and* colon-escaped, which is what the parser actually needs.
+- `measure_ssim()` / `measure_psnr()` required identical dimensions and
+  produced an opaque "Invalid argument" for a proxy-versus-original pair. The
+  distorted input is now scaled to the reference the way the VMAF path already
+  was, so proxy parity is measurable.
+- A lossless comparison reports `PSNR average:inf`, which the result regex
+  rejected — a perfect match looked like a parse failure. `inf` is accepted.
+
+### Added - VMAF receipts identify the model
+
+- `QualityReport` carries `vmaf_model`, `vmaf_version`, `vmaf_scaling`, and
+  `vmaf_mode`, and the model is pinned to `vmaf_v0.6.1` instead of inheriting
+  whatever the local FFmpeg build defaults to. A VMAF number without its model
+  is not comparable across machines.
+
+### Added - Release-gated media conformance corpus
+
+- `tests/media_corpus.py` synthesizes a deterministic, licence-free corpus
+  covering CFR at 25/23.976/29.97-drop-frame/59.94, true VFR, delayed PTS,
+  mid-file decode corruption, mono/5.1/no-audio, subtitle/data/attachment
+  streams, 10-bit HDR colour metadata, display-matrix rotation, Unicode and
+  spaced paths, and a proxy/original pair. Each entry declares the properties
+  it must carry, and a test verifies the declaration against real ffprobe
+  output so a fixture cannot silently stop being interesting.
+- `tests/test_media_conformance.py` runs trims and stream copies across the
+  corpus and asserts duration, timecode frame position (drop-frame aware),
+  A/V sync, channel layout, pixel format and colour metadata, rotation, error
+  accounting on corrupt input, and VMAF model identity — within tolerances
+  declared once in the corpus module.
+- A new `media-conformance` release-smoke step runs the corpus, and skips
+  truthfully rather than passing when FFmpeg is unavailable.
+
+### Added - Public-installer-to-current upgrade conformance
+
+- `tests/legacy_user_data_fixture.py` materializes a v1.25.1-shaped
+  `~/.opencut` from that tag's own DDL and document shapes — jobs, journal
+  (including the out-of-band `forward_json` ALTER that left `user_version` at
+  0), footage index, a bare-list job queue, unversioned settings, a plaintext
+  LLM key, a pre-versioning review record, an installed plugin, and the
+  installer stamp.
+- `tests/test_upgrade_conformance.py` drives the current build over that tree
+  with sockets disabled and asserts the upgrade is offline, idempotent, and
+  non-destructive: every store reaches its current schema, pre-upgrade rows
+  and FTS search results survive, the legacy queue list becomes a versioned
+  document, review records migrate with a `.pre-versioning.json` backup, a
+  missing publisher trust store is not treated as tampering, a plaintext key
+  is vaulted or disabled rather than silently kept, and no user file is
+  removed. Uninstall's preserve-by-default and backup-before-removal
+  guarantees are pinned against the installer sources.
+- Both this module and `tests/test_local_db_migrations.py` now run in the
+  release gate's `pytest-fast` step.
+
+### Fixed - UXP Sequence Index is a working table
+
+- The UXP Sequence Index posted `PProBridge.getSequenceInfo()`, which reports
+  track *counts* rather than tracks, so the backend indexed zero clips and the
+  panel could only ever show a summary. `PProBridge.getSequenceIndexPayload()`
+  now walks the active sequence's video and audio track items and emits the
+  per-clip payload `/timeline/sequence-index` expects, including media path,
+  offline state, project/track item ids, and effect names.
+- The card renders the returned rows as an accessible data grid: sortable
+  column headers with `aria-sort`, arrow/Home/End/PageUp/PageDown navigation
+  over a roving `tabindex`, a live result count, an empty state, a busy state,
+  per-row host jump that moves the playhead, and column visibility that
+  persists across reloads (identity columns stay pinned).
+
+### Added - Sequence Index filters and CSV export
+
+- `IndexRow` carries `offline` and `flash_frame`, and `filter_rows()` accepts
+  both as facets, so the panel can isolate missing media and accidental
+  frame-length slivers. `build_index(flash_frame_frames=...)` sets the flash
+  threshold (default 2 frames).
+- `POST /timeline/sequence-index/export-csv` writes the *filtered* view to a
+  CSV file with a caller-chosen column subset; unknown columns are rejected
+  rather than silently dropped.
+- `POST /timeline/sequence-index/filter` accepts `offset`/`limit` and reports
+  `total_rows` as the full match count alongside `returned_rows`, so a paged
+  panel never misreports how much matched.
+
+## 1.45.0 - Truthful surfaces
+
+### Fixed - A fresh clone can reproduce the build
+
+- `BUILD.bat` invoked a deprecated root `InstallerBuilder.ps1` that hardcoded
+  version `0.6.5` and produced an Inno artifact, so the repository's own build
+  entry point did not build the shipped installer. It now delegates to the
+  maintained WPF builder, which derives the version from `opencut/__init__.py`
+  and writes `installer/dist/OpenCut-Setup-<version>.exe`, and it propagates
+  the builder's exit code instead of swallowing it. The deprecated script is
+  removed.
+- PyInstaller hidden imports are derived from the `_try_import` call sites in
+  `opencut/` rather than hand-maintained. The old list had drifted badly: it
+  named 25 modules while the source lazily imports about 100, and it missed
+  `transnetv2_pytorch` entirely.
+- The tracked roadmap no longer links to a deliberately untracked file, and
+  `docs/INSTALLER_POLICY.md` no longer presents code signing as a release
+  gate — OpenCut publishes unsigned artifacts by policy, so the real reason
+  to keep the Inno fallback is the .NET SDK requirement on the build host.
+
+### Fixed - Command-palette destinations resolve
+
+- Workflow Presets, Project Templates, Keyboard Shortcuts, Job History, and
+  dependency recovery named sub-tab IDs that are not in the markup — the
+  Settings panel has no sub-tabs at all — so each silently landed on a broad
+  default page instead of the control it advertised.
+- Commands can now name the control itself, which is scrolled into view and
+  focused. Static cards get a programmatic-only tab stop so landing on them
+  does not add a permanent stop to the tab order.
+- A parametrized test now checks every registered command against the live
+  markup, so a destination that stops existing fails the suite.
+
+### Fixed - Contract generation no longer mutates the machine
+
+- Building a route or readiness manifest booted a production app, so an
+  ostensibly read-only `--check` swept the user's temp directory, started the
+  disk-monitor thread, ran credential-vault migrations, initialised Sentry,
+  and imported and registered whatever plugins were installed under
+  `~/.opencut/plugins`.
+- `create_app()` gained an explicit `introspection=True` mode that registers
+  the built-in blueprints and nothing else, and the generators now use it.
+  Plugin loading is skipped so a contract describes what OpenCut ships rather
+  than what one machine happens to have installed.
+- Sentinel tests assert that an introspection build crosses none of those
+  boundaries and starts no threads, that a production boot still performs all
+  of them, and that repeated generation is deterministic.
+
+### Fixed - Generated feature readiness fails closed
+
+- Generated feature records carried no implementation identity, which made
+  them structurally incapable of being graded as stubs: with no adapter module
+  to scan, a terminal `NotImplementedError` adapter whose optional dependency
+  happened to be installed was advertised as `available`. `auto.deblur-motion`,
+  `auto.searaft`, and `auto.track-cutie` all resolved that way on a live probe.
+- The readiness generator now derives each probe's adapter modules from the
+  imports inside its `opencut.checks` function and records them as
+  `impl_module`, so those three now resolve to `stub`. Derivation is used
+  rather than a naming convention because the mapping is not always
+  mechanical — `check_searaft` lives in `flow_searaft`.
+- Probes that genuinely have no adapter (direct third-party dependency checks)
+  are unaffected and keep reporting their real dependency state.
+
+### Fixed - Auto theme follows Premiere, not the OS
+
+- The CEP panel's Auto theme read `prefers-color-scheme`, which is the
+  operating system's setting rather than Premiere's skin. A dark OS with
+  Premiere's light skin (or the reverse) left the panel clashing with its
+  host, and changing the skin inside Premiere did nothing until reload.
+- Auto now resolves from `appSkinInfo.panelBackgroundColor` and repaints on
+  `CSInterface.THEME_COLOR_CHANGED_EVENT`. The listener is registered once
+  (reconnects cannot stack duplicates) and unregistered on panel teardown.
+- Explicit Light/Dark choices still outrank the host and survive a host skin
+  change. Outside Premiere, where there is no host skin, Auto keeps following
+  the OS; the OS listener is no longer registered while docked so it cannot
+  fight the host event.
+- The resolved skin is published as `data-premiere-theme` on the root element,
+  matching the UXP theme vocabulary.
+
+### Fixed - Terminal job results are announced
+
+- Finishing a job previously only unhid the results card, which is a silent
+  DOM change: assistive technology had no reason to read it, so a
+  screen-reader user could get no completion signal and no route to the
+  recovery action. Toasts were not a substitute — they are transient and are
+  suppressed entirely when notifications are turned off.
+- Success now announces politely, failure announces assertively and names the
+  Retry control, and cancellation announces politely. Separate polite and
+  assertive live regions are used rather than one region whose politeness is
+  swapped, because assistive technology reads `aria-live` when it first sees
+  the node.
+- Focus is moved to the results card only when finishing the job stranded it
+  (the control that had focus is now disabled or hidden). A still-usable
+  control keeps focus, and the card never becomes a permanent tab stop.
+- Dismissing or retrying clears the regions so a stale result is not re-read.
+
+## 1.44.0 - Local trust boundaries
+
+### Fixed - Version-sync gate on CRLF checkouts
+
+- `scripts/sync_version.py --check` reported a permanent `SECURITY.md`
+  mismatch on a CRLF checkout that no `--set` could clear: the support-table
+  row pattern ended in `[^\n]*$`, which pulls the `\r` into the match while
+  the rebuilt row carries none, so an already-correct file always compared
+  unequal. The row end is now asserted with a lookahead instead of consumed.
+
+### Security - CEP panel ships without Node privileges
+
+- The CEP manifest no longer requests `--enable-nodejs` or `--mixed-context`.
+  Adobe disables Node in CEP by default; OpenCut held it solely so the panel
+  could build a log path and spawn an OS process, which widened what a
+  compromised panel could reach and voided the intended browser boundary.
+- Open Log now names a server-owned target instead. `POST /system/open-path`
+  accepts an opaque `target` (`server_log`, `crash_log`, `security_audit_log`,
+  `log_dir`) that the backend resolves and launches itself on Windows, macOS,
+  and Linux, so the panel never assembles a filesystem path. Caller-supplied
+  `path` requests keep their existing validation and extension allowlist, and
+  the two forms are mutually exclusive.
+- The generated After Effects panel manifest drops the same flags.
+- Source-safety tests now reject aliased Node access (`window.cep_node.require`
+  stashed in a local) across every production panel source, not just a literal
+  `require("child_process")`, and assert that packaged manifests carry no
+  `CEFCommandLine` privileges.
+
+### Security - Host-header trust gate closes DNS rebinding
+
+- Requests whose `Host` header does not name an authority this server answers
+  for are now rejected with `400 UNTRUSTED_HOST` before request correlation,
+  remote-auth, CSRF, or `/health` processing runs. Previously a page on a name
+  that resolved to `127.0.0.1` reached `/health` from a loopback socket with a
+  matching `Origin` and was handed the CSRF bootstrap token, which put every
+  authenticated mutation one rebind away.
+- Loopback names and literals (`localhost`, `127.0.0.0/8`, `::1`, bracketed or
+  not, any valid port) and a non-wildcard `OPENCUT_HOST` are trusted by
+  default. Other names must be listed in the new `OPENCUT_TRUSTED_HOSTS`,
+  where a leading dot trusts a subtree. Non-loopback IP literals are accepted
+  only under `OPENCUT_ALLOW_REMOTE=1`; they cannot be produced by rebinding,
+  so LAN-by-IP access keeps working without trusting unknown names.
+- Rejections are recorded as `untrusted_host_rejected` security-audit events.
+
+### Fixed - Truthful panel execution and bridge states
+
+- UXP Timeline rename and smart-bin cards now report the execution path that
+  will actually run — "Direct UXP" when the host bridge is available and
+  "CEP fallback" otherwise — instead of a fixed "CEP panel required" warning
+  next to controls that were sometimes enabled.
+- Stopping the live-updates bridge in both panels now stays connected until the
+  backend confirms termination. A failed stop restores the control, announces
+  the failure with the reason, and leaves the panel in a recoverable state
+  rather than disconnecting locally and hiding the error.
+
+### Fixed - External authorization boundary
+
+- CEP social authorization now validates HTTPS and explicit loopback callback
+  URLs, preserves the authorization URL unchanged, and opens it through the
+  bundled CSInterface browser API without creating a command shell.
+- The CEP development toolchain now resolves patched `brace-expansion` and
+  `postcss` releases; clean installs report zero npm advisories without
+  suppressing or allow-listing findings.
+- Local release verification now emits a short-lived receipt bound to a clean
+  `main` commit; version changes, installer smoke promotion, and local tag
+  creation fail closed when required evidence is missing, stale, skipped, or
+  source-drifted.
+- Clear Log now previews the exact diagnostic files and byte totals, requires
+  the shared signed confirmation flow, preserves files on cancel, and rejects
+  stale confirmation-token replay.
+
+## [1.43.0] — 2026-07-25 — Premium panel experience
+
+### Changed - Cohesive visual system and navigation
+
+- Unified CEP and UXP around a readable 14px type scale, compact headers,
+  tighter section rhythm, open hairline-divided surfaces, restrained elevation,
+  and a shared 0/4/6/8/10/12px radius scale with no pill-shaped controls.
+- Reworked all 17 primary tool views, both settings experiences, onboarding,
+  menus, dialogs, activity/output chrome, and narrow layouts so navigation,
+  hierarchy, action priority, and control grouping remain consistent.
+- Simplified workspace copy and status language, shortened settings navigation,
+  grouped transcription recovery with its primary action, and replaced
+  decorative form labels and audio emoji with quieter product-native treatment.
+
+### Fixed - Accessibility and non-default states
+
+- Added shared hover, selected, pressed, disabled, focus, overlay, and semantic
+  status tokens with legible light/dark treatment and reduced-motion support.
+- Caption display controls now expose a deliberate disabled state and recovery
+  explanation when their backend schema is unavailable instead of rendering as
+  empty, apparently interactive fields.
+- Expanded rendered regression coverage to enforce readable control sizing,
+  accessible names, compact geometry, radius discipline, keyboard behavior,
+  offline/loading/error/permission/confirmation states, and every page across
+  supported themes and panel widths.
+
+## [1.42.2] — 2026-07-25 — Premium interface and integrity verification
+
+### Changed - Route module contracts
+
+- Declared the public route exports for the decomposed captions, system, and
+  Wave L modules so facade imports cannot silently shadow same-named helpers.
+- CEP and UXP now read the connected backend version and fail closed with an
+  explicit upgrade message before any host write when recovery checkpoints
+  are unavailable on a pre-1.42.0 backend.
+- Review versions now persist full-hash verification state, expose it through
+  owner and guest metadata, and can be re-verified asynchronously per version;
+  known missing or SHA-256-mismatched artifacts are no longer served.
+
+### Changed - Premium editorial interface
+
+- Reworked the CEP and UXP panels around a shared 14px type scale, compact
+  headers, open hairline-divided sections, grouped controls, plain-text status
+  treatments, and shorter workspace copy across every primary page.
+- Added image-generated reference designs for Cut, Captions, Audio, Video,
+  Timeline, Search, Deliverables, Agent, Settings, and Export, plus rendered
+  page-by-page visual regression coverage for both panel surfaces.
+- Refined both navigation rails into open editorial lists, moved UXP workspace
+  utilities into quieter project chrome, and replaced the Settings dashboard
+  wall with a keyboard-accessible section navigator and one focused pane.
+- Replaced UXP boxed inputs, readiness pills, and deliverable tiles with a
+  quieter baseline-and-metadata grammar; removed duplicated caption summaries,
+  internal feature codes, and excess helper copy across desktop and narrow UI.
+- Flattened tertiary action groups, suggested-search controls, fallback notices,
+  and light-theme chrome; removed the duplicate rail footer and restored full-
+  width Settings content in compact panels.
+- Tightened the shared UXP workspace header, metadata row, result summaries,
+  and processing states against the generated direction board; status markers
+  now stay inline while the desktop shell gives more room to the active tool.
+- Compact follow-through pass aligned CEP and UXP navigation, flattened CEP
+  result surfaces and secondary actions, and kept connection/settings context
+  readable without pill-shaped chrome or off-screen active tabs.
+
+## [1.42.1] — 2026-07-22 — Recovery correctness and hardening audit
+
+### Fixed - Make interrupted host-write recovery actually restore
+
+- UXP marker restore matched checkpoint fingerprints against marker comments
+  while the bridge writes labels to marker names, so "Restore" removed nothing
+  yet reported success and consumed the recovery evidence. Fingerprints now
+  store the name, matching falls back across name and comment, and a restore
+  that removes nothing is reported as failed instead of recovered.
+- Cross-panel rename recovery used conflicting inverse shapes (UXP stored
+  applied→original, CEP restores to `oldName`), so restoring a UXP rename from
+  CEP re-applied it. Both panels now persist one canonical inverse shape with
+  a legacy-shape fallback for existing checkpoints.
+- The journal's orphan-spill pruner could delete a concurrent checkpoint's
+  payload file between spill write and row commit, destroying the inverse the
+  recovery feature exists to preserve; spill I/O and pruning now share a lock.
+- Duplicate client transaction IDs returned HTTP 500; they now return 409, and
+  transaction IDs are restricted to URL-safe characters (also closing a
+  markup-injection vector in the UXP recovery list).
+
+### Fixed - Stop corrupt state files from bricking or destroying data
+
+- A structurally corrupt `job_queue.json` no longer disables the queue until a
+  manual delete-and-restart: the file is quarantined to `job_queue.json.corrupt`
+  and the queue continues with persistence enabled. Newer-schema files still
+  fail closed. Queue 503s now name the actual failure.
+- A corrupt reviews store is quarantined to `reviews.json.corrupt` instead of
+  being silently overwritten by the next save.
+
+### Security - Close redaction, token, and oracle gaps in review/support paths
+
+- Issue-report redaction now catches JSON/dict-quoted secrets
+  (`"api_key": "..."`) that previously reached pre-filled public GitHub issues.
+- Review share tokens are now generated with `secrets.token_urlsafe` and
+  compared in constant time; portal signature verification runs before version
+  selection, removing a version-ID existence oracle.
+- Portal media serving verifies the recorded artifact size before serving, so
+  a tampered "immutable" review artifact returns an integrity error.
+- `dependency_support()` now strips extras/specifiers before support lookup, so
+  versioned specs like `nemo_toolkit[asr]>=2.7.3` can no longer bypass the
+  Linux-only platform gate.
+
+### Fixed - Panel polish and honest failure reporting
+
+- CEP no longer opens a "Tour unavailable" modal on every launch while the
+  backend is down; tour-completed state is cached locally and the startup probe
+  retries silently after reconnect.
+- UXP reconnect now reloads OTIO capabilities and the Timeline Recovery card
+  (previously stuck on "Loading…" if the panel started before the backend).
+- OTIO export errors are only labeled as preflight blocks when the server says
+  so; other failures show the real error, and the UXP toast includes the lossy
+  field list. Snapshotting a review version no longer blocks all review reads
+  for the duration of the artifact copy.
+- Journal status pills gained light-theme contrast overrides; the ASR
+  provenance result line is localized; UXP `escapeHtml` now always escapes
+  quotes.
+
+### Changed - Version/doc sync integrity
+
+- Fixed the `sync_version.py` SECURITY.md regex that left `|—` residue in the
+  support table; added the installer `AssemblyVersion` (stale at 1.19.0.0) as
+  a managed sync target and documented why the Flatpak MetaInfo release list
+  deliberately is not one; revived the dead CEP `style.css` header target and
+  the `check_doc_sizes.py` route-count guards; refreshed `.NET 9` → `.NET 10`
+  doc references and stale MCP tool counts.
+
+## [1.42.0] — 2026-07-22 — Trustworthy recovery and modular route contracts
+
+### Security - Harden release and support paths
+
+- Closed all supported Pillow installation paths below 12.3, redacted secrets
+  from issue-report previews, restored signed dry-run confirmation for CEP
+  destructive actions, and made release assembly attest its resolved
+  dependency composition.
+
+### Added - Version review artifacts under stable identities
+
+- Snapshot each review render into immutable, SHA-256-identified local storage
+  while retaining one stable review ID across rerenders.
+- Bound comments and approval state to explicit render versions, exposed
+  selectable version metadata through the existing review APIs, and added a
+  signed guest-link allowlist with side-by-side portal playback.
+- Added atomic review persistence, lossless legacy migration with an automatic
+  pre-versioning export, rollback/export helpers, and migration, tamper,
+  retention, route, and rendered comparison coverage.
+
+### Changed - Retarget the Windows installer to .NET 10 LTS
+
+- Retargeted the WPF installer and its xUnit contracts from .NET 9 to
+  `net10.0-windows`, raised the build prerequisite to SDK 10.0.100, and updated
+  the Microsoft test platform and xUnit Visual Studio runner.
+- Added Windows app-theme selection with Catppuccin Mocha and Latte resources;
+  installer chrome now uses theme resources instead of fixed dark colors so
+  both light and dark shells remain legible.
+- Kept installer actions reachable in the fixed-size shell by sizing pages to
+  the navigation viewport and scrolling long welcome content.
+- Isolated WPF and Inno install/uninstall smoke tests behind test-only manifests
+  and disposable profiles, removed stale installer metadata while preserving
+  user data, and excluded extension dependencies and test artifacts from both
+  release payloads.
+
+### Added - Recover interrupted Premiere host writes
+
+- Promoted the SQLite operation journal to schema-v3 checkpoints that persist a
+  named transaction, affected clips/items/settings, and recovery diagnostics
+  before Premiere is mutated, then atomically attach the inverse and completion
+  state after the host reports success.
+- CEP and UXP now detect interrupted checkpoints after restart, preview their
+  scope, restore verified marker, rename, sequence, and overlay inverses in one
+  action, and export diagnostics when automatic recovery is unavailable.
+- Added legacy-schema migration, subprocess crash injection, tamper detection,
+  bounded retention, orphan-spill cleanup, route validation, and direct-host
+  boundary tests; incomplete checkpoints survive normal history cleanup.
+
+### Added - Preflight targetable OpenTimelineIO exports
+
+- Added live adapter discovery and explicit current or `OTIO_CORE` legacy
+  schema targets across the REST API, CLI, CEP panel, and UXP panel.
+- OTIO writes now simulate downgrade and re-upgrade in memory, report fields
+  that would be lost, and require explicit acceptance before a lossy file can
+  be written. Missing, read-only, and extension-incompatible adapters fail in
+  the same structured preflight.
+- Embedded OTIO runtime, adapter package/version, schema target, and exact
+  schema map in export metadata, with real current/0.14 round-trip fixtures for
+  rational time, markers, transitions, and custom metadata.
+
+### Added - Run pinned Parakeet and Canary ASR locally on Linux
+
+- Replaced the terminal NeMo stubs with cache-first Parakeet and Canary
+  adapters that normalize word/segment timestamps, confidence, language,
+  cancellation, and reproducible provenance into OpenCut's shared transcript
+  contract.
+- Pinned both CC-BY-4.0 checkpoints to immutable Hugging Face revisions and
+  SHA-256 hashes, scan them before loading, and expose a resolver-tested
+  `nemo-asr` extra for NeMo 2.7.3 on Python 3.11-3.14 Linux.
+- Made route, registry, dependency-dashboard, and model-manager readiness
+  distinguish implemented adapters from unsupported platforms, while cached
+  transcripts remain readable without loading NeMo or downloading a model.
+
+### Fixed - Unify CEP first-run onboarding
+
+- Replaced the competing local and server-backed first-run tours with one
+  server-backed state machine that persists step, dismissal, completion, and
+  restart behavior through the existing onboarding API.
+- Reused the shared modal focus contract for initial focus, tab containment,
+  Escape dismissal, and focus restoration, with explicit retry and continue
+  paths when the backend is unavailable.
+- Added state-machine unit coverage and rendered first-run, restart, offline,
+  keyboard, responsive-layout, and visual baselines.
+
+### Fixed - Follow Premiere's live UXP theme
+
+- Synchronized the UXP shell with Premiere Pro's Light, Dark, and Darkest host
+  themes at startup and on live updates, with deterministic fallback behavior
+  and listener cleanup during teardown.
+- Added light-safe component and state colors, refreshed the rendered Light
+  baselines, and locked primary text, secondary text, and icon contrast through
+  a mocked UXP theme API rather than browser media emulation.
+
+### Fixed - Gate public trust and installation claims on generated facts
+
+- Added a deterministic project-facts manifest for version, Python/platform
+  support, route readiness, FFmpeg security floors, distribution availability,
+  and trust boundaries, with generated-doc and release-smoke drift gates.
+- Corrected locality and dynamic-execution language, removed the unavailable
+  PyPI/Homebrew/winget commands, and distinguished the older published Windows
+  installer from the current source tree.
+- Changed dependency APIs and the CEP Dependency Dashboard to publish explicit
+  source-checkout commands while PyPI remains unavailable, and added committed
+  shipped-document link-integrity coverage with an explicit historical changelog
+  exemption.
+
+### Added - Make ASR provenance and boundary confidence reproducible
+
+- Persisted the selected transcription engine, immutable model ID/revision,
+  alignment backend/version, language decision, fallback reason, and runtime
+  versions in transcript caches, caption sidecars, JSON exports, interview
+  state, and privacy-safe diagnostics; legacy caches and sidecars migrate in
+  place without discarding transcript data.
+- Separated text confidence from edit-boundary confidence and added a
+  non-mutating filler review contract. The CEP panel auditions every uncertain
+  range as raw source audio and requires explicit acknowledgement before an XML
+  timeline mutation is generated.
+- Added deterministic ASR evaluation fixtures for accents, overlap, fillers,
+  variable frame rate, 29.97/59.94 timing, and code-switching, with independent
+  word-error and boundary-error metrics plus rendered narrow-panel coverage.
+
+### Added - Recover the legacy job queue across restarts
+
+- Persisted queued work in a versioned, atomic user-data document; server
+  restarts preserve order and expose formerly active entries as `interrupted`
+  instead of rerunning them without user review.
+- Added validated queue replay plus `/queue/import` and `/queue/export` JSON
+  interchange with stable-ID deduplication, live-route checks, and output
+  collision protection.
+- Added a CEP queue recovery control with explicit active and interrupted
+  states; queue clearing now includes interrupted records in the existing
+  preview-and-confirm protocol.
+
+### Fixed - Make optional dependency support resolver-executable
+
+- Unified source, launcher, installer, classifier, and runtime readiness claims
+  on Python 3.11-3.14; added a local uv resolver matrix covering every declared
+  Windows, Linux, and macOS lane with actionable unsupported combinations.
+- Removed the incompatible WhisperX, AudioCraft, and Resemble Enhance extras
+  without weakening the Torch 2.10 / torchvision 0.25 / Transformers 5.3
+  security floors, and removed the obsolete Transformers advisory waivers.
+- Updated the hash-locked standard install to PySceneDetect 0.7 and one direct
+  OpenCV 5 provider, while normalizing legacy runtime install requests to the
+  same supported package.
+
+### Changed - Decompose oversized route modules
+
+- Split the system, caption, and Wave L route monoliths into 23 cohesive
+  purpose modules behind their existing blueprint facades. URLs, endpoint
+  names, decorators, payload contracts, and the 1,566-route manifest remain
+  unchanged, while every extracted module is below the repository's 600-line
+  decomposition guidance.
+
+## [1.41.0] — 2026-07-21 — Decompose the CEP and UXP panel runtimes
+
+### Changed - Extract UXP runtime boundaries behind focused contracts
+
+- Split UXP runtime state, CSRF-aware backend transport, async job tracking,
+  locale loading/DOM translation, timeline payload normalization, DOM
+  components, and bootstrap error containment into dedicated ES modules.
+  `main.js` now composes those boundaries while preserving endpoint payloads,
+  host-action names, retry rules, and job completion behavior.
+- Added 12 focused Vitest contracts for transport retry, job exclusivity,
+  locale overlays, timeline payloads, component escaping/state, and ordered
+  bootstrap behavior.
+- Extracted the CEP connection store, XHR/CSRF transport, exclusive job
+  lifecycle, timeline payload builders, component state, and bootstrap error
+  containment into independently testable classic-script modules. The panel
+  build now preserves the complete module graph explicitly, and 11 focused
+  contracts lock request deduplication, CSRF retry, route payloads, and ordered
+  startup behavior.
+- Split both command-center stylesheets into ordered token, shell-layout, and
+  component/responsive layers, with source-ownership contracts preventing the
+  monoliths from silently absorbing those responsibilities again.
+
+## [1.40.0] — 2026-07-21 — Extract the CEP + UXP i18n cores behind tests
+
+### Changed - Move the CEP i18n lookup + locale merge into a pure, tested core
+
+- Extracted the CEP `t()` resolution and the `loadLocale` overlay-merge logic
+  out of `client/main.js` into a new UMD module `client/i18n-utils.js`
+  (`window.OpenCutI18n`) exposing `translate(map, key, fallback)` and
+  `mergeLocale(base, overlay)`. `t()` now delegates to `translate`, and
+  `loadLocale` replaces its in-place merge loop with a non-mutating
+  `mergeLocale` call. Registered in the Vite classic-script list and loaded
+  before `main.js`; behaviour (English base + locale overlay, key fallback) is
+  unchanged.
+- Added a focused vitest contract test (`tests/i18n-utils.test.mjs`, 4 cases)
+  covering key/fallback resolution and own-keys-only, non-mutating locale
+  merge.
+
+### Changed - Move the UXP i18n lookup + interpolation into a pure, tested core
+
+- Extracted the translation-resolution and `{name}`-placeholder substitution
+  logic out of `com.opencut.uxp/main.js` into two pure functions in
+  `uxp-utils.js` — `translate(map, key, fallback)` and
+  `interpolateI18n(text, values)`. The controller's `t()` and `formatI18n()`
+  (the latter used at 276 call sites) now delegate to them, keeping only the
+  binding to the live `_i18n` translation map. Behaviour is unchanged,
+  including the literal (`$`-safe) replacement of every placeholder occurrence.
+- Added a focused vitest contract test (`tests/uxp-i18n.test.mjs`, 5 cases)
+  covering key/fallback resolution, repeated and unknown placeholders, value
+  coercion, `$`-sequence safety, and empty/non-string inputs — satisfying the
+  roadmap's "i18n module has focused tests" acceptance criterion for the UXP
+  surface.
+
+## [1.39.0] — 2026-07-21 — Continue CEP panel monolith decomposition
+
+### Changed - Extract pure lookup/parse helpers from the CEP main.js monolith
+
+- Moved eight provably-pure helpers (`getTranscriptCacheKey`,
+  `parseToUnixSeconds`, `getOutputItemPath`, `normalizeJobOptions`,
+  `matchesShortcut`, `findSelectOptionByValue`, `getPanelTabName`,
+  `getSelectOptionLabel`) out of `client/main.js` into a new UMD module
+  `client/lookup-utils.js` (`window.OpenCutLookup`), aliased in `main.js` with
+  all call sites unchanged. These read only their arguments (including
+  passed-in DOM objects/events) with no `document`, globals, i18n, shared
+  state, or mutation. Registered in the Vite classic-script list and loaded
+  before `main.js`.
+- Added a focused vitest contract test (`tests/lookup-utils.test.mjs`, 8
+  cases) covering the cache-key slugifier, the numeric/string unix-seconds
+  parser, the job-options normalizer, the keyboard-shortcut matcher, and the
+  `<select>`/panel/output lookups against plain mock objects.
+
+## [1.38.0] — 2026-07-21 — Decompose the UXP panel monolith
+
+### Changed - Extract pure catalog/classifier/locale helpers from UXP main.js
+
+- Moved five more pure, host-independent helpers
+  (`normalizeCaptionStyleCatalog`, `migrationStateClass`,
+  `pluginTrustStateClass`, `normalizeLocaleTag`, `getLocaleCandidates`) out of
+  `com.opencut.uxp/main.js` into `uxp-utils.js`. The two locale helpers now
+  take the default locale as a `defaultLocale = "en"` parameter (equal to the
+  controller's `UXP_DEFAULT_LOCALE`), removing their last module-level
+  dependency so they are fully pure without changing any call site.
+- Added a focused vitest contract test (`tests/uxp-catalog-locale.test.mjs`, 6
+  cases) covering catalog dedupe/coercion, the migration/plugin trust-badge
+  classifiers, and locale-tag normalization + fallback-candidate ordering.
+
+### Changed - Extract pure formatting helpers from the UXP main.js monolith
+
+- Moved nine provably-pure, host-independent helpers (`formatTimecode`,
+  `formatCompactDuration`, `formatBytes`, `humanizeDomain`,
+  `shortsBundleFileNameUxp`, `normalizeHttpsExternalUrl`, `isTimeoutError`,
+  `getSearchResultPath`, `getSearchResultPreview`, plus the internal `pad`)
+  out of `com.opencut.uxp/main.js` into the existing ES module
+  `com.opencut.uxp/uxp-utils.js`, imported at the top of `main.js` with all
+  call sites unchanged — the first decomposition pass on the UXP half of the
+  panel monolith (the CEP half already has format/job-meta/classify/data-shape/
+  string modules).
+- Added a focused vitest contract test (`tests/uxp-format.test.mjs`, 9 cases)
+  covering the timecode/duration/byte formatters, domain humanizer, basename
+  helper, the https-only URL guard, the abort/timeout predicate, and the
+  search-result path/preview coalescers.
+
+## [1.37.0] — 2026-07-21 — Flatten the CEP command-center stylesheet
+
+### Changed - Extract pure string/path helpers from the CEP main.js monolith
+
+- Moved eight provably-pure, closure-independent helpers (`humanizeControlId`,
+  `journalClipName`, `shortsBundleFileName`, `parseTimeToSec`,
+  `captionDisplayOptionLabel`, `inferNotificationTone`,
+  `getNotificationIconSvg`, `wsFormatListenerCount`) out of `client/main.js`
+  into a new UMD module `client/string-utils.js` (`window.OpenCutStringUtils`),
+  aliased in `main.js` with all call sites unchanged. Registered in the Vite
+  classic-script list and loaded before `main.js`.
+- Added a focused vitest contract test (`tests/string-utils.test.mjs`, 8
+  cases) covering the id-humanizer, basename helpers, timecode parser, caption
+  label builder, notification tone/icon classifiers, and listener-count
+  template.
+
+### Changed - Extract pure data-shape helpers from the CEP main.js monolith
+
+- Moved six provably-pure, closure-independent helpers
+  (`normalizeWorkspaceState`, `normalizeNavScrollState`, `languageOptionLabel`,
+  `normalizeLanguageOptions`, `getTranscriptTotalDuration`,
+  `polishStepsFromResult`) out of `client/main.js` into a new UMD module
+  `client/data-shape-utils.js` (`window.OpenCutDataShape`), mirroring the
+  existing `format-utils`/`job-meta-utils`/`classify-utils` extractions.
+  `main.js` now aliases them at the top; all ~20 call sites are unchanged, and
+  the module is registered in the Vite classic-script preservation list and
+  loaded before `main.js` in `index.html`.
+- Added a focused vitest contract test (`tests/data-shape-utils.test.mjs`, 8
+  cases) covering the state/normalization/label/duration/index behaviours.
+
+### Changed - Collapse `command-center.css` into a single token + rule layer
+
+- Re-synthesised `extension/com.opencut.panel/client/command-center.css` from
+  its resolved cascade so every selector is declared once. The two stacked
+  authoring passes (a first `html.theme-light`/base pass fully overridden by a
+  later `:root`/base pass) are merged: there is now one `:root` dark-token
+  block, one `html.theme-light` light-token block, and one rule per selector.
+- The four responsive `@media` blocks (`980px`, `700px`, `620px`,
+  `prefers-reduced-motion`) now carry only the properties that actually change
+  at each breakpoint; the dead, wholesale-overridden cascade (duplicated
+  sidebar/nav/header/workspace geometry and redundant media overrides) was
+  dropped.
+- The rewrite is provably render-equivalent: the effective declaration map of
+  every selector was diffed against the original at every viewport band
+  (1400/981/980/900/701/700/660/621/620/480/320px, with and without
+  reduced-motion) and is identical, and the 35-test rendered Playwright
+  regression gate (CEP/UXP screenshots across dark/light/auto at 480/900/1200)
+  plus the contrast/geometry/a11y suites pass unchanged.
+
+## [1.36.0] — 2026-07-21 — CEP monolith decomposition (first module)
+
+### Changed - Extract pure formatting helpers from the CEP main.js monolith
+
+- Moved seven provably-pure, closure-independent helpers (`safeFixed`,
+  `escSingleQuote`, `extractWordSegments`, `fmtDur`, `formatTimecode`,
+  `getStepPrecision`, `formatNumberForInput`) out of the 17.7k-line
+  `client/main.js` into a new UMD module `client/format-utils.js`
+  (`window.OpenCutFormat`), mirroring the existing `panel-utils.js` pattern.
+  `main.js` now aliases them; ~80 call sites are unchanged. The
+  injection-critical `escSingleQuote` (ExtendScript single-quote escaping) is
+  ported byte-for-byte and covered by a focused vitest contract test.
+- Extracted four more pure job/session-metadata accessors (`sessionCtxOpText`,
+  `sessionCtxResultPath`, `getJobHistorySourcePath`, `getJobHistorySourceName`)
+  into `client/job-meta-utils.js` (`window.OpenCutJobMeta`), also aliased in
+  `main.js` and covered by a vitest contract test.
+- Extracted three pure engine/plugin classifiers (`humanizeEngineDomain`,
+  `engineTemplateText`, `pluginTrustStateClass`) into `client/classify-utils.js`
+  (`window.OpenCutClassify`), aliased in `main.js` with a vitest contract test.
+  The `t()`-dependent neighbors (`engineCountText`, plugin badge HTML) stay in
+  `main.js` — only closure-independent leaves were moved.
+- Verified equivalent for each extraction: node syntax check, vitest (incl. the
+  new format-utils and job-meta suites), Vite panel build, the 35-screenshot
+  rendered regression gate (no page errors, identical rendering), and unchanged
+  eslint baseline.
+
+## [1.35.0] — 2026-07-20 — Roadmap drain: download integrity
+
+### Added - Verify model-download integrity before use
+
+- `model_manager._download_worker` now verifies a freshly downloaded model
+  before it is marked available: a per-row `sha256` (optional, since most
+  catalogue URLs resolve to mutable upstream refs) is checked, and pickle-format
+  payloads — including the new Parakeet/Canary `.nemo` checkpoints, a strictly
+  worse tamper class than safetensors/onnx — are picklescanned via
+  `model_safety.scan_model_file`. Any failure fails closed, quarantines
+  (deletes) the file, and surfaces a structured `ModelIntegrityError`, so a
+  tampered or corrupt download is never treated as installed.
+- `model_safety` recognizes `.nemo` as a pickle-backed format and exposes
+  `is_pickle_format()`.
+
+### Added - Hybrid ASR engine router (Parakeet + Whisper turbo)
+
+- New `opencut/core/asr_router.py` routes each transcription request by language:
+  NVIDIA Parakeet TDT v3 for its 25 supported European languages (Canary via
+  explicit override) and Whisper `large-v3-turbo` for the long tail. Selection
+  is honest — an engine is chosen only when the shared engine registry reports it
+  available, so a terminal-stub NeMo adapter always falls back to Whisper and is
+  surfaced as coming-soon via `asr_engine_readiness()`. `captions.py` exposes the
+  seam through `plan_transcription_engine()`. Routing decisions, fallbacks, and
+  the implementation-state gate are unit-tested.
+
+### Added - Script-to-timeline: alternate takes, preview, reversible write-back
+
+- `script_to_roughcut` now attaches ranked **alternate takes** (distinct clips)
+  to each script line and lays them out on separate video tracks (V2, V3, ...)
+  in both the FCP-XML and OTIO exports, aligned to the primary V1 pick.
+- `assemble_rough_cut` gains a **preview** mode (`write_back=False`) that returns
+  the reviewable plan without writing any timeline or touching the journal, plus
+  `max_alternates`. On write-back it records a revertible `import_sequence`
+  operation-journal entry (`record_write_back`) so the host import can be undone.
+- `/rough-cut/from-script` accepts `preview` and `max_alternates`; the response
+  carries `preview`, `alternate_takes`, and `journal_entry_id`. Matching, plan
+  generation, alternates, preview, and journal write-back are fixture-tested.
+
+### Added - Portable semantic-search sidecar (move-stable relink/invalidation)
+
+- `semantic_video_search` gains a portable, versioned project sidecar under
+  `<project_dir>/.opencut_index`. Embeddings are keyed by a move-stable
+  **content signature** (sampled head/mid/tail hash), so a clip that is
+  relocated or relinked is deterministically reused, while changed content is
+  deterministically invalidated. New helpers: `content_signature`,
+  `save_sidecar_embeddings`, `load_sidecar_embeddings`, `sidecar_relink_status`.
+- `build_clip_index` accepts `project_dir` (persists to and reuses from the
+  sidecar; reports `relinked_count`); `/search/semantic/index` accepts
+  `project_dir`. All computation stays local; relink and invalidation paths are
+  unit-tested.
+
+## [1.34.0] — 2026-07-17 — Deep audit: honest readiness, host-safe panels, hardened installers
+
+### Fixed - Stop advertising unimplemented AI engines and routes as ready
+
+- Engines whose adapter is still a terminal `NotImplementedError` stub (Parakeet,
+  Canary, SeedVR2, LatentSync, Sortformer, IC-Light, ...) stay listed as
+  coming-soon but never report available or resolve as the active engine — the
+  transcription domain no longer selects a stub over working Faster-Whisper.
+- `FeatureRecord` adapters can be listed together so `captions.nemo-asr` no
+  longer masks Canary's stub behind Parakeet; readiness now re-probes
+  dependency-gated features so they flip to available the moment their optional
+  dependency is installed, without waiting for a regenerated artifact.
+- The route-manifest classifier marks a handler as a stub only when it calls a
+  terminal-stub core entrypoint *without* a fallback; 21 genuine Wave Q/R/S
+  stub routes (parakeet, canary, mochi, seedvr2, iclight, ...) now report
+  honestly, while defensively-guarded routes like `/video/ai/upscale`
+  (SeedVR2 → Real-ESRGAN fallback) stay implemented. Advertised route count
+  corrected to 1,527.
+- Parakeet/Canary `/info` endpoints report their real stub status instead of
+  `available: true` with a fabricated latency.
+
+### Fixed - Caption interchange, CineFocus, and long renders
+
+- IMSC/TTML export validates `ttp:frameRate`: integer rates pass through,
+  NTSC-family fractional rates (29.97, 59.94, ...) emit an integer rate plus
+  `ttp:frameRateMultiplier="1000 1001"`, and unrepresentable rates are rejected
+  as conformance errors; `/delivery/caption/ttml` clamps caller-supplied rates.
+- CineFocus fails loudly when its video writer or frame writer cannot open
+  (previously produced a silently empty file reported as success), forces an
+  MP4 container for the mp4v codec, and cleans up the GPU on the preview path.
+- `/video/cinefocus` runs as a cancellable background job with progress instead
+  of blocking a request worker on a full-video neural depth render.
+
+### Security - Trust anchors, header-only auth, rebinding parity
+
+- C2PA sidecar verification supports a pinned trust anchor
+  (`OPENCUT_C2PA_TRUSTED_PUBKEYS`, auto-derived from the local signing key);
+  a re-signed sidecar no longer passes as authentic, and the result carries an
+  explicit `key_trust` field. `/video/c2pa/read` reports a distinct `valid`
+  flag from c2patool's validation state rather than conflating "credential
+  found" with "credential valid".
+- Auth tokens are accepted only via the `X-OpenCut-Auth` header; the `?auth=`
+  query-string fallback (which leaks into logs, history, and `Referer`) is
+  removed from the Flask middleware and MCP HTTP server.
+- Remote-node control-plane requests go through the guarded opener with
+  connect-time re-resolution, closing the DNS-rebinding asymmetry with the
+  download path. MCP array path parameters get the same control-character and
+  reserved-device checks as scalar paths.
+
+### Fixed - Host-safe CEP/UXP panels
+
+- Removed the single optional-catch-binding that parse-crashed the entire CEP
+  panel on CEP 9 (Premiere 2019) hosts, and dropped `color-mix()` — unsupported
+  in every CEP Chromium — which had left the sticky sub-tab rail transparent and
+  the dropdown focus ring invisible.
+- Light-theme fixes: readable primary-button hover, visible dropdown item
+  hover/keyboard-focus highlight, and sub-tab hover state. Escape on a closed
+  dropdown trigger no longer swallows the event; plugin-install button lookups
+  no longer throw on quoted ids; sub-tab scroll buttons hand off focus before
+  disabling.
+- UXP toast headings, dismiss label, and processing fallback are localized with
+  CEP-aligned vocabulary (en + es parity); backend-offline and job locks no
+  longer clobber each other's disabled state; the diagnostics card shows the
+  real default endpoint.
+
+### Fixed - Installers fail honestly and stop corrupting PATH
+
+- `install.py` writes PlayerDebugMode to the real `CSXS.<n>` integer registry
+  keys — the previous `.0`-suffixed keys were never read by Premiere, so
+  python-installed CEP panels silently failed to load.
+- `Install.ps1` pip and validation steps now set a non-zero exit code and print
+  MISSING/FAILED instead of unconditional success. `OpenCut.iss` writes PATH as
+  `REG_EXPAND_SZ` and matches full `;`-delimited segments (preserving `%VAR%`
+  entries and sibling directories), and broadcasts `WM_SETTINGCHANGE` instead of
+  leaving a stray environment variable. The Dockerfile's documented run command
+  mounts the required auth-token file instead of crash-looping.
+- `requirements-lock.txt` regains the missing core pins (`rich`,
+  `python-json-logger`) and drops dev-only tools; `release_smoke --strict`
+  fails when critical gate steps silently self-skip.
+
+### Fixed - Test reliability
+
+- Thread-local SQLite caches (footage index, journal, pipeline health) discard
+  and reopen a stale connection when the database path changes or the handle is
+  closed — the root cause of order-dependent search-route test failures that
+  passed only in isolation.
+
+## [Unreleased]
+
+### Security - Contain remote model downloads
+
+- Hugging Face downloads now resolve a reviewed 40-character commit before any
+  file is accepted. Absolute paths, UNC names, drive-relative names, and parent
+  traversal are rejected before a destination is created.
+- Remote model code is limited to exact reviewed repository and revision pairs.
+  Florence 2 and BiRefNet prefer safetensors, and repository tests reject new
+  unrestricted remote-code calls or downloads that bypass the safety layer.
+- The Hub floor is 1.26.0, which contains the filename-validation fix for
+  CVE-2026-15717. NeMo is temporarily unavailable because its current release
+  requires an older Hub version; cached checkpoints remain readable.
+
+### Security - Block vulnerable embedded FFmpeg copies
+
+- Release checks now inventory and hash the separate FFmpeg libraries shipped
+  by OpenCV and PyAV. They reject unknown copies and any active decoder below
+  the FFmpeg 8.1.2 library floor required for CVE-2026-8461.
+- OpenCV is pinned to the reviewed 4.14.0.94 lane. Linux and macOS must prove
+  its patched ABI. On Windows, the older bundled backend is disabled before
+  `cv2` loads and its plugin is removed from packaged server artifacts. PyAV's
+  reviewed FFmpeg 8.1.2 libraries remain available for media processing.
+- Capability reports, release composition, SBOM output, installer metadata,
+  and local release smoke now carry the same embedded-decoder verdict.
+
+### Security - Attest resolved release composition
+
+- Added SHA-256-locked runtime and build dependency lanes, and made source,
+  Docker, Windows, Flatpak, and AppImage assembly consume or validate those
+  locks instead of resolving mutable dependency ranges at release time.
+- Release assembly now fails closed unless it can inventory every direct and
+  transitive Python distribution, hash packaged artifacts, and emit a resolved
+  CycloneDX SBOM plus third-party notices. Bundled FFmpeg additionally records
+  its binary hash, GPL status, exact source archive and checksum, build origin,
+  configure flags, and corresponding-source instructions.
+- Windows installers now carry the release-composition manifest, SBOM,
+  third-party notices, FFmpeg provenance, and project license in the installed
+  payload; license and vulnerability gates cover the new resolved locks.
+
+### Security - Close vulnerable Pillow install paths
+
+- Raised every declared Pillow lane to `>=12.3.0,<13`, constrained runtime
+  auto-installs to the same advisory-safe range, and updated bootstrap and
+  dependency-dashboard commands so old indexes cannot select Pillow 12.2 or
+  earlier. A repository regression gate rejects unbounded runtime/copy paths.
+
+### Security - Redact secrets from issue report previews
+
+- Issue-report titles, descriptions, crash tails, and log tails now redact
+  credential-bearing headers, URLs, environment assignments, provider tokens,
+  private keys, and home paths before truncation and GitHub URL encoding. The
+  CEP prompt keeps an explicit human-review warning.
+
+### Fixed - Restore safe CEP destructive actions
+
+- Preset, model-cache, queue, and custom-workflow deletion controls now fetch
+  and render the backend's signed dry-run plan before asking for confirmation.
+  Destructive dialogs focus Cancel first, retain the shared focus trap and
+  Escape/return-focus behavior, and safely re-preview changed or expired plans
+  before accepting a replacement confirmation token.
+
+### Improved - Rebuild CEP and UXP as an editorial command center
+
+- CEP and UXP now share a restrained graphite command-center system with a
+  176px wide editorial rail, compact workspace header, clearer card hierarchy,
+  consistent controls, and amber offline signaling that does not read as a
+  destructive failure.
+- Wide UXP workspaces replace the crowded tab strip with the editorial rail,
+  group Settings into two-column operational cards, and collapse redundant
+  active-shot context; 480-520px panels use a labeled-by-tooltip icon toolbar
+  that keeps every workspace visible without a cramped scrolling menu.
+- The final visual pass raises the desktop type scale, removes nested stat-card
+  borders and decorative shadows, softens semantic colors, and stops matching
+  grid cards from stretching into empty space.
+- UXP Settings now mirrors the command-center mockup with a compact top action
+  bar, card-integrated headings, Workspace/Engine and Live Updates/Diagnostics
+  rows, and live source, backend, endpoint, engine, and health-check state.
+- The image-generated visual target is preserved at
+  `extension/design/opencut-command-center-mockup.png`. Headless visual
+  baselines cover every CEP/UXP workspace and explicit geometry tests guard
+  the wide rails, responsive settings grids, overflow, keyboard navigation,
+  semantic states, and WCAG AA contextual contrast.
+- CEP submenus, listboxes, clip actions, recent clips, and the command palette
+  now use one restrained menu language with explicit overflow controls,
+  consistent focus/selection states, footer-aware placement, and accessible
+  popup semantics; the Recent Clips menu no longer closes as soon as it opens.
+- UXP selects and connection details now match the same compact surface system,
+  while localized command descriptions resolve correctly instead of exposing
+  function source in palette results.
+
+### Improved - Validate canonical caption XML interchange
+
+- EBU-TT, TTML, legacy IMSC1, and IMSC 1.3 now share one canonical caption
+  model, atomic serializer, safe importer, and structural/profile validator.
+- IMSC 1.3 exports use the 2026-05-21 W3C profile designator and preserve UTF-8
+  text, language, timing, named regions/styles, RTL direction, and vertical
+  writing through export/import round trips.
+- Caption preflight can validate a requested XML profile before export. The
+  conformance corpus rejects malformed/unsafe XML, invalid timing and layout,
+  duplicate IDs, and unresolved style or region references while legacy
+  `imsc1` callers retain an explicit compatibility profile.
+
+### Improved - Keep constrained UXP workspaces oriented
+
+- The compact UXP shell keeps each workspace title, current state, and first
+  recovery action above the fold at 480x800 and 520x800 while preserving the
+  full overview at wider panel sizes.
+- The nine-workspace strip now exposes localized previous/next controls when
+  it overflows, auto-reveals the selected tab, and retains roving keyboard
+  focus. Backend connectivity is one persistent row with offline and refresh
+  details available on demand.
+- Headless rendered coverage exercises all workspaces at both constrained
+  widths in English and Spanish and preserves the 1200px detail path.
+
+### Fixed - Keep CEP controls legible in light mode
+
+- Danger, warning, accent, action-hover, and persistent error-banner text now
+  use semantic theme tokens instead of dark-only literals; settings and cut
+  review checkboxes use the shared focus accent.
+- The contrast release gate now audits explicit CEP light-theme overrides as
+  well as base tokens, including contextual controls and the intentional dark
+  server-error surface. Headless rendered tests verify the resolved dark/light
+  token pairs meet WCAG AA.
+
+### Security - Isolate third-party plugin failures
+
+- Third-party plugin routes and jobs now import only in lazy, supervised worker
+  processes with sanitized environments, authenticated size-bounded IPC,
+  startup/request timeouts, memory monitoring, and crash-loop quarantine.
+- A crashing or hung plugin no longer executes in the Flask server process or
+  affects another plugin worker. Trusted bundled examples retain an explicit
+  compatibility lane; the isolation is documented as availability isolation,
+  not an OS security sandbox.
+- CEP and UXP now expose redacted worker health and explicit restart controls,
+  backed by worker diagnostics and CSRF-protected restart endpoints.
+
+### Fixed - Make JSON schema migrations retry-safe
+
+- Versioned user-data migrations now copy each step, advance and atomically
+  persist its schema version only after the callback succeeds, and retain a
+  durable pre-sequence backup until the complete target version is committed.
+- Failed callbacks or promotions restore the original data without logging
+  exception payloads; interrupted runs recover or resume safely, and unknown
+  future schemas are refused without rewriting the file.
+
+### Security - Add headless secret-file authentication
+
+- Remote container binds can now read `OPENCUT_REMOTE_AUTH_TOKEN_FILE` without
+  a desktop vault. The backend rejects relative paths, symlinks/reparse points,
+  non-regular files, weak or whitespace-bearing tokens, and POSIX group/world
+  permissions, and it re-reads the file so external replacement takes effect.
+- CPU, GPU, and MCP Compose profiles require one mounted secret. A non-root
+  entrypoint normalizes Compose's file-backed mount to a private `0400` runtime
+  file without placing its value in JSON, environment variables, logs, image
+  layers, or API responses; the MCP sidecar forwards the current token.
+- Writable `0600` files rotate atomically. Read-only mounts return
+  `REMOTE_AUTH_TOKEN_FILE_READ_ONLY` with recreate guidance, and auth metadata
+  endpoints conceal the configured secret path.
+
+### Security - Authenticate and stage plugin installations
+
+- Direct and marketplace installs now remain outside the active loader path
+  until their manifest, content lock, publisher identity, Ed25519 signature,
+  pinned artifact digest, and exact declared capabilities have been verified.
+- New installs activate with an atomic directory move; updates retain a staged
+  backup and restore the prior plugin if activation or metadata persistence
+  fails. Interrupted, tampered, unsigned, or invalid installs leave no active
+  plugin entry.
+- CEP and UXP show the full publisher fingerprint and capability request and
+  keep the install action disabled until the operator approves both. The
+  trusted publisher record and installed artifact provenance are persisted
+  atomically for later diagnostics.
+
+### Added - Rendered CEP and UXP regression gate
+
+- A deterministic headless Chromium matrix now renders every top-level CEP and
+  UXP tab at compact, preferred, and wide panel widths across dark, light, and
+  automatic color preferences, with committed screenshot baselines.
+- The gate rejects uncaught page errors, horizontal overflow, unnamed visible
+  controls, keyboard-tab regressions, broken modal focus trapping, and invalid
+  empty, loading, error, offline, permission, or destructive-confirmation
+  states without requiring Premiere to be installed.
+- Release smoke now runs the rendered panel suite alongside the existing unit,
+  lint, and advisory checks.
+
+### Fixed - Lock Premiere UXP actions on 26.3+
+
+- Sequence in/out action factories now run synchronously inside one
+  `Project.lockedAccess()` and `executeTransaction()` scope on Premiere 26.3+,
+  with an `executeTransaction()` fallback for supported hosts that do not expose
+  the lock API.
+- Subsequence creation reads back the requested range before proceeding and
+  verifies that the original range was restored. The official Adobe Premiere
+  ESLint rules, a negative lint fixture, and a disposable UDT scenario guard the
+  transaction boundary.
+
+### Security - Enforce FFmpeg 8.1.2 across every runtime
+
+- Releases below FFmpeg 8.1.2, undated snapshots, missing binaries, and
+  unparseable banners now fail closed before media processing. Capability and
+  preflight diagnostics report the blocked runtime and CVE-2026-8461 floor.
+- Source, PowerShell, WPF, Inno, Docker, and release-builder paths now verify
+  the same release/snapshot policy. Docker builds the checksum-pinned 8.1.2
+  source archive, and installer provenance records both upstream MagicYUV fix
+  commits.
+- Central FFmpeg/ffprobe resolution is replacement-sensitive, direct media
+  subprocess bypasses use the guarded resolver, and release smoke covers the
+  rejected 8.1.1, accepted 8.1.2, and dated post-fix snapshot lanes.
+
+### Fixed - Preserve user data during uninstall
+
+- Both Windows uninstallers now keep `~/.opencut` during normal, quiet,
+  upgrade, and repair removal. The interactive data-removal option is separate,
+  unchecked by default, and names the settings, jobs, journals, indexes,
+  plugins, models, and project/agent state it affects.
+- Explicit data removal first writes and validates a ZIP outside the deletion
+  root. Backup failures, locked files, reparse points, unsafe roots, and failed
+  cleanup preserve recoverable source data; quiet removal requires the dedicated
+  `--remove-user-data` (WPF) or `/REMOVEUSERDATA` (Inno) flag.
+
+### Fixed - Make proxy batches transactional, cancellable, and resumable
+
+- Proxy batches now persist per-item pending/running/completed/failed state
+  before queueing, restore file lists larger than job-history payload limits,
+  and retry only proxy/map pairs that fail source and media validation.
+- FFmpeg writes each proxy to a same-directory partial file, promotes it with
+  an atomic replace, and registers the active process with standard job
+  cancellation so interrupted output is removed and the item remains resumable.
+- CEP and UXP now surface restart recovery for interrupted proxy batches while
+  reusing their existing progress and cancellation controls.
+
+### Fixed - Enforce the Python 3.11 runtime floor at every entry path
+
+- Source installers and Windows, macOS, and Linux launchers now reject Python
+  below 3.11 before installing dependencies or importing OpenCut, with the
+  detected version, required version, and an actionable upgrade link.
+- A package-level early guard and dependency-surface tests keep direct source
+  launches, bootstrap diagnostics, documentation, and package metadata aligned.
+
+### Fixed - Move persisted secrets into the OS credential vault
+
+- Moved API keys, OAuth/refresh tokens, render-node credentials, webhook
+  signing secrets, telemetry keys, and the remote-access token into Windows
+  Credential Locker, macOS Keychain, Secret Service, or KWallet via `keyring`.
+- Startup migration now verifies each vault write before atomically removing
+  legacy plaintext. Vault or metadata failures roll back without deleting the
+  original credential, while unavailable vaults refuse new persistence unless
+  `OPENCUT_ALLOW_INSECURE_SECRET_STORAGE=1` is explicitly set.
+- Redacted JSON metadata, route-safe node/webhook responses, stable credential
+  error codes, and the `credential_store` field on `GET /settings/local-only`
+  provide non-secret diagnostics. Legacy webhook configuration now shares the
+  same store.
+
+### Fixed - Enforce local-only mode below every integration
+
+- Installed a process-wide deny-by-default egress guard that blocks non-loopback
+  DNS, TCP/UDP sockets, HTTP clients and SDKs, browser launches, remote Git/Pip,
+  download tools, and URL-bearing media subprocesses before outbound I/O.
+- Localhost services remain available, while LAN targets require local-only mode
+  to be disabled explicitly. Blocked routes now expose the stable
+  `LOCAL_ONLY_NETWORK_BLOCKED` code and a local recovery suggestion.
+- Added an AST-generated inventory that forces each direct network-client module
+  to declare its role, plus live socket, urllib, Requests, subprocess, loopback,
+  LAN-denial, and Flask error-contract tests.
+
+### Fixed - Produce and verify one C2PA 2.4 provenance contract
+
+- Unified create, sidecar, and embed manifests on `c2pa.actions.v2` plus the
+  C2PA 2.4 `c2pa.ai-disclosure` schema. AI disclosures now include required
+  `modelType` and valid oversight metadata; legacy operation names normalize to
+  standard actions while retaining the original name as namespaced metadata.
+- Removed the misleading raw-file-hash “soft binding” and invalid handcrafted
+  hard-binding assertion. Source SHA-256 remains namespaced audit evidence;
+  `c2patool` creates the authoritative asset hard binding and OpenCut requires
+  its signature and hash validation evidence before reporting success.
+- Embedded credentials now require explicit key/certificate files, build in a
+  sibling staging path, are re-read by `c2patool`, and promote atomically only
+  after validation. The former FFmpeg comment surrogate is no longer emitted,
+  C2PA 2.3 sidecars remain readable, and the release suite runs official-tool
+  conformance checks whenever `c2patool` is installed.
+
+### Fixed - Confine and verify remote result downloads
+
+- Remote artifacts may now be written only beneath `OPENCUT_OUTPUT_DIR`, with
+  `~/.opencut/remote_results` as the private fallback. Traversal, symlink
+  escapes, arbitrary absolute destinations, and path-shaped job IDs are
+  rejected before network I/O.
+- Downloads now use the shared guarded transaction: redirect/DNS validation,
+  an 8 GiB declared-and-streamed cap, sibling staging, fsync, MIME checks,
+  ffprobe media validation, and atomic promotion. Oversized, interrupted, or
+  mismatched responses preserve existing output and leave no partial file.
+
+### Fixed - Guard and transact every direct asset download
+
+- Added one shared downloader that rejects local/private initial hosts and
+  redirect targets, re-resolves again in the HTTP/HTTPS connection handler to
+  catch DNS rebinding, enforces declared and streamed byte ceilings, fsyncs a
+  sibling partial, validates content, and atomically promotes it.
+- Stock media, plugin archives, Freesound previews, Google Font files, and
+  Real-ESRGAN weights now use feature-specific caps and media/ZIP/font/PyTorch
+  validators. HTML/error bodies and interrupted or oversized responses leave no
+  partial file and cannot overwrite an existing asset.
+- Google Fonts CSS metadata is also fetched through the guarded opener with a
+  2 MiB cap; invalid cached Real-ESRGAN weights are no longer trusted solely
+  because they exceed 1 KiB.
+
+### Fixed - Make smart renders transactional and media-validated
+
+- Smart render now records source codec, stream-map, keyframe, frame-rate, and
+  container constraints before choosing partial re-encode. Codec-mismatched,
+  variable-frame-rate, subtitle, data-stream, and unsafe MPEG-TS combinations
+  use an explicit whole-file fallback instead of concatenating incompatible
+  segments.
+- Partial and fallback renders are built in a sibling staging file. FFprobe
+  then verifies stream counts, codec, duration/start tolerances, A/V/subtitle
+  alignment, and sampled timestamp monotonicity; FFmpeg decodes the beginning
+  and end before the staged artifact atomically replaces its destination.
+- Every failure now cleans segment/staging files and preserves both the source
+  and any existing destination. Results expose the preflight, fallback reasons,
+  and validation evidence for diagnostics.
+
+### Fixed - Make updates origin-aware and artifact-authentic
+
+- Corrected release checks to the canonical `SysAdminDoc/OpenCut` repository
+  and Python updates to the `opencut-ppro` distribution.
+- Update checks now report the detected source/wheel/packaged origin, its only
+  supported mechanism, and an actionable disabled reason for unknown or
+  unsigned packaged installs. Caller-selected cross-origin update methods,
+  downgrades, reinstalls, dirty source checkouts, and non-canonical remotes are
+  rejected before mutation.
+- Wheel updates download an exact version into staging, verify its SHA-256
+  against PyPI release metadata, and only then invoke pip. The old unverified
+  download-URL success path is disabled until a signed installer feed exists.
+
+### Fixed - Repair stale/broken tests and complete the UXP markup-safety gate
+
+- `test_job_metadata` now sends a CSRF token (the app enforces CSRF on every
+  mutating request via a global before_request guard), fixing a spurious 403.
+- `test_platform_infra` waveform tests compare `_pcm_to_samples` against a list
+  (it returns `array('h')` for speed) instead of asserting array-equals-list.
+- Registered the reviewed plugin-trust `innerHTML` sinks/accumulators
+  (`renderPluginTrustDashboard`, `uxpLoadPluginTrust`) in the UXP markup-safety
+  allowlists after confirming every dynamic value is `escapeHtml`-wrapped.
+- Updated the UXP OAuth-launch test to the localized `{platform}` consent
+  message (was a stale `${platform}` template-literal assertion).
+- Removed `test_wave_f_number_ledger`: it asserted on a Wave N-T / F-number
+  ROADMAP structure that was intentionally replaced by the research-driven
+  roadmap and read a gitignored `.ai/` ledger, so it could never pass.
+
+### Fixed - Make the test suite hermetic against machine privacy settings
+
+- Added an autouse conftest fixture that neutralizes this machine's
+  `~/.opencut/local_only.json` during tests. `is_local_only()` reads that
+  user-global file, so a developer machine with privacy/local-only mode enabled
+  made every un-mocked network-gated test (stock search, external TTS, search
+  routes, `is_local_only` default) fail spuriously. Tests still opt into
+  local-only via the `OPENCUT_LOCAL_ONLY` env var or by patching `is_local_only`.
+- Updated the stale `test_music_safety` C2PA assertion to the C2PA 2.4
+  hyphenated `c2pa.ai-disclosure` label (the underscore form was renamed).
+- Re-synced README test-count badge/prose to the current suite (`sync_badges`).
+
+### Fixed - CEP session-status dots respect the light theme
+
+- The session-context complete/error status indicators now fill from the
+  `--neon-green`/`--neon-red` semantic tokens instead of hardcoded hex, so they
+  flip with `html.theme-light` instead of keeping dark-theme colors on a light
+  background. Remaining hardcoded text/accent literals are tracked in ROADMAP for
+  a rendered-contrast pass.
+
+### Fixed - Panel timeline write-back honesty and double-click safety
+
+- CEP `applySequenceCuts` and `addBeatMarkersToSequence` now branch on the
+  ExtendScript result's `error` field **before** showing a toast, so a host-side
+  failure (no active sequence, locked track) surfaces as an error alert instead
+  of a false "Applied 0 cuts" / "Added N markers" success — matching the UXP
+  panel's existing `result.ok` handling.
+- UXP `applyTimelineCuts`/`addSequenceMarkers` disable their trigger button for
+  the duration of the awaited ripple-delete / marker-insert loop, preventing a
+  rapid second click from stacking an overlapping destructive pass.
+- Transcript search-result count routes through `t()`
+  (`transcript.search_count`) instead of hardcoded English `" match"/"es"`
+  concatenation, so it is translatable.
+
+### Fixed - Return 400 (not 500) for malformed request bodies on three routes
+
+- `POST /api/video/suggest-workflow` no longer 500s on a non-object
+  `classification` or a non-numeric `confidence`: the object shape is validated
+  (400) and `confidence` goes through `safe_float`, matching the sibling routes.
+- Education overlay/callout/spotlight workers replace bare `event["x"]`-style
+  indexing with `_req_num`/`_req_pair`, so a missing or non-numeric coordinate
+  produces a field-named error (`region requires 'x'`) instead of an opaque
+  `KeyError('x')` job failure.
+- `POST /api/splat/preview-frame` validates `position`/`rotation` are 3-element
+  numeric lists, converting a scalar/dict into a clear 400 instead of a 500.
+
+### Fixed - Confine model-download metadata paths and validate resume
+
+- `model_manager` no longer joins the attacker-controllable `model_name` into a
+  metadata filename verbatim: a new `_safe_model_key`/`_meta_path` pair collapses
+  separators, strips leading dots, and confines the result to
+  `~/.opencut/downloads`, closing an arbitrary-`.json` read/write traversal
+  reachable through the model-download API.
+- A failed metadata write is now logged instead of silently swallowed, so a full
+  disk can no longer hide a partial download that a later resume would append to.
+- Resume records the response `ETag`/`Last-Modified` and sends `If-Range`, so a
+  changed remote asset restarts cleanly (full 200) instead of stitching fresh
+  bytes onto a stale partial file. Added `test_model_manager_paths`; repaired
+  `test_quantize_pytorch_loads_weights_only` to feed the scanner a real file.
+
+### Added - C2PA 2.4 AI-disclosure and durable soft-binding on export
+
+- Upgraded `c2pa_embed` manifests to the C2PA 2.4 profile: AI/ML actions now
+  carry a machine-readable IPTC `digitalSourceType` (trainedAlgorithmicMedia
+  for generative steps, compositeWithTrainedAlgorithmicMedia for AI-assisted
+  edits), a spec-shaped `c2pa.ai-disclosure` assertion replaces the ad-hoc
+  `c2pa.ai_disclosure`, and a `c2pa.soft-binding` assertion embeds a content
+  fingerprint so credentials remain discoverable after Premiere re-encodes the
+  media. New `test_c2pa_embed` conformance suite covers the 2.4 shape.
+
+### Fixed - Harden three low-cost reliability/security defaults
+
+- `/health` now exposes the bootstrap CSRF token on an allowlist basis
+  (no-Origin, exact same-origin, or a configured CORS origin) instead of a
+  two-value denylist, so an arbitrary cross-origin page can no longer harvest
+  the loopback mutation token.
+- `check_disk_space` now probes the nearest existing ancestor directory and
+  fails **closed** on a local-path probe error (surfacing a full/inaccessible
+  disk as a clean rejection) while still failing open for un-probeable
+  network/UNC paths.
+- Job admission is clamped to the worker-pool size, so raising
+  `OPENCUT_MAX_CONCURRENT_JOBS` above the pool's worker count can no longer
+  over-admit "running" jobs onto a queue that cannot execute them.
+
+### Added - Wire UXP batch rename and smart bins to the host bridge
+
+- The UXP timeline panel's Batch Rename and Smart Bins buttons now run their
+  already-implemented `PProBridge` host actions instead of showing a "runs
+  through CEP" handoff. Buttons enable only when the UXP host bridge is
+  available (with an honest disabled reason otherwise). Batch rename previews
+  the affected items on first click and applies on the second, records an
+  inverse rename so the same button offers a one-click undo, and reports partial
+  failures; smart bins report the number of bins created.
+- Extracted the pure rename/bin logic (`expandRenamePattern`,
+  `computeInverseRenames`, `buildSmartBinRules`, `summarizeRenamePreview`) into
+  `uxp-utils.js` with a new `uxp-batch-ops` vitest suite, and added the
+  supporting UXP locale strings (en/es).
+
+### Fixed - Semantic project-facts documentation gate
+
+- Added `test_project_facts`, a gate that derives facts from the authoritative
+  source and fails when a committed doc/comment contradicts it: UXP tab
+  count/names (README vs `extension/com.opencut.uxp/index.html`), the CSRF
+  endpoint/header (UXP `main.js` comment vs implementation), and the Vite major
+  (`docs/NODE_ADVISORIES.md` vs panel `package.json`).
+- Fixed the contradictions it surfaced: the README under-counted the UXP panel
+  as 8 tabs (it has 9 — the Agent tab was omitted), and the UXP `fetchCsrf`
+  comment still described a removed `/csrf` endpoint instead of the live
+  `/health` + `X-OpenCut-Token` flow. Repaired the stale `test_check_doc_sizes`
+  suite left broken by the earlier CLAUDE.md size-check removal.
+
+### Fixed - Feature readiness proves implementation, not just dependencies
+
+- Added `opencut.core.stub_scan`, which statically (via AST) identifies
+  `opencut.core` modules whose entrypoints still raise `NotImplementedError`.
+  `FeatureRecord` gained an `impl_module` link and an implementation-aware
+  `resolved_state()`/`state_reason()`: a feature whose adapter is an unfinished
+  stub now stays `stub` even when its optional dependency is installed, so
+  readiness never advertises a route that ends in `NotImplementedError`.
+- Corrected three features that reported `available` while backed by stub
+  adapters (`captions.nemo-asr`, `video.relight.iclight`,
+  `video.upscale.seedvr2`). Panels and MCP now see the same state and reason via
+  `as_dict`. New `test_feature_impl_readiness` adds a release gate that fails if
+  any `available` feature is backed by a terminal-stub module.
+
+### Security - Establish a model-weight supply-chain boundary (CVE-2026-24747)
+
+- Raised the Torch floor to `>=2.10.0` and torchvision to `>=0.25.0` in the
+  `depth` and `torch-stack` extras, closing CVE-2026-24747 (GHSA-63cw-57p8-fm3p)
+  — a `torch.load(weights_only=True)` unpickler heap-corruption/RCE fixed in
+  torch 2.10.0.
+- Added `opencut.core.model_safety.safe_torch_load`, which scans pickle-format
+  checkpoints with picklescan (`>=1.0.3`, now shipped in the `ai`/`ai-gpu`/
+  `depth`/`torch-stack` extras) before loading and rejects flagged files;
+  `.safetensors` skips scanning. Wired the three `torch.load` call sites
+  (`face_swap`, `video_ai`, `model_quantization`) through it. New
+  `test_model_safety` covers scan, rejection, safetensors skip, and graceful
+  degradation when picklescan is absent.
+
+### Security - Unify bounded, transactional archive ingestion
+
+- Added `opencut.core.archive_safety`, a shared bounded/path-safe ZIP helper:
+  member-count, expanded-byte (zip-bomb), and per-member size ceilings;
+  path-traversal, absolute-path, and special-entry (symlink/device) rejection;
+  bounded single-member reads; and staged-then-atomic extraction.
+- `project_archive.restore_archive` now validates every member and extracts into
+  a staging directory promoted atomically, so a rejected or failed restore
+  leaves no partial destination. `lottie_import.info` reads the animation JSON
+  through a hard byte ceiling, and the plugin installer delegates to the shared
+  inspector (gaining symlink rejection it previously lacked). New
+  `test_archive_safety` covers traversal, absolute paths, oversized members,
+  compression bombs, symlink entries, cleanup, and atomic promotion.
+
+### Security - Guard URL ingest and outbound fetches against SSRF
+
+- Routed `opencut.core.url_ingest` through a shared connect-time SSRF guard in
+  `opencut.core.url_safety`: the direct-download path now rejects
+  private/loopback/link-local hosts (including numeric-encoding bypasses),
+  resolves and re-checks the host before connecting, re-validates every redirect
+  hop, honors local-only mode via `require_network_allowed`, enforces a
+  configurable byte ceiling (`OPENCUT_MAX_INGEST_BYTES`, default 8 GiB), and
+  verifies the downloaded bytes are real media (ffprobe) before caching.
+- Added `open_validated_url`, `stream_to_file`, and `build_guarded_opener`
+  helpers; webhook delivery now re-resolves the target and follows redirects
+  only through hops that pass the guard. New `test_url_ingest_ssrf` covers
+  private-IP, redirect-to-private, DNS-rebinding, oversized, non-media, and
+  local-only-blocked cases.
+
+### Security - Patch Click command-injection advisory (CVE-2026-7246)
+
+- Raised the Click floor to `>=8.3.3,<9` across `pyproject.toml` and
+  `requirements.txt`, and repinned `requirements-lock.txt` from `8.3.1` to
+  `8.4.1`, closing CVE-2026-7246 / PYSEC-2026-2132 (command injection in
+  `click.edit()`). Documented the floor raise in `docs/PYTHON_ADVISORIES.md`
+  and added a `test_dependency_surface` regression asserting no lane admits the
+  vulnerable range. `pip-audit -r requirements-lock.txt` is clean.
+
+### Changed - Generated-doc release smoke gate
+
+- Added a `generated-docs` release-smoke step that groups README product facts,
+  MCP registry and extended-tool catalogues, model cards, and feature-readiness
+  checks so stale generated documentation fails before push.
+
+### Fixed - UXP Spanish locale warnings
+
+- Corrected the remaining Spanish UXP locale diacritic warnings and promoted
+  locale-lint warnings to `--check` failures, with a release-gate test that
+  blocks future Spanish diacritic regressions.
+
+### Fixed - FastAPI job WebSocket
+
+- Replaced the `/ws/jobs` "coming soon" echo with a real job snapshot and
+  command endpoint that mirrors the existing live-updates bridge contract for
+  `ping`, `get_jobs`, `get_status`, `subscribe`, and `unsubscribe`.
+
+### Fixed - Model readiness placeholder anchors
+
+- Replaced dead `roadmap H*` model-card and feature-readiness install hints
+  with stable generated-doc references, regenerated model/readiness artifacts,
+  and added invariants that block future dead roadmap anchor references.
+
+### Changed - MCP catalogue count drift guards
+
+- Refreshed the MCP server guide to match the generated 86 curated and
+  1,450 extended tool catalogues, removed stale bridge comment counts, and
+  added tests that compare public MCP docs to the generated manifests.
+
+### Changed - Social publish upload handoff
+
+- Made `/publish/upload` return an explicit dry-run export-prep/upload-handoff
+  response instead of implying a completed platform publish, and clarified the
+  command-palette copy so direct OAuth uploads point to the Social Post flow.
+
+### Fixed - Remote render-node trust boundary
+
+- Redacted remote render-node API keys from register/list responses while
+  preserving raw keys only in the local node registry file, and added remote
+  node URL validation for schemes, embedded credentials, malformed ports, and
+  local/private network targets before health checks or downloads run.
+
+### Fixed - Resumable job invariant check
+
+- Replaced the checkpointable route test's exact decorator string matching with
+  decorator metadata parsing so resumable async jobs can carry additional kwargs
+  without weakening the resumable-route guard.
+
+### Fixed - CEP i18n catalog completeness
+
+- Added the missing CEP command-palette and plugin-trust locale keys,
+  restored the reverted public-gist confirmation key, and taught the i18n
+  drift gate to count dynamic plugin summary label keys so runtime fallback
+  strings cannot bypass the locale ledger.
+
+### Changed - Plugin trust visibility
+
+- Added a read-only `/plugins/trust` dashboard route and surfaced loaded,
+  skipped, failed, lock-missing, quarantined, and cached marketplace plugin
+  state in CEP and UXP Settings with capability badges and destructive-action
+  confirmation contract copy.
+- Hardened CEP translation-language dropdown rendering so list-shaped backend
+  language capability payloads cannot break Settings initialization.
+
+### Changed - Caption font fallback
+
+- Caption burn-in filters now resolve real font files for known families and
+  script-aware CJK fallbacks, fall back to a sanitized font-family argument
+  instead of `fontfile=''`, and surface font-resolution warnings in CEP/UXP
+  caption display controls.
+
+### Changed - Local release policy guard
+
+- Replaced stale GitHub Actions/CI wording in active installer wrappers with
+  local release-smoke opt-in variables and added tests that prevent removed
+  workflow claims from returning to active build surfaces.
+
+### Changed - UX feature index readiness
+
+- Enriched command-palette feature index and search results with route
+  readiness, route validity, runnable state, route methods, and disabled-state
+  explanations sourced from the generated route manifest.
+- Corrected the C2PA command action to the live `/video/c2pa/embed` route and
+  added panel launcher handling for disabled readiness metadata.
+
+### Changed - README generated product facts
+
+- Extended the README sync check beyond badges so shipped route prose,
+  architecture route counts, caption style counts, and root test-file prose
+  are generated from live project sources instead of drifting manually.
+
+### Changed - CEP panel Vite 8 tooling
+
+- Upgraded the CEP panel build lockfile to Vite 8.1, removed the stale Vite 5
+  advisory waiver path, and tightened the npm advisory gate to fail closed on
+  any future unwaived panel vulnerability.
+
+### Changed - C2PA signed provenance credentials
+
+- C2PA provenance sidecars now verify Ed25519 signatures with embedded
+  public keys, classify signed, unsigned, embedded, missing-asset, and
+  tampered-manifest states, and can request a `c2patool` embedded
+  MP4/JPEG/PNG credential when an operator signing key is configured.
+
+### Changed - UXP caption style catalog
+
+- UXP caption styles now load from the backend `/captions/styles` catalog
+  when the server is available, keep a backend-compatible `minimal_clean`
+  fallback while offline, and send the selected `caption_style` id with
+  transcription jobs.
+
+### Changed - Caption translation license safety
+
+- Added explicit NLLB and SeamlessM4T model-card records, fail-closed
+  translation backend selection, and CEP opt-in copy so CC-BY-NC caption
+  translation engines cannot be downloaded or used silently.
+
+### Changed - UXP markup safety
+
+- Added a static UXP DOM-sink safety guard that inventories reviewed
+  `innerHTML` and HTML accumulator render paths, verifies dynamic markup
+  expressions are escaped, and pins script-like backend/user field families
+  to escaped rendering before they reach panel markup.
+
+### Changed - GitHub issue seed guard
+
+- GitHub issue seeding now validates active seeds against unchecked
+  `ROADMAP.md` rows, skips manifest rows marked `status: shipped` or
+  `status: archived`, and fails before issue creation when an active seed has
+  gone stale.
+
+### Changed — Local release documentation
+
+- Reconciled active release, installer, signing, notarization, SBOM, and
+  contribution docs with the local-build-only release policy and replaced
+  obsolete workflow guard tests with local release-policy guards.
+- Refreshed MCP, feature-readiness, and model/license generated contracts so
+  the local `pytest-fast` release smoke passes against the current source.
+
+### Changed — Bundled FFmpeg provenance
+
+- Refreshed the local bundled FFmpeg/ffprobe binaries to Gyan
+  `8.1.2-essentials_build-www.gyan.dev` and updated installer/provenance pins
+  plus release provenance metadata for the current security floor.
+
+### Changed — CEP Node advisory gate
+
+- Patched the transitive `js-yaml` advisory through an npm override and
+  restored the CEP advisory gate with explicit Vite dev-server-only waivers
+  tied to the documented HGFS-blocked major upgrade path.
+
+### Changed — Model-card generated artifact freshness
+
+- Regenerated the model-card manifest and added cards for the optional
+  AutoShot, IC-Light, LatentSync, NeMo ASR/Sortformer, OCR, SAM 3,
+  SeedVR2, pyannote diarization, and visual multicam checks so generated
+  model/license truth gates pass again.
+
+### Changed — Installer accessibility polish
+
+- Bound installer version badges to the shared app version constant and added
+  accessible names/help text for icon-only window controls, progress bars,
+  activity logs, and key install options. Shared WPF focus states now cover
+  link, checkbox, and radio controls.
+
+### Changed — UXP panel quick-action polish
+
+- Replaced Settings-tab keyboard shortcut hints with visible quick-action
+  buttons that focus the destination control before running, keep cancel
+  availability synced with active jobs, and explain backend-locked actions
+  through localized titles/ARIA state.
+
+### Changed — CEP panel confirmation polish
+
+- Replaced remaining CEP native browser dialogs with panel-local confirmation,
+  choice, and prompt flows for journal clearing, footage-index clearing,
+  natural-language route execution, issue reports, and gist sync. The new
+  dialogs use the shared overlay focus trap, localized copy, validation,
+  reduced-motion handling, and light/dark theme styling.
+- Added a CEP guard test that blocks reintroducing native `alert`,
+  `confirm`, or `prompt` globals in panel source.
+
+### Added — 537 more coverage expansion tests (658 total, 30+ modules)
+
+- New test files: `test_coverage_infra.py` (169 tests covering errors,
+  schemas, workers, config, helpers, checks), `test_coverage_core_logic.py`
+  (137 tests covering timecode_utils, metadata_tools, safe_zones, hdr_tools,
+  dead_time, stream_chapters, timelapse, highlight_detect, soft_subtitles,
+  adr_cueing), `test_coverage_core_extra.py` (159 tests covering analytics,
+  selects_bin, show_notes, ffmpeg_builder, ab_av1, ab_compare, cinemagraph,
+  surround_mix, gpu_dashboard, display_calibration, apple_silicon, amd_gpu),
+  `test_coverage_schemas_mcp.py` (72 tests covering schemas, MCP tool
+  catalog validation, error factories, config, helpers, checks, workers).
+  CI coverage floor raised from 55% to 58%.
+
+### Added — Centralized config schema registry with versioned migration
+
+- New `register_config_schema()` and `read_user_file_versioned()` in
+  `opencut/user_data.py`. Config files can declare a schema version
+  and register migration functions. `read_user_file_versioned()` auto-
+  migrates old configs on read, stamps `_schema_version`, and persists
+  the upgraded data. Unknown keys are preserved, not stripped.
+
+### Added — 121 coverage expansion tests across 10 untested core modules
+
+- New `tests/test_coverage_expansion.py` adds focused unit tests for:
+  url_ingest (16), multimodal_index (7), edl_aaf (14), media_relink (9),
+  auto_update (14), structured_ingest (12), batch_conform (5),
+  project_organizer (15), storage_tiering (10), render_queue (9).
+  All tests are fast (<1s total), require no external services, and run
+  without optional ML/GPU dependencies. CI coverage floor raised to 55%.
+
+### Changed — Docker compose hardened + MCP sidecar profile
+
+- Added CPU/memory resource limits (CPU: 4c/4G, GPU: 8c/16G), JSON-file
+  log rotation (50-100MB × 3-5 files), and an opt-in MCP sidecar profile
+  (`docker compose --profile mcp up`). GPU service now reads
+  `NVIDIA_VISIBLE_DEVICES` from environment instead of hardcoding `all`.
+
+### Changed — Default Whisper model upgraded to large-v3-turbo
+
+- `CaptionConfig.model` default changed from `base` to `large-v3-turbo`.
+  Within 1-2% WER of large-v3 at 5.4x speed. Existing users keep their
+  configured model.
+
+### Added — CLI config export/import/validate commands
+
+- `opencut config export [-o backup.json]` dumps all `~/.opencut/*.json`
+  settings to a single JSON bundle. `opencut config import backup.json`
+  restores them. `opencut config validate` checks all config files for
+  JSON parse errors (exits non-zero on failure).
+
+### Added — 12 new animated caption presets (19 → 31)
+
+- Neon Glow, Slide Up, Word Pop, Emoji React, Speaker Colored, Retro VHS,
+  Podcast, Gaming, Luxury, TikTok Bold, Handwritten, and RTL Arabic.
+  Caption style count now exceeds 30, matching paid competitor expectations.
+
+### Added — Smart pause detection for silence removal
+
+- New `smart_pause=true` option on `/silence` route and `detect_speech()`
+  that preserves dramatic pauses (0.8-3.0s silences preceded by
+  sentence-ending speech) instead of cutting them. When a transcript is
+  available, uses sentence-final punctuation as context; without transcript,
+  falls back to a duration heuristic that preserves short mid-speech pauses.
+- New `filter_smart_pauses()` function in `opencut/core/silence.py` with 2
+  unit tests.
+
+### Added — MCP tool catalog expanded from 39 to 86 curated tools
+
+- Added 47 new curated MCP tools covering video editing (trim, merge, concat,
+  reframe, stabilize, speed, PiP, blend), video effects (chromakey, LUT, FX,
+  denoise, interpolation, transitions), captions (burn-in, translate, styled,
+  animated, karaoke, SRT import), audio (effects, duck, isolate, normalize,
+  filler removal, beat markers, enhance), timeline/workflow (run, presets, batch
+  rename, smart bins, beat cut, export), deliverables (VFX sheet, ADR list,
+  music cue sheet), search (NLP command, URL ingest), and system (info, GPU,
+  dependencies, feature state, social upload).
+- Agent clients (Claude, Cursor, etc.) now discover 86 OpenCut capabilities
+  vs 39 previously. Extended tools (1,482 route-level) remain opt-in.
+
+### Security — Werkzeug floor raised to >=3.1.6 (CVE-2026-27199)
+
+- Bumped Werkzeug floor from >=3.1.5 to >=3.1.6 in both `pyproject.toml`
+  and `requirements.txt`. CVE-2026-27199 is a `safe_join()` Windows
+  device-name bypass that causes hanging file reads in `send_from_directory`.
+
+### Fixed — Route manifest + README badge drift
+
+- Regenerated `route_manifest.json` and `feature_readiness.json` to reflect
+  recent url_ingest, multimodal_index, and AutoShot additions. README badges
+  and inline counts updated: 1,545 shipped routes, 6 stubs.
+
+### Changed — Feature-state now reflects route readiness
+
+- Generated feature-readiness records now cross-reference the route
+  manifest's `readiness` field instead of defaulting to `"available"`.
+  Routes classified as `dependency-gated` produce `"missing_dependency"`
+  features; stub routes produce `"stub"` features. Panels disable buttons
+  for these features before the user clicks them (was: all generated
+  features showed as available regardless of route status).
+
+### Added — Import-by-link footage ingest
+
+- New `url_ingest` module (`opencut/core/url_ingest.py`): fetches video from
+  a URL to `~/.opencut/media_ingest/` so existing routes consume it as a local
+  file. Uses yt-dlp when installed (YouTube, Vimeo, Zoom Clips, Medal, etc.);
+  falls back to plain HTTP download for direct-link URLs. SHA-256 content-
+  addressed caching avoids re-downloads.
+- New routes: `POST /search/ingest` (async job), `GET /search/ingest/cache`,
+  `DELETE /search/ingest/cache`.
+
+### Added — Local multimodal footage search (OCR + audio event index)
+
+- Footage index schema upgraded to v2: `ocr_text` and `audio_tags` columns
+  added to the `footage` table, FTS5 index rebuilt to cover all four fields
+  (file_path, transcript, ocr_text, audio_tags). Existing v1 databases
+  auto-migrate on first access.
+- New `multimodal_index` module (`opencut/core/multimodal_index.py`):
+  extracts on-screen text from key frames via pytesseract or easyocr, and
+  classifies audio events (speech, music, silence, tempo) via librosa
+  spectral heuristics with a basic fallback.
+- New `POST /search/multimodal-index` route: indexes files with transcript +
+  OCR text + audio event tags in a single pass. OCR and audio tags are
+  opt-in (default on) via `ocr` and `audio_tags` body params.
+- FTS5 search now matches across transcript, on-screen text, and audio
+  event tags — a query for "music" or "logo" hits audio events and OCR
+  text respectively, not just spoken words.
+- `check_ocr_available()` added to `checks.py`.
+
+### Added — AutoShot scene-detection engine
+
+- Added AutoShot as a selectable scene-detection engine with priority 85
+  (above TransNetV2's 70). `detect_scenes_auto()` now tries AutoShot first
+  for gradual-transition-aware detection, falling back to TransNetV2 →
+  PySceneDetect → FFmpeg threshold. `check_autoshot_available()`, engine
+  registry entry, and 5 new tests added.
+
+### Added — Model privacy/license posture in feature-state
+
+- Feature-state entries now expose `privacy` (local-only / cloud), `license`
+  (SPDX token), and `advisory_notes` from the model-card registry. The CEP
+  panel annotates gated buttons with data-feature-privacy/license attributes,
+  privacy chip badges ("Local" / "Cloud"), and advisory notes in tooltips.
+
+### Changed — Collapsed 4 duplicate 501 stubs onto canonical pipelines
+
+- `/video/trailer/generate` now delegates to `trailer_gen.generate()`.
+- `/video/outpaint` now delegates to `frame_extension.outpaint_aspect_ratio()`.
+- `/agent/search-footage` now delegates to
+  `semantic_video_search.semantic_search()`.
+- `/agent/storyboard` now delegates to
+  `ai_storyboard.generate_storyboard_from_script()`.
+- Shipped route count rises from 1,536 to 1,541. Users no longer hit 501
+  for capabilities that already have working local implementations.
+
+### Corrected — Retracted the incompatible in-process Depth Anything 3 adapter
+
+- Removed the ghost DA3 engine/readiness/model-card claims and kept CineFocus on
+  Depth Anything V2. The official `depth-anything-3==0.1.1` package requires
+  NumPy 1.x plus regular `opencv-python`, which cannot resolve alongside
+  OpenCut's supported NumPy 2 / `opencv-python-headless>=4.13` video stack.
+- A future DA3 integration must use an isolated runtime, allow only the
+  Apache-2.0 Small/Base checkpoints, and normalize DA3 depth versus DA2
+  disparity semantics before it can become a selectable backend.
+
+### Changed — Re-aimed the IC-Light relight engine at v1 (Apache-2.0)
+
+- `relight_iclight.py` was titled "IC-Light V2" but IC-Light v2 is non-commercial
+  and its full weights were never publicly released — un-shippable under MIT.
+  Re-targeted it at **IC-Light v1** (`lllyasviel/IC-Light`, Apache-2.0, real public
+  weights). Removed the v2 framing from docstrings/hints, added `MODEL_ID/NAME/
+  LICENSE`, `check_iclight_available()`, an `ic-light-v1` model entry, and a new
+  `relight` engine-registry domain. The `/video/relight/iclight` route now reports
+  the v1 Apache-2.0 licence. Registry test suite added.
+
+### Changed — Default speaker diarization upgraded to pyannote community-1
+
+- `diarize()` now defaults to `pyannote/speaker-diarization-community-1`
+  (CC-BY-4.0, "always freely accessible", lower DER) and automatically falls
+  back to legacy `speaker-diarization-3.1` when the community model can't be
+  loaded (terms not accepted, offline cache miss). The model is configurable via
+  `DiarizeConfig.model`.
+- New `diarization` engine-registry domain: `pyannote_community1` (default,
+  priority 80) > `pyannote_legacy` (60, fallback) > `sortformer` (50, optional,
+  NVIDIA NeMo-gated). Added `check_diarization_available()` /
+  `check_sortformer_available()`, a `pyannote-community-1` model entry, and
+  `tests/test_diarization_engines.py`.
+
+### Added — Normalized 0–100 virality score on highlights/clips
+
+- `EngagementScore.compute_virality()` maps the existing engagement dimensions
+  (hook / emotional / pacing / quotability) to a single deterministic, hook-forward
+  **0–100 virality score** — the headline number Opus Clip paywalls — so creators
+  can sort and threshold clips at a glance. It is a heuristic, not a performance
+  guarantee, and is distinct from the editing-relevance `overall` composite.
+- Surfaced as a top-level `virality` field (plus inside the `engagement` block)
+  on `POST /video/highlights` and the magic-clips/shorts response. Deterministic
+  unit tests added.
+
+### Added — LatentSync lip-sync as the dub pipeline's opt-in final stage
+
+- Wired a new `lipsync_latentsync` engine into a new `lip_sync` engine-registry
+  domain. The dub pipeline (transcribe→translate→voice-clone→render) can now
+  re-animate the speaker's mouth to the new audio — the visual lip-sync stage
+  Rask/HeyGen/sync.so paywall — via `DubConfig.lip_sync_backend="latentsync"` and
+  `POST /ai/lip-sync` (`backend` param).
+- **Opt-in by design** (RESEARCH Open Question 3): LatentSync's *code* is
+  Apache-2.0 but its *checkpoint* licence is unconfirmed, so the engine is
+  registered below the always-available heuristic and is never auto-selected.
+  The dub stage degrades gracefully: LatentSync → heuristic jaw-overlay →
+  audio-only dub, so it never hard-fails.
+- Added `check_latentsync_available()`, a `latentsync-1.6` model-download entry,
+  and `tests/test_lipsync_engines.py` (registry, opt-in ordering, availability
+  gating, license hygiene, dub-config plumbing). Full diffusion forward activates
+  once local weights are present.
+
+### Added — SeedVR2 upscaling engine (Apache-2.0, one-step diffusion)
+
+- Wired the previously-dark `upscale_seedvr2` stub into the upscaling engine
+  registry as `seedvr2`, gated by `check_seedvr2_available()` (diffusers + torch).
+  It is registered at higher priority than Real-ESRGAN, so it auto-selects when
+  its Apache-2.0 SeedVR2-3B weights are installed and **falls back to Real-ESRGAN**
+  otherwise. `POST /video/ai/upscale` gained an `engine` param (`auto`/`seedvr2`/
+  `realesrgan`) that tries SeedVR2 first and degrades to Real-ESRGAN on any
+  unavailability (recorded in the response `notes`), never hard-failing.
+- Added a `seedvr2-3b` model-download catalog entry (Apache-2.0, ~6 GB) and a
+  registry test suite (`tests/test_upscaling_engines.py`). The heavy diffusion
+  forward activates once the local weights are present; the entry point raises a
+  structured error when absent (matching the NeMo ASR engine contract).
+
+### Added — Beat-synced cuts to the active sequence (`POST /timeline/beat-cut`)
+
+- New timeline-native beat-cut path: detect beats in a clip's audio and emit
+  beat-aligned clip boundaries as a cut list the panel reviews and ripple-applies
+  to the **active Premiere sequence**. Unlike `/audio/beat-sync` (which renders a
+  new montage file), this produces cut points for the sequence already open.
+- `core/beat_sync_edit.py::plan_timeline_beat_cuts()` — pure planner over detected
+  beats + a clip duration, with mode selection (every beat / 2 beats / bar / 2 bars
+  / accents) and `min_cut_duration` merging. Returns `{start, end, duration,
+  beat_number, strength, label}` segments (the shape `ocApplySequenceCuts` and the
+  cut-review panel already consume).
+- CEP panel: a "Beat-Synced Cuts" card on the Timeline → Beat Markers sub-tab,
+  wired through the shared cut-review preview + ripple-apply pipeline (the same one
+  silence/filler/auto-edit use). Added to the queue allowlist and i18n.
+- Tests: 4 planner unit tests + 3 route smoke tests; i18n/a11y/parity green.
+
+### Changed — Brand/namespace disambiguation: distribution token `opencut-ppro`
+
+- Resolved the carried brand/namespace question (RESEARCH Open Question 1). The
+  product keeps the name **OpenCut**, but the package-manager distribution token
+  is now **`opencut-ppro`** to stay unambiguous against the unrelated browser
+  editor opencut.app (~48K stars) across PyPI/Homebrew/winget/SEO. The `-ppro`
+  suffix marks the Premiere Pro integration that uniquely identifies this tool.
+- `pyproject.toml` `[project].name` → `opencut-ppro`; SBOM root component and
+  README `pip install` examples updated to match. **Unchanged:** the import
+  package (`import opencut`), CLI commands (`opencut`, `opencut-server`,
+  `opencut-mcp-server`), and CEP/UXP extension IDs. Decision recorded in the
+  README "Naming & distribution" section. (All candidate names were free on
+  PyPI; the actual publish remains a credential-gated roadmap item.)
+
+### Security — Bundled FFmpeg 8.1.1 + June-2026 security-patch provenance
+
+- Reconciled the bundled-FFmpeg version pin to `8.1.1-essentials_build-www.gyan.dev`
+  across `AppConstants.cs`, `OpenCut.iss`, and the manifest test (the Inno pin had
+  drifted to `8.1`, leaving `test_inno_installer_writes_ffmpeg_manifest` red).
+- New `opencut/core/ffmpeg_provenance.py` is the single source of truth for the
+  acceptable bundled build. It parses `ffmpeg -version` (gyan.dev release, gyan
+  git-master, BtbN `git describe`, distro `n`-prefixed) and grades it against two
+  lanes: a release floor (`>= 8.1.1`) or a git-master snapshot dated `>= 2026-06-10`
+  (reference commit `b29bdd3715`). This asserts a *security patch level* — the
+  June-2026 FFmpeg zero-days (CVE-2026-6385 + CVE-2026-39210..39218, crafted-media
+  heap/stack overflows) landed as post-release master commits, so a bare `8.1.x`
+  tag is insufficient on its own.
+- `GET /system/capabilities` now carries `ffmpeg.security` (graded result) and a
+  `ffmpeg_below_security_floor` finding so a stale bundled binary is visible at runtime.
+- `scripts/verify_ffmpeg_provenance.py` is a stdlib build/CI gate that fails closed
+  when the bundled binary is below the floor and records ground-truth provenance
+  (version, git commit/snapshot date, lane, CVE list) to a manifest.
+- Installer manifests (`installer.json`, both WPF + Inno) now record
+  `bundled_ffmpeg_security_floor`. Provenance requirements documented in
+  `docs/RELEASE_PROVENANCE.md`.
+
+### Added — NVIDIA NeMo ASR engines (Parakeet TDT 0.6B v3 + Canary 1B Flash)
+
+- Wired the previously-dark `asr_parakeet` (streaming) and `asr_canary` (batch)
+  stubs into the transcription engine registry as `parakeet_tdt` and
+  `canary_1b_flash`. Both are gated by a new `check_nemo_asr_available()` check
+  (accepts the `nemo` / `nemo_toolkit[asr]` install), retain faster-whisper and
+  CrisperWhisper as fallbacks, and ship `parakeet-tdt-0.6b-v3` /
+  `canary-1b-flash` model-catalog entries for on-demand download. Engines report
+  unavailable (never crash) when NeMo is absent.
+
+### Changed — Route manifest tags readiness; advertised count excludes stubs
+
+- `dump_route_manifest` now classifies every route as
+  `implemented` / `dependency-gated` / `stub` via static handler inspection,
+  and records `readiness_counts` plus a `shipped_route_count` (total minus the
+  10 HTTP-501 strategic stubs). Manifest schema bumped to version 3.
+- New `GET /system/route-readiness` endpoint surfaces the shipped count and the
+  explicit stub / dependency-gated rule lists so panels and tooling stop
+  presenting 501 stubs as shipped capabilities. (Panels already gate
+  `data-feature-id` actions via F100 `feature-state.js`; the Tier-3 stub
+  actions are not surfaced as panel buttons, so none are presented as shipped.)
+- README route badge and route-count claims now advertise the **shipped** count
+  (1,536) instead of the raw total; `scripts/sync_badges.py` binds the badge to
+  `shipped_route_count`.
+
+### Changed — Structured error responses across video/audio routes
+
+- Migrated the remaining 35 raw `jsonify({"error": ...})` responses in
+  `routes/video_editing.py`, `routes/video_core.py`, and `routes/audio.py` to
+  the structured `error_response()` helper. Every error now returns a
+  machine-readable `code`, a `suggestion`, and request-id correlation, and is
+  logged through the typed-error path — matching the rest of the API surface
+  the frontend already consumes.
+
+### Security — AST whitelist for the expression sandbox
+
+- Replaced the deny-list AST check in `expression_engine.py` with a closed
+  node **whitelist**: only arithmetic/boolean/comparison nodes, calls to known
+  sandbox functions, and ternaries are permitted. Every `ast.Attribute` node is
+  now rejected outright, so dunder-walk escapes (`().__class__.__subclasses__`)
+  and obfuscated variants cannot be expressed at all. Call targets are
+  constrained to the sandbox's callable table; unknown calls (`breakpoint()`,
+  `eval()`) are rejected at validation time.
+
+### Security — AST-level dunder/builtin guard for the scripting console
+
+- Added an obfuscation-proof structural check to `scripting_console.py` that
+  parses the script and rejects any dunder attribute access (`__base__`,
+  `__flags__`, `__delattr__`, ... — including escape vectors absent from the
+  hand-maintained substring list) and any reference to a blocked builtin
+  (`getattr`, `eval`, `globals`, ...), regardless of source formatting. The
+  lowercased substring scan is retained as a first-pass net.
+
+### Security — Transitive web-dependency floor pins (RA-23)
+
+- Floored Werkzeug (`>=3.1.5`) and Jinja2 (`>=3.1.6`) in core
+  `pyproject.toml` dependencies — they ship transitively with flask and are
+  always installed, so a clean resolver (no `requirements-lock.txt`) can no
+  longer pull Werkzeug CVE-2026-21860 / CVE-2025-66221 (`safe_join` Windows
+  device-name DoS) or Jinja2 CVE-2025-27516 (sandbox breakout).
+- Floored `requests>=2.33.0` and `urllib3>=2.6.3` in the `standard` and `all`
+  extras, where they enter via faster-whisper's huggingface-hub fetch path —
+  closing urllib3 CVE-2026-21441 (decompression-bomb DoS) and requests
+  CVE-2026-25645 in the release-audited lane.
+- Synced `requirements.txt` flask/waitress floors to the pyproject values and
+  added the new security pins; `tests/test_dependency_surface.py` now asserts
+  the transitive floors and the resolver lane matches the lockfile.
+
+### Added — CJK, Bengali, and RTL caption font-fallback
+
+- Added script-aware font fallback chains to `styled_captions.py` for CJK
+  (Noto Sans CJK, MS Gothic, SimSun, Malgun, Meiryo, Yu Gothic), Indic
+  (Noto Sans Devanagari/Bengali, Mangal, Vrinda, Nirmala), and RTL
+  (Noto Sans Arabic/Hebrew, Tahoma) scripts in both Pillow and Skia
+  renderers.
+- `_load_font()` and `_load_skia_typeface()` now accept `text_hint` to
+  detect caption text scripts and try script-capable fonts before falling
+  back to Western fonts.
+- Added `get_caption_font_info(text, style_name)` for the UI to surface
+  which fallback font was selected or warn when no capable font is
+  available for the detected scripts.
+- Added Bengali fixture (`bengali_indic`) to caption Unicode validation
+  (F223), bringing complex-script fixture count from 5 to 6.
+- Added `rtl_arabic` burn-in style preset with right-aligned bottom
+  positioning (ASS alignment 6) for natural RTL reading direction.
+
+### Added — D3D12VA and Vulkan HW encoder detection
+
+- Added D3D12VA encoders (h264_d3d12va, hevc_d3d12va, av1_d3d12va) to
+  hw_accel.py — vendor-agnostic Windows hardware encoding for non-NVIDIA
+  users when FFmpeg 8.x is available.
+- Added Vulkan Video encoders (h264_vulkan, hevc_vulkan, av1_vulkan) for
+  cross-platform GPU encoding via Vulkan Video API.
+- Updated priority order: nvenc > qsv > amf > d3d12va > videotoolbox > vulkan.
+- Added quality presets and test-encode options for both new HW types.
+- Added 5 new tests for D3D12VA/Vulkan parsing, priority, and verification.
+- Wired D3D12VA and Vulkan into `/hw/encode` route validation and all HW
+  export preset descriptions. Installer version strings updated for FFmpeg 8.1.
+
+### Fixed — Engineering audit (batch 4): multicam kwarg mismatch
+
+- **video_editing.py**: Fixed `speaker_map=` → `speaker_to_track=` in
+  `generate_multicam_cuts()` call. The route passed a keyword argument
+  that didn't match the function signature, causing a TypeError at
+  runtime on every multicam cut request.
+
+### Fixed — Engineering audit (batch 3): SQLite connection safety
+
+- **job_store.py**: Wrapped PRAGMA setup in try/except to close the
+  connection on failure instead of leaking it (lines 134-140).
+- **job_store.py**: Added `PRAGMA wal_checkpoint(TRUNCATE)` before
+  closing connections in `close_all_connections()` to prevent orphaned
+  WAL/SHM files on Windows shutdown.
+
+### Fixed — Engineering audit (batch 2): VideoCapture validation
+
+- **segment_sam2.py**: Added `cap.isOpened()` check after `cv2.VideoCapture()`
+  to fail early with a clear error instead of silently producing corrupt output.
+- **multicam_visual.py**: Added `cap.isOpened()` check in `analyze_frames()`.
+
+### Fixed — Engineering audit: correctness, safety, resource leaks
+
+- **segment_sam3.py**: Fixed unreliable `frame_count` scope check
+  (`"frame_count" in dir()` → initialized at top), added
+  `VideoCapture.isOpened()` / `VideoWriter.isOpened()` validation, moved
+  GPU cleanup (`del predictor, state` + `empty_cache()`) into a `finally`
+  block to guarantee cleanup on exception paths.
+- **semantic_video_search.py**: Fixed unused `fps` variable in
+  `_extract_key_frames()`, fixed progress callback always reporting 0%
+  (now computes actual percentage), fixed temp directory leak in
+  `build_clip_index()` and `semantic_search()` (added `finally:
+  shutil.rmtree`), removed dead `family` variable from
+  `_compute_frame_embeddings`.
+- **object_intel_routes.py**: Fixed 4 instances of `validate_filepath()`
+  misused on output directories (should be `validate_path()` — files vs.
+  directories use different validation functions).
+
+### Added — Versioned visual-search engine registry
+
+- Added `SEARCH_ENGINES` registry to `semantic_video_search.py` with 4
+  engines: CLIP ViT-B/32 (default), CLIP ViT-L/14, SigLIP ViT-B/16,
+  and SigLIP 2 ViT-B/16.
+- Cache keys now include engine ID and schema version — different models
+  use separate cache directories, preventing embedding dimension mismatches.
+- `build_clip_index()` and `semantic_search()` accept an `engine` parameter.
+- Model loading supports both CLIP (CLIPModel/CLIPProcessor) and SigLIP
+  (AutoModel/AutoProcessor) families.
+- Added `list_search_engines()` function and `GET /search/semantic/engines`
+  route for UI engine discovery.
+- Routes `/search/semantic` and `/search/semantic/index` now accept `engine`
+  parameter to select among registered models.
+
+### Added — Multicam visual speech cues (audio+visual mode)
+
+- Added `core/multicam_visual.py` with MediaPipe Face Mesh lip movement
+  scoring and shot type classification (wide/medium/close by face-to-frame
+  ratio) for multicam cut refinement.
+- `/video/multicam-cuts` now accepts `mode: "audio+visual"` to combine
+  diarization with visual lip movement analysis. Cross-mic bleed is
+  resolved by checking which on-camera face is actually speaking.
+- Each cut in visual mode gains `visual_confidence`, `shot_type`, and
+  optional `visual_override` annotations.
+- Added `check_visual_multicam_available()` to `checks.py`.
+
+### Added — SAM 3 text-prompted object removal engine
+
+- Added `core/segment_sam3.py` with text-prompted object segmentation and
+  tracking via SAM 3, plus `segment_video_auto()` with auto-fallback to
+  CLIP+SAM2 when SAM3 is not installed.
+- Added `POST /video/object-remove/sam3` route accepting text queries
+  (e.g., "the watermark in the corner") with SAM2 fallback.
+- Added `GET /video/object-remove/engines` listing available segmentation
+  backends with capability flags (text_prompts, click_prompts, box_prompts).
+- Updated `get_removal_capabilities()` to include `sam3` availability.
+- Added `check_sam3_available()` to `checks.py`.
+- Added `/video/object-remove/sam3` to queue allowlist.
+
+### Changed — Premiere 26 positioning audit
+
+- Updated README tagline to lead with silence-cut-to-timeline, stem separation,
+  voice cloning, animated captions, local LLM, and social export.
+- Added "What OpenCut adds beyond Premiere 26" comparison table contrasting
+  10 OpenCut-unique capabilities against Adobe's native feature set.
+- Added Descript to cost comparison table with stem separation and voice clone
+  columns across all competitors.
+- Documented Premiere 26.x manifest compatibility in UXP panel section
+  (CEP [13.0,99.9], UXP minVersion 25.6).
+
+### Changed — onnxruntime floor raise
+
+- Raised onnxruntime floor from `>=1.25` to `>=1.26` in both `[ai]` and
+  `[ai-gpu]` extras (pyproject.toml). 1.26.0 hardens multiple OOB/overflow
+  scenarios and replaces unrestricted Python `setattr` config with an
+  allowlist.
+- Documented the floor raise rationale in `docs/PYTHON_ADVISORIES.md`.
+
+### Fixed — UXP i18n
+
+- Added Spanish diacritics to 400 keys in UXP es.json (507 accent/tilde
+  characters introduced; zero existed before).
+- Replaced hardcoded English "-- Select a clip --" in main.js with i18n
+  `t()` call and added corresponding en.json/es.json keys.
+- Added `scripts/lint_locales.py` — locale lint checking key uniqueness,
+  placeholder parity between en/es, missing keys, and diacritics regression.
+  Supports `--check` flag for CI enforcement.
+
+### Fixed — CEP style.css consolidation
+
+- Merged duplicate `@media (prefers-reduced-motion: reduce)` blocks into one.
+- Completed light theme variable block with missing accent gradients, mesh
+  background effects, and glow-opacity tokens (8 new variables).
+- Retokenized 14 hardcoded hex color literals in light theme overrides to use
+  CSS custom properties (`--text-primary`, `--text-secondary`, `--bg-surface`,
+  `--bg-raised`).
+
+## [1.33.1] — 2026-06-13 — CI hardening, privacy mode, v30 compat
+
+### Security — dependency floors
+
+- Flask floor raised to >=3.1.3 (CVE-2026-27205 Vary:Cookie info disclosure).
+- Waitress floor raised to >=3.0.1 (CVE-2024-49768/49769 request smuggling).
+- PyInstaller pinned to >=6.0 in CI (CVE-2025-59042 local privilege escalation).
+
+### Changed — CI
+
+- Added Python 3.13 test matrix job running core test suite on Ubuntu.
+- Added Python 3.13 classifier to pyproject.toml.
+
+### Fixed — UXP i18n
+
+- Deduplicated 113 duplicate keys in UXP en.json (1497 → 1384 unique keys).
+- `formatI18n` now uses a function replacement to prevent `$&` and `$'` in
+  substitution values from corrupting output.
+
+### Added — captions
+
+- Caption export preflight (`POST /captions/export/preflight`) checks segment
+  validity, timecode range, QC compliance, and host version before export.
+  Returns a fallback strategy (native, srt_sidecar, or burnin) when native
+  Premiere caption export is risky. Premiere 26.0/26.0.1 flagged based on
+  community reports.
+
+### Fixed — CEP panel
+
+- Wizard and audio-preview dialogs now route through the overlay stack
+  (activateOverlay/deactivateOverlay) for proper focus trap, inert background,
+  and topmost-only Escape dispatch. Removes the waterfall Escape listener that
+  closed every visible surface at once. Audio preview gains aria-modal="true".
+
+### Added — auto-editor v30
+
+- `detect_auto_editor_generation()` distinguishes native v30+ Nim binary from
+  legacy v29 pip package. Install hints across model cards and feature registry
+  now list both install paths.
+
+### Added — privacy
+
+- Local-only privacy mode via `OPENCUT_LOCAL_ONLY=1` env var or
+  `/settings/local-only` UI toggle. Blocks cloud LLM providers (keeps
+  Ollama), cloud vision APIs, cloud TTS, social uploads, stock search,
+  and telemetry with structured local-alternative error messages.
+
+### Fixed — documentation
+
+- Removed stale ROADMAP-NEXT.md and PROJECT_CONTEXT.md references from
+  CONTRIBUTING.md and docs/ROADMAP.md pointer file.
+
+### Changed - CEP/UXP polish
+
+- CEP first-run, launcher, disabled-action, and settings copy now frames the
+  workflow around clear workspace actions instead of shortcut-first language.
+- CEP and UXP panel surfaces now share tighter 8px geometry, clearer focus and
+  disabled states, calmer empty-state feedback, and a more cohesive blue/teal
+  premium accent system across onboarding, workspace, tabs, cards, and controls.
+- UXP tab navigation now binds before backend discovery so the panel remains
+  navigable while the local backend is offline or still being detected.
+
+### Fixed — CEP panel
+
+- Settings no longer exposes non-English UI language choices before matching
+  locale files ship, preventing a selection that cannot persistently localize
+  the panel.
+- Settings import now sanitizes local panel preferences before writing
+  `localStorage`, ignoring unknown keys and unsupported preference values while
+  surfacing storage failures as a warning toast.
+
+### Changed — audio privacy
+
+- Standalone TTS, auto-dubbing, and overdub workflows now default to local-first
+  TTS selection; Edge TTS and external API providers run only when explicitly
+  selected.
+
+### Fixed — release process
+
+- Release smoke now catches MCP registry version drift, the committed MCP
+  registry manifest is back on the package version, and stale UXP harness/i18n
+  guardrails have been brought back in sync.
+- README test-count badge now syncs to the live suite count so the release
+  readiness gate stays green after new coverage lands.
+- Release smoke and doc-size drift checks now target only live documentation
+  surfaces (`CLAUDE.md` and `README.md`) instead of removed planning files.
+- Version sync now covers the security support table, CEP package-lock root
+  metadata, and the C2PA claim-generator string so release smoke fails when
+  those public version surfaces drift.
+
+### Security — data loading
+
+- Character embeddings and depth-compositor archives now call `np.load` with
+  pickle explicitly disabled, with regression coverage for both paths.
+
+### Security — cache safety
+
+- Preview-cache metadata is now scoped to the active cache directory and ignores
+  metadata entries whose files resolve outside that directory before eviction,
+  invalidation, or flush can delete them.
+
+## [1.33.0] — 2026-06-11 — June hardening & quality pass
+
+### Fixed — Docker/runtime
+
+- Docker HTTP containers now set `OPENCUT_ALLOW_REMOTE=1` alongside the
+  intentional `0.0.0.0` bind, preventing startup crash-loops while preserving
+  the non-loopback auth gate.
+
+### Documentation
+
+- README planning links now resolve in a fresh clone and name installer
+  artifacts by the release version pattern instead of a stale filename.
+
+### Security — dependency policy
+
+- Standalone depth/model-loading installs now require `transformers>=5.3`;
+  the lower Transformers floor is confined to the explicit, documented
+  `torch-stack`/WhisperX exception and the advisory audit allow-list now covers
+  the current Transformers config-injection CVE only in that opt-in lane.
+
+### Security — server boundary
+
+- Default CORS is now closed instead of allowing `null`/`file://`, and
+  `/health` withholds CSRF bootstrap tokens from those origins even if they are
+  explicitly added back for compatibility.
+- Non-loopback server binds now serve through Waitress instead of Flask's
+  Werkzeug development server, covering the Docker/remote runtime path while
+  keeping local loopback/debug launches on the dev server.
+- MCP HTTP sidecar binds on non-loopback interfaces now require the persistent
+  `X-OpenCut-Auth` token before serving health, tool-list, or JSON-RPC calls.
+- Opt-in generated MCP route tools now run the same fail-fast path validation
+  as curated tools, including nested `query` and `body` path fields.
+- Remote HTTP startup now fails closed when `OPENCUT_ALLOW_REMOTE=1` is set but
+  the auth-token middleware cannot be installed.
+- Every mutating Flask request now passes through a global CSRF gate, so new
+  POST/PUT/PATCH/DELETE routes stay protected even if a handler omits the
+  per-route decorator.
+- Kinetic text, data-animation, shape-animation, and IMF export routes now
+  clamp render dimensions and font sizes before dispatching to allocation-heavy
+  render code.
+- The writable `~/.opencut/packages` fallback install directory is now appended
+  to `sys.path` instead of taking priority over stdlib and bundled modules.
+
+### Fixed — UXP panel
+
+- UXP job submission now rejects concurrent backend jobs before they overwrite
+  the shared tracker/SSE stream, and job-action buttons stay locked while a
+  backend job is starting or running.
+- The UXP Refresh button now rescans backend ports 5679-5689, and failed
+  background health checks retry against a newly detected port before staying
+  offline.
+- The UXP live-updates WebSocket now consumes the bridge URL reported by the
+  backend, uses a capped reconnect backoff, and honors manual disconnects so
+  the Stop button actually stops reconnect attempts.
+- UXP job polling now tolerates short `/status/<job_id>` interruptions before
+  failing a running job, preventing one dropped request from abandoning work.
+- Periodic UXP backend health checks no longer repaint the workspace as
+  connecting/offline before each background probe completes.
+- FCC caption display settings now unwrap BackendClient response payloads before
+  populating token selects or applying preview CSS, making the compliance card
+  functional again.
+- Cancelling an active job now clears any button left in the panel's loading
+  state, so the initiating action is usable again without reloading the panel.
+
+### Security — routes layer
+
+- **Closed the unvalidated `output_path` write sinks.** `@async_job` validates
+  only the primary input filepath; eight route modules forwarded a
+  user-supplied `output_path`/`output_file`/`db_path` straight into an FFmpeg
+  `-y` or `open(..., "w")` sink, allowing arbitrary local file overwrite via a
+  crafted request (CSRF-protected, but reachable by any local caller). All
+  secondary write targets now pass `validate_output_path`/`validate_path`:
+  - `audio_production_routes` (declip/dehum/decrackle/dewind/dereverb,
+    room-tone generate/fill, M&E mix, fingerprint `db_path` read+write)
+  - `integration_routes` (adjustment-layers apply, flight-map, jog-mapping save)
+  - `overlay_routes` (safe-zones + the three `output_path_override` routes)
+  - `solver_agent_routes` (3D overlay), `timeline_auto_routes` (auto-mix —
+    replaced the brittle startswith/colon check that let absolute paths and
+    `..\` traversal through), `cloud_distrib_routes` (farm render),
+    `editing_workflow_routes` (7 export/assemble routes),
+    `color_mam_routes` (22 output sinks via a shared validated helper).
+
+### Fixed — CEP panel (extension/com.opencut.panel)
+
+- **Cut Review panel was completely broken.** A `for (var t = ...)` loop counter
+  in `showCutReview()` shadowed the `t()` i18n function in the same scope, so
+  every silence / filler / auto-edit / highlights / repeat-detect completion
+  threw `TypeError: t is not a function` and the review panel never opened.
+  Renamed the loop variable.
+- **A throwing job-done listener could lock the UI forever.** The completion
+  dispatch loop ran listeners with no isolation before `hideProgress()`, so any
+  listener exception left the processing banner and `body.job-active` pointer
+  lock stuck on. Each listener is now wrapped in try/catch.
+- **Escape no longer silently cancels a running job** when it was pressed only
+  to dismiss a dropdown, menu, wizard, modal, or popover. Added a single
+  "any dismissible surface open" guard to the cancel-job shortcut.
+- **Enter no longer hijacks focused controls.** The "Enter runs the primary
+  action" shortcut now bails when focus is on a button/link/tab/dropdown/
+  menuitem, so keyboard activation of those controls works and an unrelated
+  job isn't launched.
+- **ExtendScript string safety:** migrated the five remaining PremiereBridge
+  call sites (importFiles, removeSequenceMarkers, unrenameItems,
+  removeImportedSequence, removeImportedItem) from the narrow
+  `replace(/'/g,"\\'")` escape to `escSingleQuote()`, which also handles
+  newlines and U+2028/U+2029 line separators in clip/marker names.
+- **Accessibility:** `document.documentElement.lang` now tracks the active
+  locale so assistive tech uses correct pronunciation after a language switch.
+- Stale per-run time estimate is cleared at job start instead of lingering
+  from the previous run until the new estimate resolves.
+
+### Fixed — FFmpeg integration (backend)
+
+- Styled-caption overlay encoding now drains FFmpeg stderr in a background
+  thread while raw frames are piped to stdin, preventing stderr backpressure
+  from deadlocking long renders.
+- The Real-ESRGAN upscale tier now resolves and caches official model weights
+  before constructing `RealESRGANer`, instead of passing `model_path=None`.
+- **Caption burn-in failed on every Windows drive-letter path.** The
+  `subtitles=`/`ass=` filter value dropped colon escaping, so `C:/...` was
+  parsed as filename `C`. Added `escape_filter_path()` with the verified
+  two-level escaping (drive colons, apostrophes, spaces) and applied it.
+  *Verified end-to-end against real ffmpeg.*
+- **Large edits crashed on Windows with "filename or extension is too long".**
+  Silence-removal export and `speed_up_silences` built `-filter_complex` as a
+  single argv string; past ~220 segments this exceeds the 32 KB command-line
+  limit (`OSError WinError 206`). Both now spill large graphs to a temp file
+  and use `-filter_complex_script`. *Verified: 300-segment graph (43 KB) fails
+  inline, succeeds via script file.*
+- **Merge/concat broke on filenames with apostrophes and corrupted non-ASCII
+  names.** The concat-demuxer escaping used `\'` (rejected by ffmpeg) and the
+  default text codec (cp1252 on Windows). Added `write_concat_list()` (UTF-8 +
+  the correct `'\''` idiom). *Verified: apostrophe and Cyrillic/CJK names.*
+- All core concat-demuxer writers found by the repo-wide scan now use
+  `write_concat_list()` or the shared concat-line formatter instead of local
+  platform-codec path writes.
+- New shared escaping helpers in `opencut/helpers.py`
+  (`escape_filter_path`, `escape_drawtext`, `write_concat_list`) with a
+  string-level regression test (`tests/test_ffmpeg_escaping.py`) locking the
+  ffmpeg-verified behavior for CI.
+- `escape_drawtext` documents/requires `expansion=none`: under default
+  drawtext expansion a literal `%` cannot be escaped at all ("Stray %") and
+  caption text containing `%{...}` would be interpreted as an expression.
+- Caption styles, click/keystroke overlays, tickers, quiz cards, telemetry
+  overlays, callouts, audiograms, brand watermarks, end screens, and guest
+  lower-thirds now use the shared `escape_drawtext()` contract with
+  `expansion=none`.
+- Audio-only export to `.aac` and `.ogg` no longer fails — those containers
+  were handed the mp3 encoder; now mapped to `aac` / `libvorbis`.
+- Progress-parsing FFmpeg subprocess now decodes stdout/stderr as UTF-8 with
+  replacement, preventing a `UnicodeDecodeError` in the stderr drain thread
+  from deadlocking the progress loop on non-ASCII output.
+
+### Fixed — backend correctness
+
+- **Transcription timeout was a no-op.** The `ThreadPoolExecutor` was used as a
+  context manager, whose exit blocks on `shutdown(wait=True)` until the worker
+  finishes — so a timed-out transcription still pinned the caller for the full
+  run. Switched to manual non-blocking shutdown with `cancel_futures`.
+- `smart_trim` now detects trailing silence (a clip that ends in silence emits
+  an unmatched `silence_start`), so "trim trailing silence" actually works.
+- Stem recombination uses `amix=...:normalize=0`; the default `normalize=1`
+  scaled each stem by 1/N, making a recombined mix ~12 dB too quiet.
+- `loudness_match` clamps non-finite (`-inf`) measurements from silent input
+  (previously produced invalid `-Infinity` JSON and out-of-range pass-2 args)
+  and anchors on the last loudnorm JSON block.
+- `smart_reframe` guards against ZeroDivisionError from a zero aspect-ratio
+  component (e.g. "16:0") or a zero source dimension from a probe failure.
+- `extract_audio_wav` no longer leaks its temp WAV when extraction fails.
+- `speed_up_silences` now treats MP3/M4A cover art as attached pictures, not
+  real video streams, so audio-only files stay on the audio concat path.
+- Waveform image uses a unique temp name instead of `waveform_<pid>.png`,
+  which collided across requests in the long-lived server.
+- `waveform_timeline` uses `array.array` instead of Python list for PCM
+  samples (~8x less memory for long audio files).
+- `smart_trim` now surfaces subprocess timeout/errors instead of silently
+  returning an empty result as "no speech detected".
+- Export cancel now calls `proc.wait()` after killing FFmpeg before
+  unlinking the partial output file, preventing silent failure on Windows.
+- `preview_frame` checks FFmpeg return code and output file size before
+  returning success.
+- Captions temp WAV cleanup uses `_schedule_temp_cleanup` when immediate
+  unlink fails from a timed-out Whisper thread on Windows.
+- auth.json now applies a restrictive DACL via `icacls` on Windows (was
+  POSIX-only chmod).
+- Multiview/repurpose routes now validate secondary file paths
+  (`video_paths`, `content_path`, `reaction_path`) before forwarding to core.
+- Installers prefer `requirements.txt`/`requirements-lock.txt` over loose
+  pip specs in fallback paths.
+- CLI `loudness-match` resolves bare filenames to absolute paths before
+  passing output_dir.
+- CLI `auto-zoom` uses `.get()` for width/height to avoid KeyError.
+- Fixed placeholder `github.com/opencut` URLs in CLI banner and
+  InstallerBuilder.
+
+### Fixed — CEP panel
+
+- Job history dedupe now compares by `job_id` (or `type+createdAt`
+  fallback) instead of `(type, status)`.
+- NLP auto-execute raised confidence threshold to 0.8 with a confirm step.
+- `body.job-active` UI lock now sets `inert` on main content for keyboard
+  and AT users (was pointer-events-only).
+- `showAlert()` accepts an explicit tone parameter, bypassing English-only
+  regex inference for non-English locales.
+- Time estimate reads numeric clip duration from state instead of parsing
+  rendered DOM text.
+- Command palette section labels ("Recent", "Favorites", etc.) are now
+  i18n-configurable via `sectionLabels` on the palette context.
+- Language dropdown reduced to only `en` (the only shipped locale).
+
+### Fixed — UXP panel
+
+- Await precedence fix: `(await getOutPoint?.())?.seconds` instead of
+  `await getOutPoint?.()?.seconds`.
+- `addMarkers` now awaits `getFirstMarkerAtTime` so names/colors apply.
+- Enter key handlers guarded with `hasActiveJob()` to prevent duplicate
+  submissions.
+- 10 handlers changed `else` to `else if (!r.ok)` so ok-without-job_id
+  synchronous responses aren't reported as failures.
+- `udt-smoke.js` gated behind `localStorage opencut_debug=1`.
+- `postMessage` targetOrigin restricted from `"*"` to `location.origin`.
+- `cep_node.exec` passthrough blocked in the WebView shim.
+
+### Fixed — Installer
+
+- Inno Setup PlayerDebugMode registry writes use `runasoriginaluser` via
+  `reg.exe` so keys land in the invoking user's HKCU, not the admin's.
+- VBS launcher uses `WshShell.Environment` instead of `cmd /c` string
+  concatenation, preventing injection from paths containing `&` or `^`.
+
+### Changed
+
+- Background sweep threads (temp cleanup, disk monitor) are skipped during
+  test runs via `create_app(testing=True)`.
+- README: added June 2026 cost comparison table vs CapCut Pro, Submagic,
+  AutoCut, and FireCut.
+
+## Roadmap archive — 2026-08-10 — ROADMAP.md
+
+<details>
+<summary>Original roadmap snapshot</summary>
+
+```markdown
+# Roadmap
+
+Single task tracker for known issues and planned work. Items below come from
+verified engineering/product audits through 2026-07-29 (with file locations);
+fixes already shipped are recorded in CHANGELOG.md and git
+history, not here.
+
+Blocked items (credential/license/hardware-gated) are tracked separately in a
+maintainer-local `Roadmap_Blocked.md`, which is deliberately untracked — it is
+a working file, not part of a clone. This file is the tracked queue.
+
+## Research-Driven Additions
+
+### P0 — 2026-08-02 (research pass)
+
+### P1 — 2026-08-02 (research pass)
+
+### P3 — 2026-08-02 (research pass)
+
+### P0 — 2026-07-29
+
+### P1 — 2026-07-25
+
+### P1 — 2026-07-29
+
+### P2 — 2026-07-25
+
+### P2 — 2026-07-29
+
+### P1 — 2026-08-08 (research pass)
+
+### P2 — 2026-08-08 (research pass)
+
+## Audit Findings — 2026-08-02
+
+Baseline recorded before this audit (all green, so every item below is a new
+finding, not a pre-existing failure): `py -3.12 -m pytest tests/ -q` →
+**10726 passed, 21 skipped, 4656 subtests, 0 failed** (686 s);
+`ruff check opencut/ --select E,F,I --ignore E501` → clean;
+`scripts/sync_version.py --check` → all files in sync at v1.46.0; all five
+generated manifests report in-sync; `npx playwright test` (panel rendered
+suite) → 57 passed, 1 skipped; `npm run lint` → 0 errors, 24 warnings.
+
+### P1 — 2026-08-02
+
+
+### P2 — 2026-08-02
+```
+
+</details>
+
+## Roadmap archive — 2026-08-10 — docs/ROADMAP.md
+
+<details>
+<summary>Original roadmap snapshot</summary>
+
+```markdown
+# OpenCut — Implementation Roadmap
+
+> **Moved.** F184 resolved the dual-roadmap drift. The canonical
+> roadmap lives at [`../ROADMAP.md`](../ROADMAP.md) at the repo root.
+> Per-pass changelog status and the F-numbered governance ledger
+> are all maintained there.
+>
+> This stub exists only so old links / bookmarks to
+> `docs/ROADMAP.md` keep resolving. Do not edit it; do not add new
+> entries here. The `roadmap-mirror` release-smoke step (see
+> [`scripts/release_smoke.py`](../scripts/release_smoke.py)) refuses
+> a release if this file grows back into a parallel roadmap.
+
+See:
+
+- [`../ROADMAP.md`](../ROADMAP.md) — canonical roadmap and active task tracker.
+- [`../CHANGELOG.md`](../CHANGELOG.md) — shipped-history ledger.
+- [`../RESEARCH.md`](../RESEARCH.md) — consolidated research conclusions.
+```
+
+</details>

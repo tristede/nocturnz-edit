@@ -1,7 +1,7 @@
 {
   "manifestVersion": 5,
   "id": "xyz.nocturnz.edit",
-  "name": { "default": "Nocturnz Edit" },
+  "name": { "default": "Nocturnz/Edit" },
   "version": "0.1.0",
   "main": "index.html",
   "host": { "app": "premierepro", "minVersion": "25.6.0" },
@@ -9,7 +9,7 @@
     {
       "type": "panel",
       "id": "montage",
-      "label": { "default": "Montage" },
+      "label": { "default": "Nocturnz/Edit" },
       "minimumSize": { "width": 280, "height": 300 },
       "preferredDockedSize": { "width": 340, "height": 560 }
     }

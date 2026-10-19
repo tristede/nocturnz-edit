@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+TARGET="/Library/Application Support/Adobe/CEP/extensions/com.podclip.panel"
+# 0.1.10 through 0.1.12 installed through Adobe UPIA, which used these paths.
+UPIA_ERA_TARGET="/Library/Application Support/Adobe/CEP/extensions/Podclip"
+UPIA_ERA_PAYLOAD="/Library/Application Support/Podclip"
+CONSOLE_USER="$(/usr/bin/stat -f '%Su' /dev/console)"
+CONSOLE_HOME=""
+
+if [[ "$CONSOLE_USER" != "root" && "$CONSOLE_USER" != "loginwindow" ]]; then
+  CONSOLE_HOME="$(/usr/bin/dscl . -read "/Users/$CONSOLE_USER" NFSHomeDirectory 2>/dev/null | /usr/bin/cut -d ' ' -f 2-)"
+fi
+
+rm -rf "$TARGET" "$UPIA_ERA_TARGET" "$UPIA_ERA_PAYLOAD"
+
+# A per-user copy with the same extension ID would shadow the installed one.
+if [[ -n "$CONSOLE_HOME" && "$CONSOLE_HOME" != "/" ]]; then
+  USER_EXTENSION_DIR="$CONSOLE_HOME/Library/Application Support/Adobe/CEP/extensions"
+  rm -rf "$USER_EXTENSION_DIR/com.podclip.panel" "$USER_EXTENSION_DIR/Podclip"
+fi

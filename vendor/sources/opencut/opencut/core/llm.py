@@ -1,0 +1,479 @@
+"""
+OpenCut LLM Abstraction Module
+
+Shared LLM interface for highlight extraction, video summarization,
+and the shorts pipeline. Supports Ollama (local), OpenAI, Anthropic, and Google Gemini.
+
+Uses stdlib urllib.request — zero pip dependencies.
+"""
+
+import json
+import logging
+import urllib.error
+import urllib.request
+from dataclasses import dataclass
+
+logger = logging.getLogger("opencut")
+
+
+# ---------------------------------------------------------------------------
+# Data classes
+# ---------------------------------------------------------------------------
+@dataclass
+class LLMConfig:
+    """Configuration for LLM provider."""
+    provider: str = "ollama"  # "ollama", "openai", "anthropic", "gemini"
+    model: str = "llama3.2"
+    api_key: str = ""
+    base_url: str = "http://localhost:11434"
+    temperature: float = 0.3
+    max_tokens: int = 2000
+
+
+@dataclass
+class LLMResponse:
+    """Response from LLM query."""
+    text: str = ""
+    provider: str = ""
+    model: str = ""
+    tokens_used: int = 0
+    error: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Provider implementations
+# ---------------------------------------------------------------------------
+def _sanitize_url(url):
+    """Strip query strings to avoid leaking credentials in error messages."""
+    try:
+        from urllib.parse import urlsplit, urlunsplit
+        parts = urlsplit(url)
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+    except Exception:
+        return url.split("?", 1)[0]
+
+
+def _http_json(url, data=None, headers=None, timeout=60):
+    """Make an HTTP request and return parsed JSON response."""
+    headers = headers or {}
+    headers.setdefault("Accept-Encoding", "identity")
+    if data is not None:
+        body = json.dumps(data).encode("utf-8")
+        headers.setdefault("Content-Type", "application/json")
+    else:
+        body = None
+
+    req = urllib.request.Request(url, data=body, headers=headers)
+    method = "POST" if body else "GET"
+    req.get_method = lambda: method
+
+    safe_url = _sanitize_url(url)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8")
+            return json.loads(raw)
+    except urllib.error.HTTPError as exc:
+        err_body = ""
+        try:
+            err_body = exc.read().decode("utf-8", errors="replace")[:500]
+        except Exception:
+            pass
+        raise RuntimeError(
+            f"HTTP {exc.code} from {safe_url}: {err_body}"
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Connection failed to {safe_url}: {exc.reason}") from exc
+
+
+def _ollama_generate_body(prompt, system_prompt, config, images=None):
+    """Build a local Ollama generate request, optionally with vision frames."""
+    body = {
+        "model": config.model,
+        "prompt": prompt,
+        "system": system_prompt,
+        "stream": False,
+        "options": {
+            "temperature": config.temperature,
+            "num_predict": config.max_tokens,
+        },
+    }
+    if images:
+        body["images"] = list(images)
+    return body
+
+
+def _validate_ollama_base_url(base_url):
+    """Reject remote or credential-bearing Ollama URLs."""
+    from urllib.parse import urlparse
+
+    parsed = urlparse(base_url)
+    if "@" in (parsed.netloc or ""):
+        raise RuntimeError("Ollama base_url must not contain userinfo (@ character)")
+    if parsed.hostname not in ("localhost", "127.0.0.1", "::1"):
+        raise RuntimeError("Ollama base_url must point to localhost for security")
+
+
+def _query_ollama(prompt, system_prompt, config):
+    """Query Ollama local server."""
+    _validate_ollama_base_url(config.base_url)
+    url = f"{config.base_url.rstrip('/')}/api/generate"
+    body = _ollama_generate_body(prompt, system_prompt, config)
+
+    data = _http_json(url, data=body, timeout=180)
+
+    return LLMResponse(
+        text=data.get("response", ""),
+        provider="ollama",
+        model=config.model,
+        tokens_used=data.get("eval_count", 0),
+    )
+
+
+def query_ollama_vision(
+    prompt,
+    images,
+    config=None,
+    system_prompt="",
+    on_progress=None,
+):
+    """Query a local Ollama vision model with base64-encoded JPEG frames.
+
+    Ollama accepts image data in the ``images`` array of ``/api/generate``.
+    The URL is restricted to loopback so video frames cannot be sent to a
+    remote service accidentally.
+    """
+    if config is None:
+        config = LLMConfig(model="qwen3-vl:8b")
+    if config.provider.lower().strip() != "ollama":
+        raise RuntimeError("Vision inference requires the local Ollama provider")
+    if not images:
+        raise ValueError("At least one base64 image is required for vision inference")
+
+    _validate_ollama_base_url(config.base_url)
+    if on_progress:
+        on_progress(10, f"Querying Ollama vision model ({config.model})...")
+
+    url = f"{config.base_url.rstrip('/')}/api/generate"
+    body = _ollama_generate_body(prompt, system_prompt, config, images=images)
+    data = _http_json(url, data=body, timeout=300)
+    response = LLMResponse(
+        text=data.get("response", ""),
+        provider="ollama",
+        model=config.model,
+        tokens_used=data.get("eval_count", 0),
+    )
+
+    if on_progress:
+        on_progress(100, "Ollama vision response received")
+    return response
+
+
+def _query_openai(prompt, system_prompt, config):
+    """Query OpenAI API."""
+    if not config.api_key:
+        raise RuntimeError("OpenAI API key is required. Set config.api_key.")
+
+    url = "https://api.openai.com/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {config.api_key}",
+        "Content-Type": "application/json",
+    }
+
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": prompt})
+
+    # ``max_completion_tokens`` is only honored by newer reasoning-capable
+    # models (o1/o3/gpt-4o 2024-11+). Classic ``gpt-3.5-turbo``/``gpt-4`` /
+    # ``gpt-4-turbo`` still expect ``max_tokens`` and return HTTP 400 on
+    # ``max_completion_tokens``. Branch on model family so both paths work.
+    _model_lower = (config.model or "").lower()
+    _is_new_model = (
+        _model_lower.startswith(("o1", "o3", "gpt-5"))
+        or "-2024-11" in _model_lower
+        or "gpt-4o-2024-1" in _model_lower
+    )
+    body = {
+        "model": config.model,
+        "messages": messages,
+        "temperature": config.temperature,
+    }
+    if _is_new_model:
+        body["max_completion_tokens"] = config.max_tokens
+    else:
+        body["max_tokens"] = config.max_tokens
+
+    data = _http_json(url, data=body, headers=headers, timeout=60)
+
+    text = ""
+    tokens = 0
+    try:
+        text = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError):
+        text = json.dumps(data)
+    try:
+        tokens = data.get("usage", {}).get("total_tokens", 0)
+    except Exception:
+        pass
+
+    return LLMResponse(
+        text=text,
+        provider="openai",
+        model=config.model,
+        tokens_used=tokens,
+    )
+
+
+def _query_anthropic(prompt, system_prompt, config):
+    """Query Anthropic API."""
+    if not config.api_key:
+        raise RuntimeError("Anthropic API key is required. Set config.api_key.")
+
+    url = "https://api.anthropic.com/v1/messages"
+    headers = {
+        "x-api-key": config.api_key,
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+    }
+
+    body = {
+        "model": config.model,
+        "max_tokens": config.max_tokens,
+        "temperature": config.temperature,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    if system_prompt:
+        body["system"] = system_prompt
+
+    data = _http_json(url, data=body, headers=headers, timeout=60)
+
+    text = ""
+    tokens = 0
+    try:
+        text = data["content"][0]["text"]
+    except (KeyError, IndexError):
+        text = json.dumps(data)
+    try:
+        tokens = data.get("usage", {}).get("input_tokens", 0) + data.get("usage", {}).get("output_tokens", 0)
+    except Exception:
+        pass
+
+    return LLMResponse(
+        text=text,
+        provider="anthropic",
+        model=config.model,
+        tokens_used=tokens,
+    )
+
+
+def _query_gemini(prompt, system_prompt, config):
+    """Query Google Gemini API."""
+    if not config.api_key:
+        raise RuntimeError("Gemini API key is required. Set config.api_key.")
+
+    url = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{config.model}:generateContent"
+    )
+    headers = {
+        "x-goog-api-key": config.api_key,
+        "Content-Type": "application/json",
+    }
+
+    body = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": config.temperature,
+            "maxOutputTokens": config.max_tokens,
+        },
+    }
+    if system_prompt:
+        body["systemInstruction"] = {"parts": [{"text": system_prompt}]}
+
+    data = _http_json(url, data=body, headers=headers, timeout=60)
+
+    text = ""
+    tokens = 0
+    try:
+        text = data["candidates"][0]["content"]["parts"][0]["text"]
+    except (KeyError, IndexError):
+        text = json.dumps(data)
+    try:
+        usage = data.get("usageMetadata", {})
+        tokens = usage.get("promptTokenCount", 0) + usage.get("candidatesTokenCount", 0)
+    except Exception:
+        pass
+
+    return LLMResponse(
+        text=text,
+        provider="gemini",
+        model=config.model,
+        tokens_used=tokens,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+_PROVIDERS = {
+    "ollama": _query_ollama,
+    "openai": _query_openai,
+    "anthropic": _query_anthropic,
+    "gemini": _query_gemini,
+}
+
+
+def query_llm(prompt, config=None, system_prompt="", on_progress=None, images=None):
+    """
+    Send prompt to configured LLM provider.
+
+    Args:
+        prompt: User prompt text.
+        config: LLMConfig instance. Uses defaults (Ollama) if None.
+        system_prompt: Optional system instruction.
+        on_progress: Progress callback(pct, msg).
+        images: Optional base64-encoded images for local Ollama vision models.
+
+    Returns:
+        LLMResponse with the model's reply.
+    """
+    if config is None:
+        config = LLMConfig()
+
+    provider = config.provider.lower().strip()
+
+    if provider != "ollama":
+        try:
+            from opencut.config import require_network_allowed
+            require_network_allowed(
+                f"Cloud LLM provider '{provider}'",
+                "provider='ollama' for local inference",
+            )
+        except RuntimeError as exc:
+            return LLMResponse(
+                text=str(exc), provider=provider,
+                model=config.model, error=str(exc),
+            )
+
+    handler = _PROVIDERS.get(provider)
+    if handler is None:
+        msg = f"Unknown LLM provider: '{provider}'. Use 'ollama', 'openai', 'anthropic', or 'gemini'."
+        return LLMResponse(
+            text=msg,
+            provider=provider,
+            model=config.model,
+            error=msg,
+        )
+
+    if on_progress:
+        on_progress(10, f"Querying {provider} ({config.model})...")
+
+    try:
+        if images and provider == "ollama":
+            response = query_ollama_vision(
+                prompt,
+                images,
+                config=config,
+                system_prompt=system_prompt,
+                on_progress=None,
+            )
+        else:
+            response = handler(prompt, system_prompt, config)
+    except Exception as exc:
+        logger.error("LLM query failed (%s/%s): %s", provider, config.model, exc)
+        return LLMResponse(
+            text=f"LLM error: {exc}",
+            provider=provider,
+            model=config.model,
+            error=str(exc),
+        )
+
+    if on_progress:
+        on_progress(100, "LLM response received")
+
+    logger.info("LLM response from %s/%s (%d tokens)", provider, config.model, response.tokens_used)
+    return response
+
+
+def check_llm_reachable(config=None):
+    """
+    Check if configured LLM provider is reachable.
+
+    Returns:
+        dict with keys: available (bool), provider (str), models (list), error (str).
+    """
+    if config is None:
+        config = LLMConfig()
+
+    provider = config.provider.lower().strip()
+    result = {"available": False, "provider": provider, "models": [], "error": ""}
+
+    if provider != "ollama":
+        try:
+            from opencut.config import require_network_allowed
+            require_network_allowed(
+                f"Cloud LLM provider '{provider}'",
+                "provider='ollama' for local inference",
+            )
+        except RuntimeError as exc:
+            result["error"] = str(exc)
+            return result
+
+    if provider == "ollama":
+        try:
+            models = list_ollama_models(config.base_url)
+            result["available"] = True
+            result["models"] = models
+        except Exception as exc:
+            result["error"] = str(exc)
+
+    elif provider == "openai":
+        if config.api_key:
+            result["available"] = True
+            result["models"] = [config.model]
+        else:
+            result["error"] = "OpenAI API key not configured"
+
+    elif provider == "anthropic":
+        if config.api_key:
+            result["available"] = True
+            result["models"] = [config.model]
+        else:
+            result["error"] = "Anthropic API key not configured"
+
+    elif provider == "gemini":
+        if config.api_key:
+            result["available"] = True
+            result["models"] = [config.model]
+        else:
+            result["error"] = "Gemini API key not configured"
+
+    else:
+        result["error"] = f"Unknown provider: {provider}"
+
+    return result
+
+
+def list_ollama_models(base_url="http://localhost:11434", timeout=10):
+    """
+    List available Ollama models.
+
+    Args:
+        base_url: Ollama server URL.
+        timeout: Request timeout in seconds.
+
+    Returns:
+        List of model name strings.
+    """
+    _validate_ollama_base_url(base_url)
+    url = f"{base_url.rstrip('/')}/api/tags"
+    data = _http_json(url, timeout=timeout)
+
+    models = []
+    for m in data.get("models", []):
+        name = m.get("name", "")
+        if name:
+            models.append(name)
+
+    return models

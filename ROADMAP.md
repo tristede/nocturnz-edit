@@ -1,4 +1,4 @@
-# Feuille de route — suite Nocturnz Edit
+# Feuille de route — suite Nocturnz/Edit
 
 Le périmètre final comprend le nettoyage des silences, hésitations et répétitions; transcription modifiable; sous-titres animés; réalisation podcast et cadrages virtuels; zooms; recadrages sociaux; shorts; chapitres; B-roll; audio; recettes et traitement par lot. Les étapes organisent la livraison, elles ne retirent aucune de ces familles.
 
@@ -15,6 +15,10 @@ Le périmètre final comprend le nettoyage des silences, hésitations et répét
 - [ ] Réimporter un XML de secours et comparer le résultat.
 
 ## B — fondations communes
+
+- [x] Importer les sources réutilisables des dépôts du brief avec versions, licences et inventaire (six dépôts; auto-zoom-premiere exclu faute de licence).
+- [x] Repérer les points d’entrée amont correspondant aux 17 modules.
+- [ ] Brancher progressivement ces modules au service et au panneau UXP, en respectant leurs licences et dépendances.
 
 - Service local authentifié sur loopback, gestion des tâches, progression, annulation et reprise.
 - Plan de montage versionné, temps source/temps séquence, cache partagé, validation avant application.

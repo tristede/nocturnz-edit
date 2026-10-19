@@ -1,0 +1,77 @@
+services:
+  opencut-server:
+    build: .
+    ports:
+      - "5679:5679"
+    volumes:
+      - opencut-data:/home/opencut/.opencut
+    secrets:
+      - opencut_remote_auth_token
+    environment:
+      - OPENCUT_BUNDLED=false
+      - PYTHONUNBUFFERED=1
+      - OPENCUT_ALLOW_REMOTE=1
+      - OPENCUT_REMOTE_AUTH_TOKEN_FILE=/run/secrets/opencut_remote_auth_token
+      # Loopback names and IP literals are trusted here. The Compose service
+      # names are included so the MCP sidecar can reach this backend without
+      # requiring a hand-edited environment file.
+      - OPENCUT_TRUSTED_HOSTS=${OPENCUT_TRUSTED_HOSTS:-opencut-server,opencut-mcp}
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 4G
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5679/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+  # MCP sidecar - use: docker compose --profile mcp up opencut-mcp
+  opencut-mcp:
+    build: .
+    command: ["python", "-m", "opencut.mcp_server", "--http", "--http-bind", "0.0.0.0", "--http-port", "5681"]
+    ports:
+      - "5681:5681"
+    volumes:
+      - opencut-data:/home/opencut/.opencut
+    secrets:
+      - opencut_remote_auth_token
+    environment:
+      - OPENCUT_BUNDLED=false
+      - PYTHONUNBUFFERED=1
+      - OPENCUT_ALLOW_REMOTE=1
+      - OPENCUT_REMOTE_AUTH_TOKEN_FILE=/run/secrets/opencut_remote_auth_token
+      # Loopback names and IP literals are trusted here. Keep the Compose
+      # service names when overriding this value for a container deployment.
+      - OPENCUT_TRUSTED_HOSTS=${OPENCUT_TRUSTED_HOSTS:-opencut-server,opencut-mcp}
+      - OPENCUT_MCP_BACKEND_URL=http://opencut-server:5679
+    depends_on:
+      opencut-server:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+    profiles:
+      - mcp
+
+volumes:
+  opencut-data:
+
+secrets:
+  opencut_remote_auth_token:
+    file: ${OPENCUT_REMOTE_AUTH_TOKEN_FILE:?Set OPENCUT_REMOTE_AUTH_TOKEN_FILE to a token file}

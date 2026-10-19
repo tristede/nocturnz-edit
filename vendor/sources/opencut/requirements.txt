@@ -1,0 +1,70 @@
+# OpenCut v1.55.1 Requirements
+# Install: pip install -r requirements.txt
+# For GPU: pip install "torch>=2.10" "torchvision>=0.25" torchaudio --index-url https://download.pytorch.org/whl/cu128
+
+# === CORE (required) ===
+# click CVE-2026-7246 / PYSEC-2026-2132 (command injection in click.edit) fixed 8.3.3
+click>=8.3.3,<9
+rich>=13.0,<14
+flask>=3.1.3,<4
+flask-cors>=6.0,<7
+waitress>=3.0.1,<4
+python-json-logger>=2.0,<3
+psutil>=5.9
+keyring>=25.7,<26
+# Ed25519 publisher signatures for staged plugin installation (Apache-2.0 OR BSD-3-Clause).
+# 50.0.0 fixes the 2026 PKCS#7 oracle, certificate-chain DoS, and DNS
+# constraint advisories in the verifier used for authenticated plugins.
+cryptography>=50.0.0,<51
+# RA-23 — Werkzeug/Jinja2 ship with flask; pin the security floor (Werkzeug
+# CVE-2026-21860/CVE-2025-66221 fixed 3.1.5, CVE-2026-27199 fixed 3.1.6;
+# Jinja2 CVE-2025-27516 fixed 3.1.6).
+Werkzeug>=3.1.6
+Jinja2>=3.1.6
+# CVE-2026-15717: cross-platform local_dir filename containment.
+huggingface-hub>=1.26,<2
+
+# === STANDARD (recommended) ===
+faster-whisper>=1.1,<2
+opencv-python==4.14.0.94
+Pillow>=12.3.0,<13
+numpy>=1.24
+librosa>=0.10,<1
+# pydub retired in F123; OpenCut does not import it and keeps an optional
+# audioop-lts compatibility shim for downstream plugins that install pydub.
+scenedetect>=0.7.1,<1
+# RA-23 — requests/urllib3 enter via faster-whisper's huggingface-hub; floor
+# them (urllib3 CVE-2026-21441 fixed 2.6.3, CVE-2026-44431 and CVE-2026-44432
+# fixed 2.7.0; requests CVE-2026-25645 fixed 2.33.0).
+requests>=2.33.0
+urllib3>=2.7.0
+
+# === AUDIO (optional) ===
+# demucs>=4.0              # Stem separation (~1.5GB with models)
+# pedalboard>=0.9          # Pro audio FX chain
+# edge-tts>=6.1            # Text-to-speech (requires internet)
+
+# === AI/ML (optional, GPU recommended) ===
+# realesrgan>=0.3          # AI upscaling (~67MB model)
+# rembg>=2.0               # Background removal (~170MB model)
+# gfpgan>=1.3              # Face enhancement (~330MB model)
+# insightface>=0.7         # Face detection/swap
+# onnxruntime-gpu>=1.26    # GPU inference for InsightFace
+# AudioCraft is unsupported because its published releases pin Torch 2.1.
+
+# === ADVANCED (optional) ===
+# WhisperX is unsupported until it accepts torchvision >=0.25 / Torch >=2.10.
+# pyannote.audio>=4.0      # Speaker diarization (needs HuggingFace token)
+
+# === POST-PRODUCTION FEATURES (optional) ===
+# Color matching & auto-zoom use opencv-python + numpy (already listed above)
+
+# Loudness matching uses FFmpeg subprocess (external tool, not pip)
+# Install FFmpeg from https://ffmpeg.org/download.html
+
+# Footage search uses stdlib json only (no extra deps)
+
+# LLM integration (for chapters, NLP commands) — optional
+# ollama: run locally via https://ollama.ai
+# openai>=1.0.0            # For OpenAI provider
+# anthropic>=0.20.0        # For Anthropic provider

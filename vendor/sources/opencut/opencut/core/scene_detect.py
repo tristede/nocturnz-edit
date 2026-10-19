@@ -1,0 +1,840 @@
+"""
+OpenCut Scene Detection
+
+Detects scene boundaries in video using FFmpeg's scene change detection.
+Also provides chapter marker generation for YouTube descriptions.
+
+Uses FFmpeg only - no additional dependencies required.
+"""
+
+import importlib
+import json
+import logging
+import re
+import subprocess
+from dataclasses import dataclass, field
+from typing import Callable, Dict, List, Optional
+
+from opencut.helpers import get_ffmpeg_path, get_ffprobe_path
+
+logger = logging.getLogger("opencut")
+
+
+def _load_transnetv2_class():
+    """Return a TransNetV2 class from the legacy or PyPI-compatible package."""
+    for module_name in ("transnetv2", "transnetv2_pytorch"):
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError:
+            continue
+        model_cls = getattr(module, "TransNetV2", None)
+        if model_cls is not None:
+            return model_cls
+    raise ImportError("TransNetV2 not installed. Install with: pip install transnetv2-pytorch")
+
+
+@dataclass
+class SceneBoundary:
+    """A detected scene change boundary."""
+    time: float
+    frame: int = 0
+    score: float = 0.0  # Scene change score (0.0 - 1.0)
+    label: str = ""
+
+
+@dataclass
+class SceneInfo:
+    """Complete scene detection results."""
+    boundaries: List[SceneBoundary] = field(default_factory=list)
+    total_scenes: int = 0
+    duration: float = 0.0
+    avg_scene_length: float = 0.0
+
+
+def detect_scenes(
+    input_path: str,
+    threshold: float = 0.3,
+    min_scene_length: float = 2.0,
+    on_progress: Optional[Callable] = None,
+) -> SceneInfo:
+    """
+    Detect scene boundaries in a video file.
+
+    Uses FFmpeg's scene detection filter to find frame-level
+    changes that indicate scene transitions.
+
+    Args:
+        input_path: Source video file.
+        threshold: Scene change threshold (0.0-1.0). Lower = more sensitive.
+        min_scene_length: Minimum scene duration in seconds.
+        on_progress: Progress callback(pct, msg).
+
+    Returns:
+        SceneInfo with detected boundaries.
+    """
+    if on_progress:
+        on_progress(10, "Analyzing video for scene changes...")
+
+    # Get video duration first
+    probe_cmd = [
+        get_ffprobe_path(), "-v", "quiet",
+        "-print_format", "json",
+        "-show_format",
+        input_path,
+    ]
+    probe_result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=30)
+    if probe_result.returncode != 0:
+        logger.warning("ffprobe failed (rc=%d) for %s", probe_result.returncode, input_path)
+    duration = 0.0
+    try:
+        probe_data = json.loads(probe_result.stdout)
+        duration = float(probe_data.get("format", {}).get("duration", 0.0))
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    if on_progress:
+        on_progress(20, "Running scene detection filter...")
+
+    # Use FFmpeg select filter to detect scene changes
+    # This outputs timestamps where scene changes occur
+    cmd = [
+        get_ffmpeg_path(), "-hide_banner", "-loglevel", "info",
+        "-i", input_path,
+        "-vf", f"select='gt(scene,{max(0.0, min(1.0, float(threshold)))})',showinfo",
+        "-f", "null", "-",
+    ]
+
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+
+    if on_progress:
+        on_progress(70, "Parsing scene boundaries...")
+
+    # Parse showinfo output for timestamps
+    boundaries = [SceneBoundary(time=0.0, frame=0, score=1.0, label="Start")]
+
+    _pts_re = re.compile(r"pts_time:\s*([\d.]+)")
+    _frame_re = re.compile(r"\bn:\s*(\d+)")
+
+    for line in result.stderr.splitlines():
+        if "showinfo" not in line:
+            continue
+        pts_match = _pts_re.search(line)
+        if not pts_match:
+            continue
+        try:
+            time_val = float(pts_match.group(1))
+
+            # Check minimum spacing from last boundary
+            if boundaries and (time_val - boundaries[-1].time) < min_scene_length:
+                continue
+
+            # Extract frame number if available
+            frame_num = 0
+            frame_match = _frame_re.search(line)
+            if frame_match:
+                frame_num = int(frame_match.group(1))
+
+            boundaries.append(SceneBoundary(
+                time=time_val,
+                frame=frame_num,
+                score=threshold,
+            ))
+
+        except (ValueError, IndexError):
+            continue
+
+    if on_progress:
+        on_progress(90, "Finalizing scene analysis...")
+
+    total_scenes = len(boundaries)
+    avg_scene = duration / total_scenes if total_scenes > 0 else duration
+
+    # Label scenes sequentially
+    for i, b in enumerate(boundaries):
+        if not b.label:
+            b.label = f"Scene {i + 1}"
+
+    info = SceneInfo(
+        boundaries=boundaries,
+        total_scenes=total_scenes,
+        duration=duration,
+        avg_scene_length=avg_scene,
+    )
+
+    if on_progress:
+        on_progress(100, f"Found {total_scenes} scenes")
+
+    return info
+
+
+def generate_chapter_markers(
+    scenes: SceneInfo,
+    format: str = "youtube",
+) -> str:
+    """
+    Generate chapter markers from scene boundaries.
+
+    Args:
+        scenes: SceneInfo from detect_scenes().
+        format: Output format ("youtube", "markdown", "json").
+
+    Returns:
+        Formatted chapter markers string.
+    """
+    if format == "youtube":
+        # YouTube chapter format: "00:00 Title"
+        lines = []
+        for i, boundary in enumerate(scenes.boundaries):
+            t = boundary.time
+            h = int(t // 3600)
+            m = int((t % 3600) // 60)
+            s = int(t % 60)
+
+            if h > 0:
+                timestamp = f"{h:d}:{m:02d}:{s:02d}"
+            else:
+                timestamp = f"{m:d}:{s:02d}"
+
+            label = boundary.label or f"Scene {i + 1}"
+            lines.append(f"{timestamp} {label}")
+
+        return "\n".join(lines)
+
+    elif format == "markdown":
+        lines = ["# Chapters", ""]
+        for i, boundary in enumerate(scenes.boundaries):
+            t = boundary.time
+            m = int(t // 60)
+            s = int(t % 60)
+            label = boundary.label or f"Scene {i + 1}"
+            lines.append(f"- **{m:02d}:{s:02d}** - {label}")
+        return "\n".join(lines)
+
+    elif format == "json":
+        chapters = []
+        for i, boundary in enumerate(scenes.boundaries):
+            chapters.append({
+                "time": round(boundary.time, 3),
+                "label": boundary.label or f"Scene {i + 1}",
+                "frame": boundary.frame,
+            })
+        return json.dumps(chapters, indent=2)
+
+    else:
+        raise ValueError(f"Unknown chapter format: {format}")
+
+
+def generate_speed_ramp(
+    duration: float,
+    preset: str = "dramatic_pause",
+) -> List[Dict]:
+    """
+    Generate speed ramp keyframes for a clip.
+
+    Args:
+        duration: Total clip duration in seconds.
+        preset: Speed ramp preset name.
+
+    Returns:
+        List of keyframe dicts: {"time": float, "speed": float}
+    """
+    SPEED_PRESETS = {
+        "dramatic_pause": [
+            {"pos": 0.0, "speed": 1.0},
+            {"pos": 0.4, "speed": 1.0},
+            {"pos": 0.45, "speed": 0.3},
+            {"pos": 0.55, "speed": 0.3},
+            {"pos": 0.6, "speed": 1.0},
+            {"pos": 1.0, "speed": 1.0},
+        ],
+        "smooth_ramp_up": [
+            {"pos": 0.0, "speed": 0.5},
+            {"pos": 0.3, "speed": 0.7},
+            {"pos": 0.7, "speed": 1.0},
+            {"pos": 1.0, "speed": 1.5},
+        ],
+        "smooth_ramp_down": [
+            {"pos": 0.0, "speed": 1.5},
+            {"pos": 0.3, "speed": 1.0},
+            {"pos": 0.7, "speed": 0.7},
+            {"pos": 1.0, "speed": 0.5},
+        ],
+        "punch_in": [
+            {"pos": 0.0, "speed": 0.5},
+            {"pos": 0.15, "speed": 0.3},
+            {"pos": 0.2, "speed": 2.0},
+            {"pos": 0.5, "speed": 1.0},
+            {"pos": 1.0, "speed": 1.0},
+        ],
+        "bullet_time": [
+            {"pos": 0.0, "speed": 1.0},
+            {"pos": 0.3, "speed": 1.0},
+            {"pos": 0.35, "speed": 0.15},
+            {"pos": 0.65, "speed": 0.15},
+            {"pos": 0.7, "speed": 1.0},
+            {"pos": 1.0, "speed": 1.0},
+        ],
+        "heartbeat": [
+            {"pos": 0.0, "speed": 1.0},
+            {"pos": 0.2, "speed": 0.4},
+            {"pos": 0.3, "speed": 1.2},
+            {"pos": 0.5, "speed": 0.4},
+            {"pos": 0.6, "speed": 1.2},
+            {"pos": 0.8, "speed": 0.4},
+            {"pos": 0.9, "speed": 1.0},
+            {"pos": 1.0, "speed": 1.0},
+        ],
+        "flash_forward": [
+            {"pos": 0.0, "speed": 1.0},
+            {"pos": 0.1, "speed": 3.0},
+            {"pos": 0.3, "speed": 3.0},
+            {"pos": 0.4, "speed": 0.5},
+            {"pos": 0.9, "speed": 0.5},
+            {"pos": 1.0, "speed": 1.0},
+        ],
+        "rewind": [
+            {"pos": 0.0, "speed": 1.0},
+            {"pos": 0.4, "speed": 1.0},
+            {"pos": 0.5, "speed": -2.0},
+            {"pos": 0.7, "speed": -2.0},
+            {"pos": 0.8, "speed": 1.0},
+            {"pos": 1.0, "speed": 1.0},
+        ],
+    }
+
+    preset_data = SPEED_PRESETS.get(preset, SPEED_PRESETS["dramatic_pause"])
+
+    keyframes = []
+    for kf in preset_data:
+        keyframes.append({
+            "time": round(kf["pos"] * duration, 3),
+            "speed": kf["speed"],
+        })
+
+    return keyframes
+
+
+# ---------------------------------------------------------------------------
+# ML Scene Detection (TransNetV2)
+# ---------------------------------------------------------------------------
+def detect_scenes_ml(
+    input_path: str,
+    threshold: float = 0.5,
+    min_scene_length: float = 2.0,
+    on_progress: Optional[Callable] = None,
+) -> SceneInfo:
+    """
+    Detect scene boundaries using TransNetV2 neural network.
+
+    More accurate than FFmpeg's threshold filter, especially for gradual
+    transitions, fades, and complex cuts.
+
+    Args:
+        input_path: Source video file.
+        threshold: Prediction threshold (0.0-1.0). Lower = more sensitive.
+        min_scene_length: Minimum scene duration in seconds.
+        on_progress: Progress callback(pct, msg).
+
+    Returns:
+        SceneInfo with detected boundaries.
+
+    Requires: pip install transnetv2-pytorch
+    """
+    try:
+        TransNetV2 = _load_transnetv2_class()
+    except ImportError:
+        raise RuntimeError(
+            "TransNetV2 not installed. Install with: pip install transnetv2-pytorch"
+        )
+
+    try:
+        import numpy as np
+    except ImportError:
+        raise RuntimeError("numpy required. Install with: pip install numpy")
+
+    if on_progress:
+        on_progress(5, "Loading TransNetV2 model...")
+
+    # Get video info
+    probe_cmd = [
+        get_ffprobe_path(), "-v", "quiet",
+        "-print_format", "json",
+        "-show_format", "-show_streams",
+        "-select_streams", "v:0",
+        input_path,
+    ]
+    probe_result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=30)
+    if probe_result.returncode != 0:
+        logger.warning("ffprobe failed (rc=%d) for %s", probe_result.returncode, input_path)
+    duration = 0.0
+    fps = 25.0
+    try:
+        probe_data = json.loads(probe_result.stdout)
+        fmt = probe_data.get("format", {})
+        duration = float(fmt.get("duration", 0.0))
+        streams = probe_data.get("streams", [])
+        if streams:
+            fps_str = streams[0].get("r_frame_rate", "25/1")
+            parts = fps_str.split("/")
+            if len(parts) == 2 and float(parts[1]) > 0:
+                fps = float(parts[0]) / float(parts[1])
+            else:
+                fps = 25.0
+    except (json.JSONDecodeError, ValueError, IndexError):
+        pass
+
+    if on_progress:
+        on_progress(10, "Extracting frames for analysis...")
+
+    # Extract frames as raw RGB using FFmpeg
+    # TransNetV2 expects 48x27 resolution frames
+    frame_w, frame_h = 48, 27
+    extract_cmd = [
+        get_ffmpeg_path(), "-hide_banner", "-loglevel", "error",
+        "-i", input_path,
+        "-vf", f"scale={frame_w}:{frame_h}",
+        "-pix_fmt", "rgb24",
+        "-f", "rawvideo",
+        "-",
+    ]
+
+    try:
+        result = subprocess.run(
+            extract_cmd, capture_output=True,
+            timeout=max(300, int(duration * 2)),
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("Frame extraction timed out")
+
+    if result.returncode != 0:
+        raise RuntimeError(f"Frame extraction failed: {result.stderr.decode(errors='replace')[-300:]}")
+
+    raw_frames = result.stdout
+    frame_size = frame_w * frame_h * 3
+    n_frames = len(raw_frames) // frame_size
+
+    if n_frames < 2:
+        return SceneInfo(
+            boundaries=[SceneBoundary(time=0.0, frame=0, score=1.0, label="Start")],
+            total_scenes=1,
+            duration=duration,
+            avg_scene_length=duration,
+        )
+
+    if on_progress:
+        on_progress(30, f"Analyzing {n_frames} frames with TransNetV2...")
+
+    # Convert to numpy array
+    frames = np.frombuffer(raw_frames[:n_frames * frame_size], dtype=np.uint8)
+    frames = frames.reshape(n_frames, frame_h, frame_w, 3)
+
+    threshold = float(threshold)
+
+    # Run TransNetV2
+    model = TransNetV2()
+    try:
+        predictions, _ = model.predict_frames(frames)
+
+        if on_progress:
+            on_progress(80, "Processing predictions...")
+
+        # Find scene boundaries from predictions
+        boundaries = [SceneBoundary(time=0.0, frame=0, score=1.0, label="Start")]
+
+        min_frames = int(min_scene_length * fps)
+        last_boundary_frame = 0
+
+        for i, score in enumerate(predictions):
+            pred_score = float(score)
+            if pred_score >= threshold:
+                # Check minimum distance from last boundary
+                if (i - last_boundary_frame) >= min_frames:
+                    time_val = i / fps
+                    boundaries.append(SceneBoundary(
+                        time=round(time_val, 3),
+                        frame=i,
+                        score=round(pred_score, 4),
+                    ))
+                    last_boundary_frame = i
+
+        # Label scenes
+        for i, b in enumerate(boundaries):
+            if not b.label:
+                b.label = f"Scene {i + 1}"
+
+        total_scenes = len(boundaries)
+        avg_scene = duration / total_scenes if total_scenes > 0 else duration
+
+        if on_progress:
+            on_progress(100, f"Found {total_scenes} scenes (ML)")
+
+        return SceneInfo(
+            boundaries=boundaries,
+            total_scenes=total_scenes,
+            duration=duration,
+            avg_scene_length=round(avg_scene, 2),
+        )
+    finally:
+        del model
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# PySceneDetect (fast, heuristic-based)
+# ---------------------------------------------------------------------------
+def detect_scenes_pyscenedetect(
+    input_path: str,
+    threshold: float = 27.0,
+    min_scene_length: float = 2.0,
+    on_progress: Optional[Callable] = None,
+) -> SceneInfo:
+    """
+    Detect scene boundaries using PySceneDetect (heuristic, fast).
+
+    Faster than TransNetV2 ML approach. Good for rough cuts and long videos.
+    Uses ContentDetector (HSV color histogram + delta analysis).
+
+    Args:
+        threshold: ContentDetector threshold (default 27.0, range ~15-50).
+        min_scene_length: Minimum scene duration in seconds.
+    """
+    try:
+        from scenedetect import SceneManager, open_video
+        from scenedetect.detectors import ContentDetector
+    except ImportError:
+        raise RuntimeError('PySceneDetect not installed. Run: pip install "opencut-ppro[video]"')
+
+    if on_progress:
+        on_progress(10, "Opening video with PySceneDetect...")
+
+    video = open_video(input_path)
+    fps = video.frame_rate
+    duration = video.duration.get_seconds() if hasattr(video.duration, 'get_seconds') else 0.0
+
+    scene_manager = SceneManager()
+    min_frames = max(1, int(min_scene_length * fps))
+    scene_manager.add_detector(ContentDetector(threshold=threshold, min_scene_len=min_frames))
+
+    if on_progress:
+        on_progress(20, "Detecting scenes...")
+
+    scene_manager.detect_scenes(video, show_progress=False)
+    scene_list = scene_manager.get_scene_list()
+
+    if on_progress:
+        on_progress(80, "Building scene boundaries...")
+
+    boundaries = [SceneBoundary(time=0.0, frame=0, score=1.0, label="Start")]
+    for i, (start, end) in enumerate(scene_list):
+        start_sec = start.get_seconds()
+        if start_sec > 0.01:  # Skip if scene starts at 0 (duplicate of Start)
+            boundaries.append(SceneBoundary(
+                time=round(start_sec, 3),
+                frame=start.get_frames(),
+                score=1.0,
+                label=f"Scene {i + 1}",
+            ))
+
+    total_scenes = len(boundaries)
+    avg_scene = duration / total_scenes if total_scenes > 0 else duration
+
+    if on_progress:
+        on_progress(100, f"Found {total_scenes} scenes (PySceneDetect)")
+
+    return SceneInfo(
+        boundaries=boundaries,
+        total_scenes=total_scenes,
+        duration=duration,
+        avg_scene_length=round(avg_scene, 2),
+    )
+
+
+def detect_scenes_hybrid(
+    filepath: str,
+    threshold: float = 0.4,
+    min_scene_length: float = 1.0,
+    on_progress: Optional[Callable] = None,
+) -> SceneInfo:
+    """
+    Two-stage scene detection: PySceneDetect fast pass + TransNetV2 refinement.
+
+    Stage 1: PySceneDetect ContentDetector finds candidate boundaries quickly.
+    Stage 2: TransNetV2 validates and adds missed boundaries near candidates.
+    Merged result removes duplicates within 0.5s tolerance.
+    """
+    DEDUP_TOLERANCE = 0.5
+
+    def _stage_progress(stage_start, stage_end):
+        """Return a progress callback scoped to a stage range."""
+        def _cb(pct, msg=""):
+            scaled = stage_start + (pct / 100.0) * (stage_end - stage_start)
+            if on_progress:
+                on_progress(int(scaled), msg)
+        return _cb
+
+    # ------ Stage 1: PySceneDetect (fast) — progress 0-40% ------
+    if on_progress:
+        on_progress(0, "Stage 1: PySceneDetect fast pass...")
+
+    pyscene_info = detect_scenes_pyscenedetect(
+        filepath,
+        threshold=27.0,
+        min_scene_length=min_scene_length,
+        on_progress=_stage_progress(0, 40),
+    )
+    pyscene_times = [b.time for b in pyscene_info.boundaries]
+
+    # ------ Stage 2: TransNetV2 refinement — progress 40-80% ------
+    ml_boundaries = []
+    try:
+        _load_transnetv2_class()
+
+        if on_progress:
+            on_progress(40, "Stage 2: TransNetV2 refinement...")
+
+        ml_info = detect_scenes_ml(
+            filepath,
+            threshold=threshold,
+            min_scene_length=min_scene_length,
+            on_progress=_stage_progress(40, 80),
+        )
+        ml_boundaries = ml_info.boundaries
+    except (ImportError, RuntimeError):
+        logger.warning(
+            "TransNetV2 not available — returning PySceneDetect results only"
+        )
+        if on_progress:
+            on_progress(80, "TransNetV2 unavailable, using PySceneDetect only")
+
+    # ------ Stage 3: Merge & deduplicate — progress 80-100% ------
+    if on_progress:
+        on_progress(85, "Merging results...")
+
+    # Start with all PySceneDetect boundaries
+    merged = list(pyscene_info.boundaries)
+
+    # Add ML boundaries that are >0.5s from any PySceneDetect boundary
+    for ml_b in ml_boundaries:
+        too_close = any(
+            abs(ml_b.time - ps_t) <= DEDUP_TOLERANCE for ps_t in pyscene_times
+        )
+        if not too_close:
+            merged.append(ml_b)
+
+    # Sort by timestamp
+    merged.sort(key=lambda b: b.time)
+
+    # Deduplicate within tolerance (keep first occurrence)
+    deduped: List[SceneBoundary] = []
+    for b in merged:
+        if not deduped or (b.time - deduped[-1].time) > DEDUP_TOLERANCE:
+            deduped.append(b)
+
+    # Re-label sequentially
+    for i, b in enumerate(deduped):
+        if i == 0 and b.time < 0.01:
+            b.label = "Start"
+        else:
+            b.label = f"Scene {i + 1}"
+
+    total_scenes = len(deduped)
+    duration = pyscene_info.duration
+    avg_scene = duration / total_scenes if total_scenes > 0 else duration
+
+    if on_progress:
+        on_progress(100, f"Found {total_scenes} scenes (hybrid)")
+
+    return SceneInfo(
+        boundaries=deduped,
+        total_scenes=total_scenes,
+        duration=duration,
+        avg_scene_length=round(avg_scene, 2),
+    )
+
+
+def _load_autoshot_model():
+    """Return an AutoShot model instance."""
+    try:
+        mod = importlib.import_module("autoshot")
+    except ImportError:
+        raise ImportError(
+            "AutoShot not installed. Install from: "
+            "https://github.com/wentaozhu/AutoShot"
+        )
+    cls = getattr(mod, "AutoShot", None)
+    if cls is None:
+        cls = getattr(mod, "Model", None)
+    if cls is None:
+        raise ImportError("AutoShot module found but no AutoShot/Model class")
+    return cls()
+
+
+def detect_scenes_autoshot(
+    input_path: str,
+    threshold: float = 0.5,
+    min_scene_length: float = 2.0,
+    on_progress: Optional[Callable] = None,
+) -> SceneInfo:
+    """Detect scene boundaries using AutoShot.
+
+    AutoShot beats TransNetV2 by ~4.2% F1 on gradual transitions
+    (fades, dissolves, wipes). Falls back to TransNetV2 or threshold
+    if not installed.
+
+    Requires: git clone https://github.com/wentaozhu/AutoShot && pip install -e .
+    """
+    try:
+        model = _load_autoshot_model()
+    except ImportError:
+        raise RuntimeError(
+            "AutoShot not installed. Install from: "
+            "https://github.com/wentaozhu/AutoShot"
+        )
+
+    if on_progress:
+        on_progress(5, "Loading AutoShot model...")
+
+    probe_cmd = [
+        get_ffprobe_path(), "-v", "quiet",
+        "-print_format", "json",
+        "-show_format",
+        input_path,
+    ]
+    probe_result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=30)
+    duration = 0.0
+    try:
+        probe_data = json.loads(probe_result.stdout)
+        duration = float(probe_data.get("format", {}).get("duration", 0.0))
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    if on_progress:
+        on_progress(20, "Running AutoShot scene detection...")
+
+    try:
+        predictions = model.predict(input_path)
+    except Exception as exc:
+        raise RuntimeError(f"AutoShot prediction failed: {exc}") from exc
+
+    if on_progress:
+        on_progress(80, "Parsing AutoShot boundaries...")
+
+    boundaries = [SceneBoundary(time=0.0, frame=0, score=1.0, label="Start")]
+
+    if hasattr(predictions, "__iter__"):
+        for pred in predictions:
+            if isinstance(pred, (int, float)):
+                time_val = float(pred)
+            elif hasattr(pred, "time"):
+                time_val = float(pred.time)
+            elif isinstance(pred, dict):
+                time_val = float(pred.get("time", pred.get("timestamp", 0)))
+            else:
+                continue
+            if boundaries and (time_val - boundaries[-1].time) < min_scene_length:
+                continue
+            boundaries.append(SceneBoundary(
+                time=time_val,
+                score=threshold,
+            ))
+
+    total_scenes = len(boundaries)
+    avg_scene = duration / total_scenes if total_scenes > 0 else duration
+
+    for i, b in enumerate(boundaries):
+        if not b.label:
+            b.label = f"Scene {i + 1}"
+
+    if on_progress:
+        on_progress(100, f"Found {total_scenes} scenes (AutoShot)")
+
+    return SceneInfo(
+        boundaries=boundaries,
+        total_scenes=total_scenes,
+        duration=duration,
+        avg_scene_length=round(avg_scene, 2),
+    )
+
+
+def detect_scenes_auto(
+    filepath: str,
+    threshold: float = 0.4,
+    min_scene_length: float = 1.0,
+    on_progress: Optional[Callable] = None,
+) -> "SceneInfo":
+    """Backend-priority scene detection: AutoShot → TransNetV2 → PySceneDetect → FFmpeg.
+
+    Picks the most accurate installed backend at call time.  AutoShot
+    leads on gradual transitions; TransNetV2 is the established ML
+    baseline; PySceneDetect and FFmpeg threshold are the fallbacks.
+
+    This is a thin dispatcher that preserves the existing
+    ``detect_scenes`` / ``detect_scenes_ml`` /
+    ``detect_scenes_pyscenedetect`` / ``detect_scenes_autoshot``
+    entry points — add it as the new **default** for new routes; keep
+    the individual backends callable by name for users who want a
+    specific one.
+    """
+    # Tier 0 — AutoShot (best on gradual transitions)
+    try:
+        _load_autoshot_model()
+        logger.debug("detect_scenes_auto: using AutoShot")
+        return detect_scenes_autoshot(
+            filepath,
+            threshold=threshold,
+            min_scene_length=min_scene_length,
+            on_progress=on_progress,
+        )
+    except (ImportError, RuntimeError) as exc:
+        logger.debug("AutoShot unavailable (%s); trying TransNetV2", exc)
+
+    # Tier 1 — TransNetV2 (ML SOTA)
+    try:
+        _load_transnetv2_class()
+        logger.debug("detect_scenes_auto: using TransNetV2")
+        return detect_scenes_ml(
+            filepath,
+            threshold=threshold,
+            min_scene_length=min_scene_length,
+            on_progress=on_progress,
+        )
+    except (ImportError, RuntimeError) as exc:
+        logger.debug("TransNetV2 unavailable (%s); trying PySceneDetect", exc)
+
+    # Tier 2 — PySceneDetect ContentDetector
+    try:
+        import scenedetect  # noqa: F401
+        logger.debug("detect_scenes_auto: using PySceneDetect")
+        return detect_scenes_pyscenedetect(
+            filepath,
+            threshold=27.0,  # ContentDetector default
+            min_scene_length=min_scene_length,
+            on_progress=on_progress,
+        )
+    except (ImportError, RuntimeError) as exc:
+        logger.debug("PySceneDetect unavailable (%s); using FFmpeg threshold", exc)
+
+    # Tier 3 — FFmpeg threshold (always available)
+    return detect_scenes(
+        filepath,
+        threshold=threshold,
+        min_scene_length=min_scene_length,
+        on_progress=on_progress,
+    )
+
+
+SPEED_RAMP_PRESETS = [
+    {"name": "dramatic_pause", "label": "Dramatic Pause", "description": "Slow down in the middle for impact"},
+    {"name": "smooth_ramp_up", "label": "Smooth Ramp Up", "description": "Gradually accelerate"},
+    {"name": "smooth_ramp_down", "label": "Smooth Ramp Down", "description": "Gradually decelerate"},
+    {"name": "punch_in", "label": "Punch In", "description": "Slow buildup then fast hit"},
+    {"name": "bullet_time", "label": "Bullet Time", "description": "Matrix-style slow motion"},
+    {"name": "heartbeat", "label": "Heartbeat", "description": "Rhythmic speed pulsing"},
+    {"name": "flash_forward", "label": "Flash Forward", "description": "Quick flash then slow reveal"},
+    {"name": "rewind", "label": "Rewind", "description": "Reverse playback section"},
+]

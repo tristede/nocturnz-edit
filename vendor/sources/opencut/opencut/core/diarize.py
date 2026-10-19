@@ -1,0 +1,300 @@
+"""
+Speaker diarization for podcast/multicam editing.
+
+Uses pyannote.audio to detect who is speaking when, enabling automatic
+camera switching for multi-speaker content.
+"""
+
+import logging
+import os
+import tempfile
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Mapping, Optional, Tuple
+
+from ..utils.config import DiarizeConfig
+from .audio import extract_audio_wav
+from .silence import TimeSegment
+
+logger = logging.getLogger("opencut")
+
+
+@dataclass
+class SpeakerSegment:
+    """A segment of speech attributed to a specific speaker."""
+    speaker: str       # e.g., "SPEAKER_00", "SPEAKER_01"
+    start: float
+    end: float
+
+    @property
+    def duration(self) -> float:
+        return self.end - self.start
+
+
+@dataclass
+class DiarizationResult:
+    """Complete diarization output."""
+    segments: List[SpeakerSegment]
+    num_speakers: int = 0
+    speakers: List[str] = field(default_factory=list)
+    # pyannote 4's exclusive output reconciles overlapping speaker turns with
+    # transcript-friendly boundaries. Older pipelines only expose the regular
+    # annotation, so retain the source for downstream cut provenance.
+    boundary_source: str = "speaker_diarization"
+
+    @property
+    def total_duration(self) -> float:
+        return sum(s.duration for s in self.segments) if self.segments else 0.0
+
+    def get_speaker_segments(self, speaker: str) -> List[SpeakerSegment]:
+        """Get all segments for a specific speaker."""
+        return [s for s in self.segments if s.speaker == speaker]
+
+    def get_speaker_durations(self) -> Dict[str, float]:
+        """Get total speaking duration per speaker."""
+        durations: Dict[str, float] = {}
+        for seg in self.segments:
+            durations[seg.speaker] = durations.get(seg.speaker, 0.0) + seg.duration
+        return durations
+
+    def to_camera_switches(
+        self,
+        speaker_camera_map: Optional[Dict[str, int]] = None,
+        min_segment_duration: float = 1.0,
+    ) -> List[TimeSegment]:
+        """
+        Convert diarization to camera switch events for multicam editing.
+
+        Args:
+            speaker_camera_map: Mapping of speaker labels to camera/track indices.
+                                Auto-assigned if None.
+            min_segment_duration: Minimum time before switching cameras.
+
+        Returns:
+            List of TimeSegment with label indicating camera index.
+        """
+        if not self.segments:
+            return []
+
+        # Auto-assign cameras if no mapping provided
+        if speaker_camera_map is None:
+            speaker_camera_map = {
+                speaker: i for i, speaker in enumerate(self.speakers)
+            }
+
+        # Merge very short segments (keep camera on longer)
+        merged = self._merge_short_segments(min_segment_duration)
+
+        switches = []
+        for seg in merged:
+            camera = speaker_camera_map.get(seg.speaker, 0)
+            switches.append(TimeSegment(
+                start=seg.start,
+                end=seg.end,
+                label=f"camera_{camera}",
+            ))
+
+        return switches
+
+    def _merge_short_segments(self, min_duration: float) -> List[SpeakerSegment]:
+        """Merge segments shorter than min_duration into adjacent segments."""
+        if not self.segments:
+            return []
+
+        merged = [SpeakerSegment(
+            speaker=self.segments[0].speaker,
+            start=self.segments[0].start,
+            end=self.segments[0].end,
+        )]
+
+        for seg in self.segments[1:]:
+            if seg.speaker == merged[-1].speaker:
+                # Same speaker — extend
+                merged[-1].end = seg.end
+            elif seg.duration < min_duration:
+                # Too short — absorb into previous segment
+                merged[-1].end = seg.end
+            else:
+                merged.append(SpeakerSegment(
+                    speaker=seg.speaker,
+                    start=seg.start,
+                    end=seg.end,
+                ))
+
+        return merged
+
+
+# Default diarization pipeline: CC-BY-4.0 community-1 (lower DER, "always freely
+# accessible"). Legacy 3.1 is retained as an automatic fallback when the
+# community model cannot be loaded (e.g. terms not yet accepted on HF).
+DEFAULT_DIARIZATION_MODEL = "pyannote/speaker-diarization-community-1"
+LEGACY_DIARIZATION_MODEL = "pyannote/speaker-diarization-3.1"
+
+
+def select_diarization_annotation(output: Any) -> Tuple[Any, str]:
+    """Select the most precise speaker-boundary annotation from pyannote.
+
+    pyannote.audio 4 returns an object containing both regular and exclusive
+    speaker diarization for ``speaker-diarization-community-1``. Legacy
+    pipelines return the annotation directly. Keeping this adapter tolerant
+    lets callers use the exclusive path when present without breaking cached
+    or older model outputs.
+    """
+    if isinstance(output, Mapping):
+        exclusive = output.get("exclusive_speaker_diarization")
+        if exclusive is not None:
+            return exclusive, "exclusive_speaker_diarization"
+        regular = output.get("speaker_diarization")
+        if regular is not None:
+            return regular, "speaker_diarization"
+    else:
+        exclusive = getattr(output, "exclusive_speaker_diarization", None)
+        if exclusive is not None:
+            return exclusive, "exclusive_speaker_diarization"
+        regular = getattr(output, "speaker_diarization", None)
+        if regular is not None:
+            return regular, "speaker_diarization"
+
+    return output, "speaker_diarization"
+
+
+def annotation_to_segments(annotation: Any) -> List[SpeakerSegment]:
+    """Convert a pyannote annotation into OpenCut speaker segments."""
+    if not hasattr(annotation, "itertracks"):
+        raise TypeError("Diarization output does not expose itertracks()")
+
+    segments: List[SpeakerSegment] = []
+    for turn, _, speaker in annotation.itertracks(yield_label=True):
+        start = float(turn.start)
+        end = float(turn.end)
+        if end <= start:
+            continue
+        segments.append(SpeakerSegment(
+            speaker=str(speaker),
+            start=start,
+            end=end,
+        ))
+    return segments
+
+
+def check_pyannote_available() -> bool:
+    """Check if pyannote.audio is installed."""
+    try:
+        from pyannote.audio import Pipeline  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def diarize(
+    filepath: str,
+    config: Optional[DiarizeConfig] = None,
+) -> DiarizationResult:
+    """
+    Perform speaker diarization on an audio/video file.
+
+    Args:
+        filepath: Path to the media file.
+        config: Diarization configuration. Uses defaults if None.
+
+    Returns:
+        DiarizationResult with speaker segments.
+
+    Raises:
+        RuntimeError: If pyannote.audio is not installed.
+    """
+    if config is None:
+        config = DiarizeConfig()
+
+    if not check_pyannote_available():
+        raise RuntimeError(
+            "pyannote.audio not installed. Install with:\n"
+            "  pip install pyannote.audio\n\n"
+            "You also need a HuggingFace token:\n"
+            "  1. Create account at https://huggingface.co\n"
+            "  2. Accept model terms at https://huggingface.co/pyannote/speaker-diarization-3.1\n"
+            "  3. Create token at https://huggingface.co/settings/tokens\n"
+            "  4. Pass token via --hf-token or HUGGINGFACE_TOKEN env var\n"
+        )
+
+    import torch
+    from pyannote.audio import Pipeline
+
+    # Get HF token
+    hf_token = config.hf_token or os.environ.get("HUGGINGFACE_TOKEN") or os.environ.get("HF_TOKEN")
+    if not hf_token:
+        raise RuntimeError(
+            "HuggingFace token required for pyannote models.\n"
+            "Set HUGGINGFACE_TOKEN env var or pass --hf-token."
+        )
+
+    # Load pipeline: prefer the configured/community model, fall back to legacy
+    # 3.1 if it cannot be loaded (terms not accepted, offline cache miss, etc.).
+    requested_model = getattr(config, "model", None) or DEFAULT_DIARIZATION_MODEL
+    pipeline = None
+    for candidate in (requested_model, LEGACY_DIARIZATION_MODEL):
+        try:
+            pipeline = Pipeline.from_pretrained(candidate, token=hf_token)
+            if candidate != requested_model:
+                logger.warning(
+                    "Diarization model %s unavailable; fell back to %s",
+                    requested_model, candidate,
+                )
+            break
+        except Exception as exc:
+            logger.warning("Could not load diarization model %s: %s", candidate, exc)
+    if pipeline is None:
+        raise RuntimeError(
+            f"Could not load any diarization pipeline ({requested_model} or "
+            f"{LEGACY_DIARIZATION_MODEL}). Accept the model terms on HuggingFace "
+            "and verify your token."
+        )
+
+    # Use GPU if available
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    pipeline.to(device)
+
+    # Extract audio (pyannote expects WAV)
+    wav_path = extract_audio_wav(filepath, sample_rate=16000)
+
+    try:
+        # Run diarization
+        kwargs = {}
+        if config.num_speakers is not None:
+            kwargs["num_speakers"] = config.num_speakers
+        else:
+            if config.min_speakers > 1:
+                kwargs["min_speakers"] = config.min_speakers
+            if config.max_speakers < 10:
+                kwargs["max_speakers"] = config.max_speakers
+
+        pipeline_output = pipeline(wav_path, **kwargs)
+        diarization, boundary_source = select_diarization_annotation(pipeline_output)
+
+        # Parse the selected annotation. Exclusive output is intentionally
+        # selected before this conversion so multicam boundaries do not inherit
+        # overlap/rounding from ASR-aligned regular turns.
+        segments = annotation_to_segments(diarization)
+        speakers_set = {segment.speaker for segment in segments}
+
+        speakers = sorted(speakers_set)
+
+        return DiarizationResult(
+            segments=segments,
+            num_speakers=len(speakers),
+            speakers=speakers,
+            boundary_source=boundary_source,
+        )
+
+    finally:
+        # Release GPU memory
+        try:
+            del pipeline
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+        if wav_path.startswith(tempfile.gettempdir()):
+            try:
+                os.unlink(wav_path)
+            except OSError:
+                pass

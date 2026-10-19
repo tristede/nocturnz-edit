@@ -1,0 +1,1368 @@
+{
+  "version": 1,
+  "generated_at": "2026-08-23T11:51:27Z",
+  "source": "opencut/_generated/route_manifest.json",
+  "total_records": 74,
+  "total_routes": 101,
+  "records": [
+    {
+      "feature_id": "auto.ab-av1",
+      "label": "Ab Av1",
+      "category": "video",
+      "state": "available",
+      "install_hint": "bundled or system dependency; see route response",
+      "docs": "docs/MODELS.md#excluded-infrastructure-checks",
+      "routes": [
+        "/video/encode/vmaf-target/info"
+      ],
+      "check_name": "check_ab_av1_available",
+      "impl_module": "ab_av1",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "audio.acestep",
+      "label": "ACE-Step (full-song music with lyrics)",
+      "category": "audio",
+      "state": "available",
+      "install_hint": "pip install acestep",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/audio/music/acestep",
+        "/audio/music/acestep/edit",
+        "/audio/music/acestep/info"
+      ],
+      "check_name": "check_acestep_available",
+      "impl_module": "music_acestep",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "gpu (>= 8 GB VRAM)",
+      "requires_gpu": true,
+      "minimum_vram_mb": 8192
+    },
+    {
+      "feature_id": "auto.amphion-tts",
+      "label": "Amphion Tts",
+      "category": "audio",
+      "state": "missing_dependency",
+      "install_hint": "see route response for dependency hint",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/audio/tts/maskgct",
+        "/audio/tts/maskgct/info",
+        "/tts/amphion"
+      ],
+      "check_name": "check_amphion_tts",
+      "impl_module": "tts_amphion,tts_maskgct",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "auto.audio-reactive-fx",
+      "label": "Audio Reactive Fx",
+      "category": "video",
+      "state": "missing_dependency",
+      "install_hint": "see route response for dependency hint",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/video/audio-reactive"
+      ],
+      "check_name": "check_audio_reactive_fx",
+      "impl_module": "audio_reactive_fx",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "audio.audio-separator",
+      "label": "python-audio-separator (Mel-Band / BS-RoFormer, SCNet, MDX23C)",
+      "category": "audio",
+      "state": "available",
+      "install_hint": "pip install -e \".[audio]\"  # or: pip install \"audio-separator[cpu]\"",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/audio/separate"
+      ],
+      "check_name": "check_audio_separator_available",
+      "impl_module": "workflow",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "cpu/gpu",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "auto.audio-watermark",
+      "label": "Audio Watermark",
+      "category": "audio",
+      "state": "available",
+      "install_hint": "see route response for dependency hint",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/audio/watermark/info"
+      ],
+      "check_name": "check_audio_watermark",
+      "impl_module": "audio_watermark",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "editing.auto-editor",
+      "label": "auto-editor",
+      "category": "editing",
+      "state": "available",
+      "install_hint": "Native v30+ binary: https://github.com/WyattBlue/auto-editor/releases — or legacy pip: pip install auto-editor",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/video/auto-edit"
+      ],
+      "check_name": "check_auto_editor_available",
+      "impl_module": "auto_edit,workflow",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "cpu",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "editing.auto-zoom",
+      "label": "OpenCV / face-tracker auto-zoom",
+      "category": "editing",
+      "state": "available",
+      "install_hint": "pip install opencv-python",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/system/dependencies"
+      ],
+      "check_name": "check_auto_zoom_available",
+      "impl_module": "auto_zoom",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "cpu",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "auto.cinefocus",
+      "label": "Cinefocus",
+      "category": "video",
+      "state": "missing_dependency",
+      "install_hint": "see route response for dependency hint",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/video/cinefocus"
+      ],
+      "check_name": "check_cinefocus",
+      "impl_module": "cinefocus",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "auto.color-match",
+      "label": "Color Match",
+      "category": "system",
+      "state": "available",
+      "install_hint": "bundled or system dependency; see route response",
+      "docs": "docs/MODELS.md#excluded-infrastructure-checks",
+      "routes": [
+        "/system/dependencies"
+      ],
+      "check_name": "check_color_match_available",
+      "impl_module": "color_match",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "video.colour-science",
+      "label": "colour-science (CIE / vectorscope math)",
+      "category": "video",
+      "state": "available",
+      "install_hint": "pip install colour-science",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/video/scopes/pro/info"
+      ],
+      "check_name": "check_colour_science_available",
+      "impl_module": "color_scopes_pro",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "cpu",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "auto.cosyvoice2",
+      "label": "Cosyvoice2",
+      "category": "audio",
+      "state": "missing_dependency",
+      "install_hint": "see route response for dependency hint",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/tts/cosyvoice2"
+      ],
+      "check_name": "check_cosyvoice2",
+      "impl_module": "tts_cosyvoice2",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "video.colorize.ddcolor",
+      "label": "DDColor",
+      "category": "video",
+      "state": "available",
+      "install_hint": "pip install ddcolor",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/video/restore/backends"
+      ],
+      "check_name": "check_ddcolor_available",
+      "impl_module": "colorize_ddcolor,deflicker_neural,restore_vrt",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "gpu",
+      "requires_gpu": true,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "auto.deblur-motion",
+      "label": "Deblur Motion",
+      "category": "video",
+      "state": "missing_dependency",
+      "install_hint": "see route response for dependency hint",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/video/deblur"
+      ],
+      "check_name": "check_deblur_motion",
+      "impl_module": "deblur_motion",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "audio.demucs",
+      "label": "Demucs (htdemucs / hdemucs) - ARCHIVED UPSTREAM",
+      "category": "audio",
+      "state": "available",
+      "install_hint": "pip install demucs  # legacy: archived upstream 2024-04-24",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/audio/separate"
+      ],
+      "check_name": "check_demucs_available",
+      "impl_module": "workflow",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "cpu/gpu",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "auto.depth-depthpro",
+      "label": "Depth Depthpro",
+      "category": "video",
+      "state": "missing_dependency",
+      "install_hint": "see route response for dependency hint",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/video/depth/depthpro"
+      ],
+      "check_name": "check_depth_depthpro",
+      "impl_module": "depth_depthpro",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "auto.depth-flow",
+      "label": "Depth Flow",
+      "category": "video",
+      "state": "missing_dependency",
+      "install_hint": "see route response for dependency hint",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/video/depth-flow"
+      ],
+      "check_name": "check_depth_flow",
+      "impl_module": "depth_flow",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "auto.diffbir",
+      "label": "Diffbir",
+      "category": "video",
+      "state": "missing_dependency",
+      "install_hint": "see route response for dependency hint",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/video/restore/diffbir"
+      ],
+      "check_name": "check_diffbir",
+      "impl_module": "restore_diffbir",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "audio.diffrhythm",
+      "label": "DiffRhythm (diffusion full-song generator)",
+      "category": "audio",
+      "state": "available",
+      "install_hint": "git clone https://github.com/ASLP-lab/DiffRhythm && pip install -r DiffRhythm/requirements.txt",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/audio/music/diffrhythm",
+        "/audio/music/diffrhythm/info",
+        "/audio/music/diffrhythm/styles"
+      ],
+      "check_name": "check_diffrhythm_available",
+      "impl_module": "music_diffrhythm",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "gpu (>= 8 GB VRAM)",
+      "requires_gpu": true,
+      "minimum_vram_mb": 8192
+    },
+    {
+      "feature_id": "auto.echomimic",
+      "label": "Echomimic",
+      "category": "video",
+      "state": "missing_dependency",
+      "install_hint": "see route response for dependency hint",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/video/lipsync/echomimic"
+      ],
+      "check_name": "check_echomimic",
+      "impl_module": "lipsync_echomimic",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "audio.edge-tts",
+      "label": "Edge TTS (Microsoft cloud voices)",
+      "category": "audio",
+      "state": "available",
+      "install_hint": "pip install edge-tts",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/audio/tts/voices"
+      ],
+      "check_name": "check_edge_tts_available",
+      "impl_module": "voice_gen",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "cpu",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "audio.elevenlabs",
+      "label": "ElevenLabs cloud TTS",
+      "category": "audio",
+      "state": "available",
+      "install_hint": "pip install elevenlabs + ELEVENLABS_API_KEY",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/audio/tts/elevenlabs",
+        "/audio/tts/elevenlabs/info",
+        "/audio/tts/elevenlabs/voices"
+      ],
+      "check_name": "check_elevenlabs_available",
+      "impl_module": "tts_elevenlabs",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "cpu (client)",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "video.face-reshape",
+      "label": "Face reshape / beauty filter",
+      "category": "video",
+      "state": "available",
+      "install_hint": "pip install mediapipe + opencv-python",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/video/face/reshape",
+        "/video/face/reshape/info"
+      ],
+      "check_name": "check_face_reshape_available",
+      "impl_module": "face_reshape",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "cpu/gpu",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "video.upscale.flashvsr",
+      "label": "FlashVSR (streaming VSR)",
+      "category": "video",
+      "state": "stub",
+      "install_hint": "Route is not implemented; no supported install command yet.",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/video/upscale/flashvsr",
+        "/video/upscale/flashvsr/info"
+      ],
+      "check_name": "check_flashvsr_available",
+      "impl_module": "upscale_flashvsr",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "gpu (>= 12 GB VRAM)",
+      "requires_gpu": true,
+      "minimum_vram_mb": 12288
+    },
+    {
+      "feature_id": "auto.footage-search",
+      "label": "Footage Search",
+      "category": "system",
+      "state": "available",
+      "install_hint": "bundled or system dependency; see route response",
+      "docs": "docs/MODELS.md#excluded-infrastructure-checks",
+      "routes": [
+        "/system/dependencies"
+      ],
+      "check_name": "check_footage_search_available",
+      "impl_module": "footage_search",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "video.framepack",
+      "label": "FramePack (image-to-video diffusion)",
+      "category": "generation",
+      "state": "available",
+      "install_hint": "pip install framepack",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/generate/framepack",
+        "/generate/framepack/info"
+      ],
+      "check_name": "check_framepack_available",
+      "impl_module": "gen_video_framepack",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "gpu (>= 6 GB VRAM)",
+      "requires_gpu": true,
+      "minimum_vram_mb": 6144
+    },
+    {
+      "feature_id": "auto.gen-video-ltx",
+      "label": "Gen Video Ltx",
+      "category": "generate",
+      "state": "missing_dependency",
+      "install_hint": "see route response for dependency hint",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/generate/ltx/v2"
+      ],
+      "check_name": "check_gen_video_ltx",
+      "impl_module": "gen_video_ltx",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "auto.gen-video-opensora",
+      "label": "Gen Video Opensora",
+      "category": "generate",
+      "state": "missing_dependency",
+      "install_hint": "see route response for dependency hint",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/generate/opensora"
+      ],
+      "check_name": "check_gen_video_opensora",
+      "impl_module": "gen_video_opensora",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "auto.gptsovits",
+      "label": "Gptsovits",
+      "category": "audio",
+      "state": "available",
+      "install_hint": "see route response for dependency hint",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/tts/gptsovits",
+        "/tts/gptsovits/voices"
+      ],
+      "check_name": "check_gptsovits",
+      "impl_module": "tts_gptsovits",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "auto.gyroflow",
+      "label": "Gyroflow",
+      "category": "video",
+      "state": "missing_dependency",
+      "install_hint": "see route response for dependency hint",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/video/stabilize/gyroflow"
+      ],
+      "check_name": "check_gyroflow",
+      "impl_module": "stabilize_gyroflow",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "video.relight.iclight",
+      "label": "IC-Light v1 relight",
+      "category": "video",
+      "state": "stub",
+      "install_hint": "pip install diffusers>=0.32 torch",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/video/relight/iclight",
+        "/video/relight/iclight/info"
+      ],
+      "check_name": "check_iclight_available",
+      "impl_module": "relight_iclight",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "gpu (>= 4 GB VRAM)",
+      "requires_gpu": true,
+      "minimum_vram_mb": 4096
+    },
+    {
+      "feature_id": "audio.kokoro",
+      "label": "Kokoro TTS (82M, CPU-only)",
+      "category": "audio",
+      "state": "available",
+      "install_hint": "pip install kokoro (needs espeak-ng for some languages)",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/audio/tts/kokoro",
+        "/audio/tts/kokoro/info",
+        "/audio/tts/kokoro/voices",
+        "/audio/tts/voices"
+      ],
+      "check_name": "check_kokoro_available",
+      "impl_module": "voice_gen,tts_kokoro",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "cpu",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "image.kontext",
+      "label": "FLUX.1 Kontext-dev (image editing)",
+      "category": "generation",
+      "state": "available",
+      "install_hint": "pip install diffusers>=0.29 torch transformers accelerate",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/image/edit/kontext"
+      ],
+      "check_name": "check_kontext_available",
+      "impl_module": "image_edit_kontext",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "gpu",
+      "requires_gpu": true,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "lipsync.latentsync",
+      "label": "LatentSync diffusion lip-sync",
+      "category": "lipsync",
+      "state": "available",
+      "install_hint": "pip install diffusers torch torchvision",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/ai/lip-sync"
+      ],
+      "check_name": "check_latentsync_available",
+      "impl_module": "lipsync_latentsync,lip_sync_gen",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "gpu (>= 6 GB VRAM)",
+      "requires_gpu": true,
+      "minimum_vram_mb": 6144
+    },
+    {
+      "feature_id": "auto.lottie-import",
+      "label": "Lottie Import",
+      "category": "video",
+      "state": "available",
+      "install_hint": "see route response for dependency hint",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/video/lottie/render"
+      ],
+      "check_name": "check_lottie_import",
+      "impl_module": "lottie_import",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "auto.loudness-match",
+      "label": "Loudness Match",
+      "category": "system",
+      "state": "available",
+      "install_hint": "bundled or system dependency; see route response",
+      "docs": "docs/MODELS.md#excluded-infrastructure-checks",
+      "routes": [
+        "/system/dependencies"
+      ],
+      "check_name": "check_loudness_match_available",
+      "impl_module": "loudness_match",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "video.mediapipe",
+      "label": "MediaPipe (face mesh, hands, pose)",
+      "category": "video",
+      "state": "available",
+      "install_hint": "pip install mediapipe",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/video/reframe/face"
+      ],
+      "check_name": "check_mediapipe_available",
+      "impl_module": "face_reframe,workflow",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "cpu/gpu",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "audio.moonshine",
+      "label": "Moonshine ASR (CPU-optimized STT)",
+      "category": "captions",
+      "state": "available",
+      "install_hint": "pip install moonshine",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/audio/transcribe/moonshine",
+        "/audio/transcribe/moonshine/info"
+      ],
+      "check_name": "check_moonshine_available",
+      "impl_module": "asr_moonshine",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "cpu",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "video.restore.deflicker",
+      "label": "All-In-One-Deflicker",
+      "category": "video",
+      "state": "available",
+      "install_hint": "pip install all-in-one-deflicker",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/video/restore/backends"
+      ],
+      "check_name": "check_neural_deflicker_available",
+      "impl_module": "deflicker_neural,colorize_ddcolor,restore_vrt",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "gpu",
+      "requires_gpu": true,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "captions.translate.nllb",
+      "label": "NLLB-200 distilled caption translation",
+      "category": "captions",
+      "state": "available",
+      "install_hint": "pip install ctranslate2 sentencepiece 'huggingface-hub>=1.26,<2'",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/captions/enhanced/capabilities"
+      ],
+      "check_name": "check_nllb_available",
+      "impl_module": "captions_enhanced",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "cpu/gpu",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "llm.ollama",
+      "label": "Ollama backend",
+      "category": "llm",
+      "state": "available",
+      "install_hint": "install Ollama from https://ollama.ai",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/llm/status",
+        "/system/dependencies"
+      ],
+      "check_name": "check_ollama_available",
+      "impl_module": "llm",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "cpu/gpu",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "audio.omnivoice",
+      "label": "OmniVoice TTS",
+      "category": "audio",
+      "state": "stub",
+      "install_hint": "Route is not implemented; no supported install command yet.",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/audio/tts/omnivoice"
+      ],
+      "check_name": "check_omnivoice_available",
+      "impl_module": "tts_omnivoice",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "gpu",
+      "requires_gpu": true,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "auto.otio",
+      "label": "Otio",
+      "category": "timeline",
+      "state": "available",
+      "install_hint": "bundled or system dependency; see route response",
+      "docs": "docs/MODELS.md#excluded-infrastructure-checks",
+      "routes": [
+        "/timeline/export-otio"
+      ],
+      "check_name": "check_otio_available",
+      "impl_module": "silence",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "auto.pedalboard",
+      "label": "Pedalboard",
+      "category": "audio",
+      "state": "available",
+      "install_hint": "bundled or system dependency; see route response",
+      "docs": "docs/MODELS.md#excluded-infrastructure-checks",
+      "routes": [
+        "/audio/pro/effects"
+      ],
+      "check_name": "check_pedalboard_available",
+      "impl_module": "audio_pro",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "captions.karaoke-adv",
+      "label": "pyonfx ASS karaoke",
+      "category": "captions",
+      "state": "available",
+      "install_hint": "pip install pyonfx",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/captions/karaoke-adv/presets"
+      ],
+      "check_name": "check_pyonfx_available",
+      "impl_module": "captions_karaoke_adv",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "cpu",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "auto.quality-metrics",
+      "label": "Quality Metrics",
+      "category": "video",
+      "state": "available",
+      "install_hint": "bundled or system dependency; see route response",
+      "docs": "docs/MODELS.md#excluded-infrastructure-checks",
+      "routes": [
+        "/video/quality/backends"
+      ],
+      "check_name": "check_quality_metrics_available",
+      "impl_module": "quality_metrics",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "video.analysis.qwen3vl",
+      "label": "Qwen3-VL local video understanding",
+      "category": "vision",
+      "state": "missing_dependency",
+      "install_hint": "Install Ollama, then run: ollama pull qwen3-vl:8b",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/analyze/video/qwen3vl",
+        "/analyze/video/qwen3vl/info"
+      ],
+      "check_name": "check_qwen3vl_available",
+      "impl_module": "multimodal_qwen3vl",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "cpu/gpu",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "video.style.reezsynth",
+      "label": "ReEzSynth (Ebsynth successor)",
+      "category": "video",
+      "state": "stub",
+      "install_hint": "Route is not implemented; no supported install command yet.",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/video/style/reezsynth"
+      ],
+      "check_name": "check_reezsynth_available",
+      "impl_module": "style_reezsynth",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "gpu",
+      "requires_gpu": true,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "audio.resemble-enhance",
+      "label": "Resemble Enhance",
+      "category": "audio",
+      "state": "available",
+      "install_hint": "Unavailable in OpenCut's supported dependency matrix: Resemble Enhance 0.0.1 pins Torch 2.1.1 and deepspeed 0.12.4 and is not offered by OpenCut's supported dependency matrix.",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/audio/enhance"
+      ],
+      "check_name": "check_resemble_enhance_available",
+      "impl_module": "audio_enhance",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "gpu",
+      "requires_gpu": true,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "video.inpaint.rose",
+      "label": "ROSE shadow-aware inpaint",
+      "category": "video",
+      "state": "stub",
+      "install_hint": "Route is not implemented; no supported install command yet.",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/video/inpaint/rose"
+      ],
+      "check_name": "check_rose_available",
+      "impl_module": "inpaint_rose",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "gpu",
+      "requires_gpu": true,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "auto.runpod",
+      "label": "Runpod",
+      "category": "cloud",
+      "state": "available",
+      "install_hint": "bundled or system dependency; see route response",
+      "docs": "docs/MODELS.md#excluded-infrastructure-checks",
+      "routes": [
+        "/cloud/runpod/info"
+      ],
+      "check_name": "check_runpod_available",
+      "impl_module": "runpod_render",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "video.sam2",
+      "label": "Segment Anything 2 (SAM2)",
+      "category": "video",
+      "state": "available",
+      "install_hint": "pip install sam2",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/video/object-remove/engines",
+        "/video/segment/sam2",
+        "/video/segment/sam2/info"
+      ],
+      "check_name": "check_sam2_available",
+      "impl_module": "segment_sam2,segment_sam3",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "gpu",
+      "requires_gpu": true,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "video.sam3",
+      "label": "SAM 3 text-prompted video segmentation",
+      "category": "video",
+      "state": "available",
+      "install_hint": "pip install sam3 torch",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/video/object-remove/engines"
+      ],
+      "check_name": "check_sam3_available",
+      "impl_module": "segment_sam2,segment_sam3",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "gpu",
+      "requires_gpu": true,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "video.matte.sammie",
+      "label": "Sammie-Roto-2 (VideoMaMa)",
+      "category": "video",
+      "state": "stub",
+      "install_hint": "Route is not implemented; no supported install command yet.",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/video/matte/sammie"
+      ],
+      "check_name": "check_sammie_available",
+      "impl_module": "matte_sammie",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "gpu",
+      "requires_gpu": true,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "auto.searaft",
+      "label": "Searaft",
+      "category": "video",
+      "state": "missing_dependency",
+      "install_hint": "see route response for dependency hint",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/video/flow/searaft"
+      ],
+      "check_name": "check_searaft",
+      "impl_module": "flow_searaft",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "video.upscale.seedvr2",
+      "label": "SeedVR2 one-step diffusion VSR",
+      "category": "video",
+      "state": "available",
+      "install_hint": "pip install diffusers torch  # download seedvr2-3b via model manager",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/video/ai/upscale"
+      ],
+      "check_name": "check_seedvr2_available",
+      "impl_module": "upscale_seedvr2,video_ai,workflow",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "gpu (>= 8 GB VRAM)",
+      "requires_gpu": true,
+      "minimum_vram_mb": 8192
+    },
+    {
+      "feature_id": "auto.sfx-audiogen",
+      "label": "Sfx Audiogen",
+      "category": "audio",
+      "state": "missing_dependency",
+      "install_hint": "see route response for dependency hint",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/audio/sfx/generate"
+      ],
+      "check_name": "check_sfx_audiogen",
+      "impl_module": "sfx_audiogen",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "auto.shaka",
+      "label": "Shaka",
+      "category": "delivery",
+      "state": "available",
+      "install_hint": "bundled or system dependency; see route response",
+      "docs": "docs/MODELS.md#excluded-infrastructure-checks",
+      "routes": [
+        "/delivery/shaka/info"
+      ],
+      "check_name": "check_shaka_available",
+      "impl_module": "shaka_pkg",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "video.skin-retouch",
+      "label": "Skin retouch (bilateral / GAN)",
+      "category": "video",
+      "state": "available",
+      "install_hint": "pip install opencv-python (optional onnx model)",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/video/face/retouch",
+        "/video/face/retouch/info"
+      ],
+      "check_name": "check_skin_retouch_available",
+      "impl_module": "skin_retouch",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "cpu/gpu",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "audio.sparktts",
+      "label": "Spark-TTS (CPU-native zero-shot)",
+      "category": "audio",
+      "state": "available",
+      "install_hint": "pip install sparktts",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/audio/tts/spark",
+        "/audio/tts/spark/info",
+        "/audio/tts/spark/voices"
+      ],
+      "check_name": "check_sparktts_available",
+      "impl_module": "tts_sparktts",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "cpu",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "auto.spectral-match",
+      "label": "Spectral Match",
+      "category": "audio",
+      "state": "available",
+      "install_hint": "see route response for dependency hint",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/audio/spectral-match",
+        "/audio/spectral-match/info",
+        "/audio/spectral-match/preview"
+      ],
+      "check_name": "check_spectral_match",
+      "impl_module": "spectral_match",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "auto.srt",
+      "label": "Srt",
+      "category": "video",
+      "state": "available",
+      "install_hint": "bundled or system dependency; see route response",
+      "docs": "docs/MODELS.md#excluded-infrastructure-checks",
+      "routes": [
+        "/video/stream/srt/info"
+      ],
+      "check_name": "check_srt_available",
+      "impl_module": "srt_streaming",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "auto.svtav1-psy",
+      "label": "Svtav1 Psy",
+      "category": "video",
+      "state": "available",
+      "install_hint": "bundled or system dependency; see route response",
+      "docs": "docs/MODELS.md#excluded-infrastructure-checks",
+      "routes": [
+        "/video/encode/svtav1-psy/info"
+      ],
+      "check_name": "check_svtav1_psy_available",
+      "impl_module": "svtav1_psy",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "auto.tokenflow",
+      "label": "Tokenflow",
+      "category": "video",
+      "state": "missing_dependency",
+      "install_hint": "see route response for dependency hint",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/video/style/tokenflow"
+      ],
+      "check_name": "check_tokenflow",
+      "impl_module": "style_tokenflow",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "auto.track-cutie",
+      "label": "Track Cutie",
+      "category": "video",
+      "state": "missing_dependency",
+      "install_hint": "see route response for dependency hint",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/video/track/cutie"
+      ],
+      "check_name": "check_track_cutie",
+      "impl_module": "track_cutie",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "auto.track-deva",
+      "label": "Track Deva",
+      "category": "video",
+      "state": "missing_dependency",
+      "install_hint": "see route response for dependency hint",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/video/track/deva"
+      ],
+      "check_name": "check_track_deva",
+      "impl_module": "track_deva",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "auto.vevo2",
+      "label": "Vevo2",
+      "category": "audio",
+      "state": "missing_dependency",
+      "install_hint": "see route response for dependency hint",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/audio/singing/vevo2"
+      ],
+      "check_name": "check_vevo2",
+      "impl_module": "singing_vevo2",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "audio.music.vidmuse",
+      "label": "VidMuse video-to-music",
+      "category": "audio",
+      "state": "available",
+      "install_hint": "pip install vidmuse (placeholder; see docs/MODELS.md)",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/audio/music/vidmuse",
+        "/audio/music/vidmuse/info"
+      ],
+      "check_name": "check_vidmuse_available",
+      "impl_module": "music_vidmuse",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "gpu",
+      "requires_gpu": true,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "video.multicam.visual-cues",
+      "label": "MediaPipe visual multicam cues",
+      "category": "video",
+      "state": "available",
+      "install_hint": "pip install mediapipe opencv-python-headless",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/video/multicam-cuts"
+      ],
+      "check_name": "check_visual_multicam_available",
+      "impl_module": "multicam,captions,multicam_visual",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "cpu/gpu",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "auto.vmaf",
+      "label": "Vmaf",
+      "category": "video",
+      "state": "available",
+      "install_hint": "bundled or system dependency; see route response",
+      "docs": "docs/MODELS.md#excluded-infrastructure-checks",
+      "routes": [
+        "/video/quality/backends"
+      ],
+      "check_name": "check_vmaf_available",
+      "impl_module": "quality_metrics",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "video.restore.vrt",
+      "label": "VRT / RVRT video restoration",
+      "category": "video",
+      "state": "available",
+      "install_hint": "pip install vrt-restoration",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/video/restore/backends"
+      ],
+      "check_name": "check_vrt_available",
+      "impl_module": "restore_vrt,colorize_ddcolor,deflicker_neural",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "gpu (>= 16 GB VRAM for VRT)",
+      "requires_gpu": true,
+      "minimum_vram_mb": 16384
+    },
+    {
+      "feature_id": "auto.vvc",
+      "label": "Vvc",
+      "category": "video",
+      "state": "available",
+      "install_hint": "bundled or system dependency; see route response",
+      "docs": "docs/MODELS.md#excluded-infrastructure-checks",
+      "routes": [
+        "/video/encode/vvc/info"
+      ],
+      "check_name": "check_vvc_available",
+      "impl_module": "vvc_export",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "video.watermark.remove",
+      "label": "LaMa inpainting watermark removal",
+      "category": "video",
+      "state": "available",
+      "install_hint": "pip install simple-lama-inpainting",
+      "docs": "docs/MODELS.md",
+      "routes": [
+        "/video/watermark"
+      ],
+      "check_name": "check_watermark_available",
+      "impl_module": "model_safety,workflow",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "gpu",
+      "requires_gpu": true,
+      "minimum_vram_mb": 0
+    },
+    {
+      "feature_id": "auto.websocket",
+      "label": "Websocket",
+      "category": "ws",
+      "state": "available",
+      "install_hint": "bundled or system dependency; see route response",
+      "docs": "docs/MODELS.md#excluded-infrastructure-checks",
+      "routes": [
+        "/ws/start"
+      ],
+      "check_name": "check_websocket_available",
+      "impl_module": "ws_bridge",
+      "source": "generated",
+      "notes": "Auto-derived from route functions that call this check probe.",
+      "hardware": "",
+      "requires_gpu": false,
+      "minimum_vram_mb": 0
+    }
+  ]
+}

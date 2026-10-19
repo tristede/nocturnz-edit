@@ -1,0 +1,2033 @@
+#!/usr/bin/env python3
+"""Release smoke matrix runner (F098).
+
+Chains the cheap-to-run release gates into a single command. Each step is
+intentionally small and idempotent so we can fail fast — if any of these
+trip, the release is not safe to ship.
+
+Steps (in order):
+
+1. ``bootstrap`` — `scripts/bootstrap_check.py --json --metadata-only`
+2. ``version-sync`` — `scripts/sync_version.py --check`
+3. ``generated-docs`` — README/MCP/model/readiness generated-doc drift bundle
+4. ``route-manifest`` — generated route manifest drift check
+4b. ``surface-ratchet`` — direct-surface coverage floor and unreachable-family gate
+5. ``api-aliases`` — generated /api alias manifest drift check
+6. ``feature-readiness`` — generated route/check readiness drift check
+7. ``model-cards`` — generated model/license card drift check
+8. ``license-gate`` — model/dependency license allow-list check
+9. ``roadmap-lint`` — roadmap citation sanity check
+10. ``text-shaping`` — FFmpeg/libass HarfBuzz/FriBidi + renderer capability gate
+11. ``caption-unicode`` — RTL/CJK/bidi caption export-preservation gate
+12. ``contrast-audit`` — WCAG AA contrast check for committed panel tokens
+13. ``ruff`` — lint the python package
+14. ``pytest-fast`` — focused test ids covering release gates
+15. ``pip-audit`` — Python dependency advisories for requirements, lockfile, and ``pyproject[all]``
+16. ``jsx-mock`` — ExtendScript host harness for ``host/index.jsx``
+17. ``panel-unit`` — CEP/UXP panel Vitest utility tests
+17. ``panel-rendered`` — headless Chromium panel state, accessibility, and screenshot regression tests
+18. ``npm-advisory`` — CEP panel allow-list check with machine-readable JSON assertion
+19. ``panel-source`` — CEP panel source tree smoke
+20. ``adobe-uxp-compatibility`` — static UXP capability and host-band drift gate
+
+Each step records ``status`` (``ok|fail|skipped``), an exit code, a duration
+in ms, and a short message. The script exits with code 1 if any non-skipped
+step failed.
+
+The orchestrator is deliberately stdlib-only so it can run inside a fresh
+environment before `pip install -e .` has happened.
+"""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Callable, List, Optional
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+#: pytest's exit code for "no tests were collected". A gate step that collects
+#: nothing has not proved its subject, so it must not be read as a plain failure
+#: or, worse, as a pass.
+PYTEST_NO_TESTS_COLLECTED = 5
+PANEL_DIR = REPO_ROOT / "extension" / "com.opencut.panel"
+
+
+@dataclass
+class StepResult:
+    name: str
+    status: str  # ok | fail | skipped | warn
+    exit_code: int = 0
+    duration_ms: int = 0
+    message: str = ""
+    skipped_reason: str = ""
+    stdout_tail: str = ""
+    stderr_tail: str = ""
+
+    def as_line(self) -> str:
+        symbol = {
+            "ok": "PASS",
+            "fail": "FAIL",
+            "skipped": "SKIP",
+            "warn": "WARN",
+        }.get(self.status, "????")
+        return f"[{symbol}] {self.name} ({self.duration_ms} ms) — {self.message or self.skipped_reason}"
+
+
+@dataclass
+class StepDefinition:
+    name: str
+    runner: Callable[[argparse.Namespace], StepResult]
+    description: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Subprocess helpers
+# ---------------------------------------------------------------------------
+
+
+def _tail(text: str, lines: int = 12) -> str:
+    if not text:
+        return ""
+    return "\n".join(text.splitlines()[-lines:])
+
+
+def _run(cmd: List[str], cwd: Optional[Path] = None, env: Optional[dict] = None) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        cmd,
+        cwd=str(cwd) if cwd else None,
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Steps
+# ---------------------------------------------------------------------------
+
+
+def step_bootstrap(args: argparse.Namespace) -> StepResult:
+    start = time.time()
+    script = REPO_ROOT / "scripts" / "bootstrap_check.py"
+    if not script.exists():
+        return StepResult(
+            "bootstrap",
+            "skipped",
+            skipped_reason="scripts/bootstrap_check.py missing",
+            duration_ms=int((time.time() - start) * 1000),
+        )
+    result = _run(
+        [sys.executable, str(script), "--json", "--metadata-only"],
+        cwd=REPO_ROOT,
+    )
+    duration = int((time.time() - start) * 1000)
+    status = "ok" if result.returncode == 0 else "fail"
+    return StepResult(
+        "bootstrap",
+        status,
+        exit_code=result.returncode,
+        duration_ms=duration,
+        message="bootstrap_check passed" if status == "ok" else "bootstrap_check failed",
+        stdout_tail=_tail(result.stdout),
+        stderr_tail=_tail(result.stderr),
+    )
+
+
+def step_route_manifest(_args: argparse.Namespace) -> StepResult:
+    start = time.time()
+    result = _run(
+        [sys.executable, "-m", "opencut.tools.dump_route_manifest", "--check", "--quiet"],
+        cwd=REPO_ROOT,
+    )
+    duration = int((time.time() - start) * 1000)
+    status = "ok" if result.returncode == 0 else "fail"
+    return StepResult(
+        "route-manifest",
+        status,
+        exit_code=result.returncode,
+        duration_ms=duration,
+        message="manifest in sync" if status == "ok" else "route manifest drift",
+        stdout_tail=_tail(result.stdout),
+        stderr_tail=_tail(result.stderr),
+    )
+
+
+def step_surface_ratchet(_args: argparse.Namespace) -> StepResult:
+    start = time.time()
+    result = _run(
+        [sys.executable, "-m", "opencut.tools.dump_surface_ratchet", "--check", "--quiet"],
+        cwd=REPO_ROOT,
+    )
+    duration = int((time.time() - start) * 1000)
+    status = "ok" if result.returncode == 0 else "fail"
+    return StepResult(
+        "surface-ratchet",
+        status,
+        exit_code=result.returncode,
+        duration_ms=duration,
+        message=(
+            "direct-surface coverage holds its recorded floor"
+            if status == "ok"
+            else "routes shipped with no first-party surface and no recorded reason"
+        ),
+        stdout_tail=_tail(result.stdout),
+        stderr_tail=_tail(result.stderr),
+    )
+
+
+def step_panel_feature_parity(_args: argparse.Namespace) -> StepResult:
+    start = time.time()
+    result = _run(
+        [
+            sys.executable,
+            "-m",
+            "opencut.tools.dump_panel_feature_parity",
+            "--check",
+        ],
+        cwd=REPO_ROOT,
+    )
+    duration = int((time.time() - start) * 1000)
+    status = "ok" if result.returncode == 0 else "fail"
+    return StepResult(
+        "panel-feature-parity",
+        status,
+        exit_code=result.returncode,
+        duration_ms=duration,
+        message=(
+            "CEP/UXP feature-route parity manifest in sync"
+            if status == "ok"
+            else "CEP/UXP feature-route divergence is unannotated or stale"
+        ),
+        stdout_tail=_tail(result.stdout),
+        stderr_tail=_tail(result.stderr),
+    )
+
+
+def step_performance_benchmark(args: argparse.Namespace) -> StepResult:
+    """Validate the opt-in benchmark lane and compare an optional baseline.
+
+    Normal release smoke never runs heavyweight adapters.  A caller can pass
+    both ``--performance-receipt`` and ``--performance-baseline`` to consume a
+    previously captured same-host receipt; incompatible hardware is reported
+    as skipped so a release is never penalised for running elsewhere.
+    """
+    start = time.time()
+    current = getattr(args, "performance_receipt", None) or os.environ.get("OPENCUT_PERF_RECEIPT", "")
+    baseline = getattr(args, "performance_baseline", None) or os.environ.get("OPENCUT_PERF_BASELINE", "")
+    module = "opencut.tools.run_performance_benchmarks"
+    if not current and not baseline:
+        result = _run([sys.executable, "-m", module, "list", "--json"], cwd=REPO_ROOT)
+        duration = int((time.time() - start) * 1000)
+        status = "ok" if result.returncode == 0 else "fail"
+        return StepResult(
+            "performance-benchmark",
+            status,
+            exit_code=result.returncode,
+            duration_ms=duration,
+            message=("benchmark registry valid; execution remains opt-in" if status == "ok" else "benchmark registry unavailable"),
+            stdout_tail=_tail(result.stdout),
+            stderr_tail=_tail(result.stderr),
+        )
+    if not current or not baseline:
+        return StepResult(
+            "performance-benchmark",
+            "fail",
+            exit_code=2,
+            duration_ms=int((time.time() - start) * 1000),
+            message="both performance receipt and baseline are required",
+        )
+    result = _run(
+        [sys.executable, "-m", module, "compare", current, baseline, "--json"],
+        cwd=REPO_ROOT,
+    )
+    duration = int((time.time() - start) * 1000)
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        payload = {}
+    comparison_status = payload.get("status")
+    if comparison_status == "incompatible":
+        return StepResult(
+            "performance-benchmark",
+            "skipped",
+            duration_ms=duration,
+            skipped_reason="benchmark baseline is not compatible with this hardware/software host",
+            stdout_tail=_tail(result.stdout),
+            stderr_tail=_tail(result.stderr),
+        )
+    status = "ok" if result.returncode == 0 and comparison_status != "regression" else "fail"
+    return StepResult(
+        "performance-benchmark",
+        status,
+        exit_code=result.returncode,
+        duration_ms=duration,
+        message=("benchmark baseline within declared tolerances" if status == "ok" else "benchmark regression or comparison failure"),
+        stdout_tail=_tail(result.stdout),
+        stderr_tail=_tail(result.stderr),
+    )
+
+
+def step_api_aliases(_args: argparse.Namespace) -> StepResult:
+    start = time.time()
+    result = _run(
+        [sys.executable, "-m", "opencut.tools.dump_api_aliases", "--check"],
+        cwd=REPO_ROOT,
+    )
+    duration = int((time.time() - start) * 1000)
+    status = "ok" if result.returncode == 0 else "fail"
+    return StepResult(
+        "api-aliases",
+        status,
+        exit_code=result.returncode,
+        duration_ms=duration,
+        message="alias manifest in sync" if status == "ok" else "alias manifest drifted",
+        stdout_tail=_tail(result.stdout),
+        stderr_tail=_tail(result.stderr),
+    )
+
+
+def step_feature_readiness(_args: argparse.Namespace) -> StepResult:
+    start = time.time()
+    result = _run(
+        [sys.executable, "-m", "opencut.tools.dump_feature_readiness", "--check"],
+        cwd=REPO_ROOT,
+    )
+    duration = int((time.time() - start) * 1000)
+    status = "ok" if result.returncode == 0 else "fail"
+    return StepResult(
+        "feature-readiness",
+        status,
+        exit_code=result.returncode,
+        duration_ms=duration,
+        message="readiness manifest in sync" if status == "ok" else "readiness manifest drift",
+        stdout_tail=_tail(result.stdout),
+        stderr_tail=_tail(result.stderr),
+    )
+
+
+def step_esbuild_pin(_args: argparse.Namespace) -> StepResult:
+    """F131 — every resolved esbuild instance must be >=0.25.0.
+
+    Skips gracefully if Node or the panel's `node_modules` tree is not
+    present (the dev VM and minimal local release hosts don't run npm).
+    """
+    start = time.time()
+    node = shutil.which("node")
+    panel_root = REPO_ROOT / "extension" / "com.opencut.panel"
+    script = panel_root / "scripts" / "check-esbuild-pin.mjs"
+    node_modules = panel_root / "node_modules"
+    if node is None:
+        return StepResult(
+            "esbuild-pin",
+            "skipped",
+            skipped_reason="node executable not on PATH",
+            duration_ms=int((time.time() - start) * 1000),
+        )
+    if not script.is_file():
+        return StepResult(
+            "esbuild-pin",
+            "skipped",
+            skipped_reason="check-esbuild-pin.mjs missing",
+            duration_ms=int((time.time() - start) * 1000),
+        )
+    if not node_modules.is_dir():
+        return StepResult(
+            "esbuild-pin",
+            "skipped",
+            skipped_reason="panel node_modules not installed",
+            duration_ms=int((time.time() - start) * 1000),
+        )
+    result = _run([node, str(script), "--json"], cwd=panel_root)
+    duration = int((time.time() - start) * 1000)
+    status = "ok" if result.returncode == 0 else "fail"
+    return StepResult(
+        "esbuild-pin",
+        status,
+        exit_code=result.returncode,
+        duration_ms=duration,
+        message=(
+            "esbuild >=0.25 across the resolved tree"
+            if status == "ok"
+            else "esbuild below 0.25 in the resolved tree (F131)"
+        ),
+        stdout_tail=_tail(result.stdout),
+        stderr_tail=_tail(result.stderr),
+    )
+
+
+def step_roadmap_mirror(_args: argparse.Namespace) -> StepResult:
+    """F184 — `docs/ROADMAP*.md` must stay short pointer stubs.
+
+    The canonical roadmap is at the repo root. The `docs/` copies used
+    to be parallel files that drifted (different content, different
+    F-number coverage, stale March-2026 timestamps). F184 collapsed
+    them to pointer stubs; this step asserts they never grow back.
+
+    Thresholds: pointer stubs are < 60 lines and must mention the
+    canonical ROADMAP path. A grown-back parallel ledger trips here.
+    """
+    start = time.time()
+    docs_dir = REPO_ROOT / "docs"
+    stubs = [
+        docs_dir / "ROADMAP.md",
+        docs_dir / "ROADMAP-COMPLETED.md",
+    ]
+    violations: List[str] = []
+    for stub in stubs:
+        if not stub.is_file():
+            # Missing stub is fine — the docs/ copy is optional.
+            continue
+        text = stub.read_text(encoding="utf-8", errors="replace")
+        line_count = text.count("\n") + 1
+        if line_count > 60:
+            violations.append(
+                f"{stub.relative_to(REPO_ROOT)} grew to {line_count} lines "
+                f"(F184 limit: 60)"
+            )
+        if "ROADMAP.md" not in text or "Moved" not in text:
+            violations.append(
+                f"{stub.relative_to(REPO_ROOT)} is missing the F184 pointer "
+                f"language (requires both 'Moved' and 'ROADMAP.md')"
+            )
+    duration = int((time.time() - start) * 1000)
+    if violations:
+        return StepResult(
+            "roadmap-mirror",
+            "fail",
+            duration_ms=duration,
+            message="docs/ROADMAP*.md drifted from F184 pointer-stub shape",
+            stderr_tail="\n".join(violations)[-1000:],
+        )
+    return StepResult(
+        "roadmap-mirror",
+        "ok",
+        duration_ms=duration,
+        message="docs/ROADMAP*.md stay short F184 pointer stubs",
+    )
+
+
+def step_mcp_registry(_args: argparse.Namespace) -> StepResult:
+    """F147 — committed MCP registry manifest must match live tool catalogue."""
+    start = time.time()
+    result = _run(
+        [
+            sys.executable,
+            "-m",
+            "opencut.tools.dump_mcp_registry_manifest",
+            "--check",
+        ],
+        cwd=REPO_ROOT,
+    )
+    duration = int((time.time() - start) * 1000)
+    status = "ok" if result.returncode == 0 else "fail"
+    return StepResult(
+        "mcp-registry",
+        status,
+        exit_code=result.returncode,
+        duration_ms=duration,
+        message=(
+            "MCP registry manifest in sync"
+            if status == "ok"
+            else "MCP registry manifest drift"
+        ),
+        stdout_tail=_tail(result.stdout),
+        stderr_tail=_tail(result.stderr),
+    )
+
+
+def step_adobe_premierepro_versions(_args: argparse.Namespace) -> StepResult:
+    """F251 — surface @adobe/premierepro npm drift as a notification.
+
+    Drift is *informational* — Adobe shipping a new beta is a signal
+    to file F-numbers, not a release blocker. We translate the tool's
+    exit code (2 = drift, 0 = sync) into an ``ok``/``warn`` status the
+    release-smoke runner reports without failing closed.
+
+    Offline runs (no network on this host) also surface as ``warn``
+    rather than ``fail`` so the release gate stays green when there
+    is no internet, which is the dev VM's default state.
+    """
+    start = time.time()
+    result = _run(
+        [
+            sys.executable,
+            "-m",
+            "opencut.tools.adobe_premierepro_versions",
+            "--check",
+            "--json",
+        ],
+        cwd=REPO_ROOT,
+    )
+    duration = int((time.time() - start) * 1000)
+    if result.returncode == 0:
+        status = "ok"
+        message = "no drift"
+    elif result.returncode == 2:
+        status = "warn"
+        message = "drift detected (informational; file F-numbers if Adobe shipped APIs)"
+    else:
+        status = "warn"
+        message = f"could not probe registry (exit {result.returncode})"
+    return StepResult(
+        "adobe-premierepro-versions",
+        status,
+        exit_code=result.returncode,
+        duration_ms=duration,
+        message=message,
+        stdout_tail=_tail(result.stdout),
+        stderr_tail=_tail(result.stderr),
+    )
+
+
+def step_adobe_uxp_compatibility(_args: argparse.Namespace) -> StepResult:
+    """Check UXP source declarations without requiring a live Premiere host."""
+    start = time.time()
+    result = _run(
+        [
+            sys.executable,
+            "-m",
+            "opencut.tools.adobe_uxp_compatibility",
+            "--check",
+            "--json",
+        ],
+        cwd=REPO_ROOT,
+    )
+    duration = int((time.time() - start) * 1000)
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        return StepResult(
+            "adobe-uxp-compatibility",
+            "fail",
+            exit_code=result.returncode,
+            duration_ms=duration,
+            message="compatibility gate did not emit JSON",
+            stdout_tail=_tail(result.stdout),
+            stderr_tail=_tail(result.stderr),
+        )
+    diagnostics = payload.get("diagnostics") or []
+    if result.returncode == 0:
+        message = "static UXP declarations and host-band fixtures are in sync"
+        status = "ok"
+    elif result.returncode == 2:
+        message = "@adobe/premierepro package drift detected (informational)"
+        status = "warn"
+    else:
+        message = "static UXP compatibility drift"
+        if diagnostics:
+            message += f": {diagnostics[0]}"
+        status = "fail"
+    return StepResult(
+        "adobe-uxp-compatibility",
+        status,
+        exit_code=result.returncode,
+        duration_ms=duration,
+        message=message,
+        stdout_tail=_tail(result.stdout),
+        stderr_tail=_tail(result.stderr),
+    )
+
+
+def step_model_cards(_args: argparse.Namespace) -> StepResult:
+    start = time.time()
+    result = _run(
+        [sys.executable, "-m", "opencut.tools.dump_model_cards", "--check"],
+        cwd=REPO_ROOT,
+    )
+    duration = int((time.time() - start) * 1000)
+    status = "ok" if result.returncode == 0 else "fail"
+    return StepResult(
+        "model-cards",
+        status,
+        exit_code=result.returncode,
+        duration_ms=duration,
+        message="model cards in sync" if status == "ok" else "model card drift",
+        stdout_tail=_tail(result.stdout),
+        stderr_tail=_tail(result.stderr),
+    )
+
+
+GENERATED_DOC_CHECKS = [
+    (
+        "project facts manifest",
+        [sys.executable, "-m", "opencut.tools.dump_project_facts", "--check"],
+    ),
+    (
+        "README badges/product facts",
+        [sys.executable, str(REPO_ROOT / "scripts" / "sync_badges.py"), "--check"],
+    ),
+    (
+        "MCP registry manifest",
+        [sys.executable, "-m", "opencut.tools.dump_mcp_registry_manifest", "--check"],
+    ),
+    (
+        "MCP extended tool catalogue",
+        [sys.executable, "-m", "opencut.tools.dump_mcp_extended_tools", "--check"],
+    ),
+    (
+        "MCP agent skill",
+        [sys.executable, "-m", "opencut.tools.dump_mcp_agent_skill", "--check"],
+    ),
+    (
+        "model cards",
+        [sys.executable, "-m", "opencut.tools.dump_model_cards", "--check"],
+    ),
+    (
+        "feature readiness",
+        [sys.executable, "-m", "opencut.tools.dump_feature_readiness", "--check"],
+    ),
+    (
+        # recorded_at was written on every refresh and read by nothing, so the
+        # Premiere snapshot aged silently while the UXP migration was planned
+        # against it. Offline: this reads the committed file, it does not fetch.
+        "Adobe Premiere snapshot freshness",
+        [sys.executable, "-m", "opencut.tools.adobe_premierepro_versions", "--check-freshness"],
+    ),
+    (
+        # The release-provenance and advisory docs restated policy that lives in
+        # code, and drifted four statements away from it while their tests
+        # asserted the stale strings literally.
+        "provenance documentation",
+        [sys.executable, "-m", "opencut.tools.check_provenance_docs", "--check"],
+    ),
+]
+
+
+def step_generated_docs(_args: argparse.Namespace) -> StepResult:
+    """Grouped generated-doc drift gate for README, MCP, and model facts."""
+    start = time.time()
+    passed: List[str] = []
+    failures: List[str] = []
+
+    for label, cmd in GENERATED_DOC_CHECKS:
+        result = _run(cmd, cwd=REPO_ROOT)
+        if result.returncode == 0:
+            passed.append(label)
+            continue
+        failures.append(
+            "\n".join(
+                part
+                for part in (
+                    f"{label} failed: {' '.join(cmd)}",
+                    f"stdout:\n{_tail(result.stdout)}" if result.stdout else "",
+                    f"stderr:\n{_tail(result.stderr)}" if result.stderr else "",
+                )
+                if part
+            )
+        )
+
+    duration = int((time.time() - start) * 1000)
+    if failures:
+        return StepResult(
+            "generated-docs",
+            "fail",
+            exit_code=1,
+            duration_ms=duration,
+            message="generated-doc drift detected",
+            stdout_tail="\n".join(f"passed: {label}" for label in passed),
+            stderr_tail=_tail("\n\n".join(failures), lines=24),
+        )
+
+    return StepResult(
+        "generated-docs",
+        "ok",
+        duration_ms=duration,
+        message=f"{len(passed)} generated-doc checks passed",
+        stdout_tail="\n".join(f"passed: {label}" for label in passed),
+    )
+
+
+def step_license_gate(_args: argparse.Namespace) -> StepResult:
+    start = time.time()
+    result = _run(
+        [sys.executable, "-m", "opencut.tools.license_gate", "--json"],
+        cwd=REPO_ROOT,
+    )
+    duration = int((time.time() - start) * 1000)
+    status = "ok" if result.returncode == 0 else "fail"
+    return StepResult(
+        "license-gate",
+        status,
+        exit_code=result.returncode,
+        duration_ms=duration,
+        message="all licenses on allowlist or waived" if status == "ok" else "license gate failed",
+        stdout_tail=_tail(result.stdout),
+        stderr_tail=_tail(result.stderr),
+    )
+
+
+def step_release_lock(_args: argparse.Namespace) -> StepResult:
+    start = time.time()
+    result = _run(
+        [
+            sys.executable,
+            "scripts/release_composition.py",
+            "--check-lock-only",
+            "--check-pylock",
+        ],
+        cwd=REPO_ROOT,
+    )
+    duration = int((time.time() - start) * 1000)
+    status = "ok" if result.returncode == 0 else "fail"
+    return StepResult(
+        "release-lock",
+        status,
+        exit_code=result.returncode,
+        duration_ms=duration,
+        message=(
+            "release inputs and the offline PEP 751 lock are exactly pinned"
+            if status == "ok"
+            else "release lock failed"
+        ),
+        stdout_tail=_tail(result.stdout),
+        stderr_tail=_tail(result.stderr),
+    )
+
+
+def step_dependency_matrix(_args: argparse.Namespace) -> StepResult:
+    start = time.time()
+    result = _run(
+        [sys.executable, "scripts/check_dependency_matrix.py", "--json"],
+        cwd=REPO_ROOT,
+    )
+    duration = int((time.time() - start) * 1000)
+    status = "ok" if result.returncode == 0 else "fail"
+    return StepResult(
+        "dependency-matrix",
+        status,
+        exit_code=result.returncode,
+        duration_ms=duration,
+        message=(
+            "optional dependency support contract is synchronized"
+            if status == "ok"
+            else "optional dependency support contract drifted"
+        ),
+        stdout_tail=_tail(result.stdout),
+        stderr_tail=_tail(result.stderr),
+    )
+
+
+def step_installed_versions(_args: argparse.Namespace) -> StepResult:
+    """The stack the suite just ran on must be the stack the project declares."""
+    start = time.time()
+    result = _run(
+        [sys.executable, "scripts/check_installed_versions.py", "--json"],
+        cwd=REPO_ROOT,
+    )
+    duration = int((time.time() - start) * 1000)
+    status = "ok" if result.returncode == 0 else "fail"
+    return StepResult(
+        "installed-versions",
+        status,
+        exit_code=result.returncode,
+        duration_ms=duration,
+        message=(
+            "installed distributions match the declared specifiers"
+            if status == "ok"
+            else "the tested stack violates the project's own constraints"
+        ),
+        stdout_tail=_tail(result.stdout),
+        stderr_tail=_tail(result.stderr),
+    )
+
+
+def step_roadmap_lint(_args: argparse.Namespace) -> StepResult:
+    start = time.time()
+    result = _run(
+        [sys.executable, "-m", "opencut.tools.lint_roadmap_sources"],
+        cwd=REPO_ROOT,
+    )
+    duration = int((time.time() - start) * 1000)
+    status = "ok" if result.returncode == 0 else "fail"
+    return StepResult(
+        "roadmap-lint",
+        status,
+        exit_code=result.returncode,
+        duration_ms=duration,
+        message="roadmap citations resolve" if status == "ok" else "roadmap citation drift",
+        stdout_tail=_tail(result.stdout),
+        stderr_tail=_tail(result.stderr),
+    )
+
+
+def step_version_sync(_args: argparse.Namespace) -> StepResult:
+    start = time.time()
+    script = REPO_ROOT / "scripts" / "sync_version.py"
+    if not script.exists():
+        return StepResult(
+            "version-sync",
+            "skipped",
+            skipped_reason="scripts/sync_version.py missing",
+            duration_ms=int((time.time() - start) * 1000),
+        )
+    result = _run([sys.executable, str(script), "--check"], cwd=REPO_ROOT)
+    duration = int((time.time() - start) * 1000)
+    status = "ok" if result.returncode == 0 else "fail"
+    return StepResult(
+        "version-sync",
+        status,
+        exit_code=result.returncode,
+        duration_ms=duration,
+        message="version surfaces aligned" if status == "ok" else "version drift detected",
+        stdout_tail=_tail(result.stdout),
+        stderr_tail=_tail(result.stderr),
+    )
+
+
+def step_test_breadth(_args: argparse.Namespace) -> StepResult:
+    start = time.time()
+    script = REPO_ROOT / "scripts" / "test_breadth_gate.py"
+    if not script.exists():
+        return StepResult(
+            "test-breadth",
+            "skipped",
+            skipped_reason="scripts/test_breadth_gate.py missing",
+            duration_ms=int((time.time() - start) * 1000),
+        )
+    result = _run([sys.executable, str(script), "--check"], cwd=REPO_ROOT)
+    duration = int((time.time() - start) * 1000)
+    status = "ok" if result.returncode == 0 else "fail"
+    return StepResult(
+        "test-breadth",
+        status,
+        exit_code=result.returncode,
+        duration_ms=duration,
+        message=(
+            "core-module test reference ratio within floor"
+            if status == "ok"
+            else "core-module test reference ratio below floor"
+        ),
+        stdout_tail=_tail(result.stdout),
+        stderr_tail=_tail(result.stderr),
+    )
+
+
+def step_i18n_drift(_args: argparse.Namespace) -> StepResult:
+    start = time.time()
+    script = REPO_ROOT / "scripts" / "i18n_lint.py"
+    if not script.exists():
+        return StepResult(
+            "i18n-drift",
+            "skipped",
+            skipped_reason="scripts/i18n_lint.py missing",
+            duration_ms=int((time.time() - start) * 1000),
+        )
+    result = _run([sys.executable, str(script), "--check"], cwd=REPO_ROOT)
+    duration = int((time.time() - start) * 1000)
+    status = "ok" if result.returncode == 0 else "fail"
+    return StepResult(
+        "i18n-drift",
+        status,
+        exit_code=result.returncode,
+        duration_ms=duration,
+        message=(
+            "CEP locale drift within baseline"
+            if status == "ok"
+            else "CEP locale drift: missing keys or dead-key growth"
+        ),
+        stdout_tail=_tail(result.stdout),
+        stderr_tail=_tail(result.stderr),
+    )
+
+
+def step_shared_locales(_args: argparse.Namespace) -> StepResult:
+    start = time.time()
+    script = REPO_ROOT / "scripts" / "sync_shared_locales.py"
+    if not script.exists():
+        return StepResult(
+            "shared-locales",
+            "skipped",
+            skipped_reason="scripts/sync_shared_locales.py missing",
+            duration_ms=int((time.time() - start) * 1000),
+        )
+    result = _run([sys.executable, str(script), "--check"], cwd=REPO_ROOT)
+    duration = int((time.time() - start) * 1000)
+    status = "ok" if result.returncode == 0 else "fail"
+    return StepResult(
+        "shared-locales",
+        status,
+        exit_code=result.returncode,
+        duration_ms=duration,
+        message=(
+            "shared panel strings agree across both locales"
+            if status == "ok"
+            else "shared panel strings drifted, or new cross-panel duplication is unregistered"
+        ),
+        stdout_tail=_tail(result.stdout),
+        stderr_tail=_tail(result.stderr),
+    )
+
+
+def step_panel_parity(_args: argparse.Namespace) -> StepResult:
+    start = time.time()
+    test_file = REPO_ROOT / "tests" / "test_panel_tab_parity.py"
+    if not test_file.exists():
+        return StepResult(
+            "panel-parity",
+            "skipped",
+            skipped_reason="tests/test_panel_tab_parity.py missing",
+            duration_ms=int((time.time() - start) * 1000),
+        )
+    result = _run(
+        [sys.executable, "-m", "pytest", "-q", "tests/test_panel_tab_parity.py"],
+        cwd=REPO_ROOT,
+    )
+    duration = int((time.time() - start) * 1000)
+    status = "ok" if result.returncode == 0 else "fail"
+    return StepResult(
+        "panel-parity",
+        status,
+        exit_code=result.returncode,
+        duration_ms=duration,
+        message=(
+            "CEP/UXP tab parity ledger up to date"
+            if status == "ok"
+            else "CEP/UXP tab drift detected — update extension/PANEL_PARITY.json"
+        ),
+        stdout_tail=_tail(result.stdout),
+        stderr_tail=_tail(result.stderr),
+    )
+
+
+def step_subprocess_timeouts(_args: argparse.Namespace) -> StepResult:
+    start = time.time()
+    script = REPO_ROOT / "scripts" / "lint_subprocess_timeouts.py"
+    if not script.exists():
+        return StepResult(
+            "subprocess-timeouts",
+            "skipped",
+            skipped_reason="scripts/lint_subprocess_timeouts.py missing",
+            duration_ms=int((time.time() - start) * 1000),
+        )
+    result = _run([sys.executable, str(script), "--check"], cwd=REPO_ROOT)
+    duration = int((time.time() - start) * 1000)
+    status = "ok" if result.returncode == 0 else "fail"
+    return StepResult(
+        "subprocess-timeouts",
+        status,
+        exit_code=result.returncode,
+        duration_ms=duration,
+        message=(
+            "subprocess timeout coverage clean"
+            if status == "ok"
+            else "untimeout'd subprocess call(s) detected"
+        ),
+        stdout_tail=_tail(result.stdout),
+        stderr_tail=_tail(result.stderr),
+    )
+
+
+def step_ffmpeg_provenance(_args: argparse.Namespace) -> StepResult:
+    script = REPO_ROOT / "scripts" / "verify_ffmpeg_provenance.py"
+    if not script.exists():
+        return StepResult(
+            "ffmpeg-provenance",
+            "fail",
+            skipped_reason="scripts/verify_ffmpeg_provenance.py missing",
+        )
+    result = _run([sys.executable, str(script)], cwd=REPO_ROOT)
+    status = "ok" if result.returncode == 0 else "fail"
+    return StepResult(
+        "ffmpeg-provenance",
+        status,
+        exit_code=result.returncode,
+        message=(
+            "bundled FFmpeg meets the provenance security floor"
+            if status == "ok"
+            else "bundled FFmpeg provenance verification failed"
+        ),
+        stdout_tail=_tail(result.stdout),
+        stderr_tail=_tail(result.stderr),
+    )
+
+
+def step_embedded_media_provenance(_args: argparse.Namespace) -> StepResult:
+    script = REPO_ROOT / "scripts" / "verify_embedded_media_provenance.py"
+    if not script.exists():
+        return StepResult(
+            "embedded-media-provenance",
+            "fail",
+            skipped_reason="scripts/verify_embedded_media_provenance.py missing",
+        )
+    result = _run([sys.executable, str(script)], cwd=REPO_ROOT)
+    status = "ok" if result.returncode == 0 else "fail"
+    return StepResult(
+        "embedded-media-provenance",
+        status,
+        exit_code=result.returncode,
+        message=(
+            "OpenCV and PyAV decoder copies meet the security policy"
+            if status == "ok"
+            else "embedded OpenCV/PyAV decoder provenance verification failed"
+        ),
+        stdout_tail=_tail(result.stdout),
+        stderr_tail=_tail(result.stderr),
+    )
+
+
+def step_doc_sizes(_args: argparse.Namespace) -> StepResult:
+    start = time.time()
+    script = REPO_ROOT / "scripts" / "check_doc_sizes.py"
+    if not script.exists():
+        return StepResult(
+            "doc-sizes",
+            "skipped",
+            skipped_reason="scripts/check_doc_sizes.py missing",
+            duration_ms=int((time.time() - start) * 1000),
+        )
+    result = _run([sys.executable, str(script), "--check"], cwd=REPO_ROOT)
+    duration = int((time.time() - start) * 1000)
+    status = "ok" if result.returncode == 0 else "fail"
+    return StepResult(
+        "doc-sizes",
+        status,
+        exit_code=result.returncode,
+        duration_ms=duration,
+        message=(
+            "documented sizes match live filesystem"
+            if status == "ok"
+            else "documented size/count drift > 15% (run: python scripts/check_doc_sizes.py)"
+        ),
+        stdout_tail=_tail(result.stdout),
+        stderr_tail=_tail(result.stderr),
+    )
+
+
+def step_badges(_args: argparse.Namespace) -> StepResult:
+    start = time.time()
+    script = REPO_ROOT / "scripts" / "sync_badges.py"
+    if not script.exists():
+        return StepResult(
+            "badges",
+            "skipped",
+            skipped_reason="scripts/sync_badges.py missing",
+            duration_ms=int((time.time() - start) * 1000),
+        )
+    result = _run([sys.executable, str(script), "--check"], cwd=REPO_ROOT)
+    duration = int((time.time() - start) * 1000)
+    status = "ok" if result.returncode == 0 else "fail"
+    return StepResult(
+        "badges",
+        status,
+        exit_code=result.returncode,
+        duration_ms=duration,
+        message=(
+            "README badges match live counts"
+            if status == "ok"
+            else "README badge drift detected (run: python scripts/sync_badges.py)"
+        ),
+        stdout_tail=_tail(result.stdout),
+        stderr_tail=_tail(result.stderr),
+    )
+
+
+def step_text_shaping(_args: argparse.Namespace) -> StepResult:
+    start = time.time()
+    result = _run(
+        [sys.executable, "-m", "opencut.tools.text_shaping_gate", "--json"],
+        cwd=REPO_ROOT,
+    )
+    duration = int((time.time() - start) * 1000)
+
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError as exc:
+        return StepResult(
+            "text-shaping",
+            "fail",
+            exit_code=result.returncode,
+            duration_ms=duration,
+            message=f"text shaping gate did not emit parseable JSON: {exc}",
+            stdout_tail=_tail(result.stdout),
+            stderr_tail=_tail(result.stderr),
+        )
+
+    summary = payload.get("summary", {})
+    status = "ok" if result.returncode == 0 and payload.get("status") == "ok" else "fail"
+    warning_count = int(summary.get("warnings") or 0)
+    message = (
+        f"hard shaping gates passed ({warning_count} advisory warnings)"
+        if status == "ok"
+        else "text shaping gate failed"
+    )
+    return StepResult(
+        "text-shaping",
+        status,
+        exit_code=result.returncode,
+        duration_ms=duration,
+        message=message,
+        stdout_tail=_tail(json.dumps(payload, indent=2)),
+        stderr_tail=_tail(result.stderr),
+    )
+
+
+def step_caption_unicode(_args: argparse.Namespace) -> StepResult:
+    """F223 — complex-script captions must survive every text export path."""
+    start = time.time()
+    result = _run(
+        [
+            sys.executable,
+            "-m",
+            "opencut.tools.caption_unicode_validation",
+            "--json",
+            "--check",
+        ],
+        cwd=REPO_ROOT,
+    )
+    duration = int((time.time() - start) * 1000)
+    if result.returncode != 0:
+        return StepResult(
+            "caption-unicode",
+            "fail",
+            exit_code=result.returncode,
+            duration_ms=duration,
+            message="RTL/CJK/bidi caption validation failed",
+            stdout_tail=_tail(result.stdout),
+            stderr_tail=_tail(result.stderr),
+        )
+    try:
+        payload = json.loads(result.stdout or "{}")
+        summary = payload.get("summary", {})
+    except json.JSONDecodeError:
+        return StepResult(
+            "caption-unicode",
+            "fail",
+            exit_code=result.returncode,
+            duration_ms=duration,
+            message="caption Unicode gate returned invalid JSON",
+            stdout_tail=_tail(result.stdout),
+            stderr_tail=_tail(result.stderr),
+        )
+
+    case_count = int(summary.get("case_count", 0))
+    warnings = int(summary.get("warnings", 0))
+    failures = int(summary.get("failures", 0))
+    if failures:
+        status = "fail"
+        message = f"{failures} complex-script caption fixture failures"
+    else:
+        status = "ok"
+        message = (
+            f"{case_count} complex-script fixtures preserved "
+            f"({warnings} advisory warnings)"
+        )
+    return StepResult(
+        "caption-unicode",
+        status,
+        exit_code=result.returncode,
+        duration_ms=duration,
+        message=message,
+        stdout_tail=_tail(result.stdout),
+        stderr_tail=_tail(result.stderr),
+    )
+
+
+def step_contrast_audit(_args: argparse.Namespace) -> StepResult:
+    start = time.time()
+    result = _run(
+        [sys.executable, "-m", "opencut.tools.contrast_audit", "--json"],
+        cwd=REPO_ROOT,
+    )
+    duration = int((time.time() - start) * 1000)
+
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError as exc:
+        return StepResult(
+            "contrast-audit",
+            "fail",
+            exit_code=result.returncode,
+            duration_ms=duration,
+            message=f"contrast audit did not emit parseable JSON: {exc}",
+            stdout_tail=_tail(result.stdout),
+            stderr_tail=_tail(result.stderr),
+        )
+
+    summary = payload.get("summary", {})
+    status = "ok" if result.returncode == 0 and payload.get("status") == "ok" else "fail"
+    audited_pairs = int(summary.get("audited_pairs") or 0)
+    failure_count = int(summary.get("failures") or 0)
+    message = (
+        f"WCAG AA contrast token pairs passed ({audited_pairs} pairs)"
+        if status == "ok"
+        else f"WCAG AA contrast violations ({failure_count} failures)"
+    )
+    return StepResult(
+        "contrast-audit",
+        status,
+        exit_code=result.returncode,
+        duration_ms=duration,
+        message=message,
+        stdout_tail=_tail(json.dumps(payload, indent=2)),
+        stderr_tail=_tail(result.stderr),
+    )
+
+
+def step_ruff(_args: argparse.Namespace) -> StepResult:
+    start = time.time()
+    if shutil.which("ruff") is None:
+        return StepResult(
+            "ruff",
+            "skipped",
+            skipped_reason="ruff not installed",
+            duration_ms=int((time.time() - start) * 1000),
+        )
+    # Rule selection comes from [tool.ruff.lint] in pyproject.toml so the gate,
+    # the pre-commit hook, and an editor cannot disagree about what is clean.
+    # F408: scripts/ was outside this for so long that three findings piled up
+    # there unnoticed, in the release gate and the linters themselves. The
+    # tooling holds the same bar as the package.
+    result = _run(
+        ["ruff", "check", "opencut/", "scripts/"],
+        cwd=REPO_ROOT,
+    )
+    duration = int((time.time() - start) * 1000)
+    status = "ok" if result.returncode == 0 else "fail"
+    return StepResult(
+        "ruff",
+        status,
+        exit_code=result.returncode,
+        duration_ms=duration,
+        message="lint clean" if status == "ok" else "ruff reported findings",
+        stdout_tail=_tail(result.stdout),
+        stderr_tail=_tail(result.stderr),
+    )
+
+
+# Release-gate test ids that exercise the most fragile invariants. Keep the
+# list small enough to finish in seconds; the full suite still runs locally
+# during release validation.
+RELEASE_GATE_TESTS: List[str] = [
+    "tests/test_bootstrap_check.py",
+    "tests/test_project_facts.py",
+    "tests/test_node_advisories.py",
+    "tests/test_panel_node_entrypoints.py",
+    "tests/test_error_request_ids.py",
+    "tests/test_error_logging.py",
+    "tests/test_seed_github_issues.py",
+    "tests/test_route_manifest.py",
+    "tests/test_openapi_typed_contract.py",
+    "tests/test_route_collisions.py",
+    "tests/test_openapi_contract.py",
+    "tests/test_api_aliases.py",
+    "tests/test_feature_readiness_generator.py",
+    "tests/test_feature_registry.py",
+    "tests/test_feature_state_panel_helper.py",
+    "tests/test_agent_skills.py",
+    "tests/test_mcp_server.py",
+    "tests/test_mcp_extended_tools.py",
+    "tests/test_macos_notarization.py",
+    "tests/test_release_sbom.py",
+    "tests/test_release_provenance_attestation.py",
+    "tests/test_local_release_policy.py",
+    "tests/test_release_gate.py",
+    "tests/test_sync_version.py",
+    "tests/test_sbom_completeness.py",
+    "tests/test_ffmpeg_installer_manifest.py",
+    "tests/test_ffmpeg_provenance.py",
+    "tests/test_ffmpeg_runtime_guard.py",
+    "tests/test_text_shaping_gate.py",
+    "tests/test_contrast_audit.py",
+    "tests/test_forced_colors_coverage.py",
+    "tests/test_caption_line_breaks.py",
+    "tests/test_caption_unicode_validation.py",
+    "tests/test_standards_validators.py",
+    "tests/test_srt_encoding.py",
+    "tests/test_caption_language_confidence.py",
+    "tests/test_captions_translate_srt.py",
+    "tests/test_uxp_macos_http.py",
+    "tests/test_uxp_hybrid_package.py",
+    "tests/test_uxp_i18n.py",
+    "tests/test_adobe_premierepro_versions.py",
+    "tests/test_mcp_registry_manifest.py",
+    "tests/test_mcp_sdk_pin.py",
+    "tests/test_mcp_protocol_conformance.py",
+    "tests/test_pip_audit_extras.py",
+    "tests/test_dependency_surface.py",
+    "tests/test_transnetv2_dependency.py",
+    "tests/test_otio_aaf_adapter_pin.py",
+    "tests/test_audioop_shim.py",
+    "tests/test_ffmpeg_filter_regression.py",
+    "tests/test_performance_benchmark_registry.py",
+    "tests/test_roadmap_mirror.py",
+    "tests/test_eval_datasets.py",
+    "tests/test_download_eval_dataset.py",
+    "tests/test_installer_policy.py",
+    "tests/test_upgrade_conformance.py",
+    "tests/test_local_db_migrations.py",
+    "tests/test_panel_vitest_gate.py",
+    "tests/test_inno_installer_smoke.py",
+    "tests/test_wpf_installer_ci.py",
+    "tests/test_wpf_installer_test_suite.py",
+    "tests/test_windows_codesigning.py",
+    "tests/test_linux_distribution_packaging.py",
+    "tests/test_docker_distribution_docs.py",
+    "tests/test_telemetry_aptabase.py",
+    "tests/test_fuzz_harness_targets.py",
+    "tests/test_async_job_rate_limit.py",
+    "tests/test_job_cancellation_race.py",
+    "tests/test_helpers_cleanup.py",
+    "tests/test_launcher_scripts.py",
+    "tests/test_uxp_backend_client_contract.py",
+    "tests/test_cep_uxp_parity_catalogue.py",
+    "tests/test_uxp_webview_scaffold.py",
+    "tests/test_uxp_host_action_dispatch.py",
+    "tests/test_uxp_create_subsequence_integration.py",
+    "tests/test_uxp_encoder_manager_integration.py",
+    "tests/test_uxp_transcript_api_integration.py",
+    "tests/test_uxp_object_mask_api_integration.py",
+    "tests/test_uxp_aaf_export_integration.py",
+    "tests/test_uxp_migration_dashboard.py",
+    "tests/test_uxp_udt_harness.py",
+    "tests/test_uxp_udt_results.py",
+    "tests/test_esbuild_pin.py",
+    "tests/test_caption_qc.py",
+    "tests/test_caption_reading_profiles.py",
+    "tests/test_caption_display_settings.py",
+    "tests/test_magic_clips.py",
+    "tests/test_loudness_standards.py",
+    "tests/test_delivery_standards.py",
+    "tests/test_local_auth.py",
+    "tests/test_model_cards.py",
+    "tests/test_catalog_contract.py",
+    "tests/test_roadmap_lint.py",
+    "tests/test_capability_profile.py",
+    "tests/test_marker_import.py",
+    "tests/test_review_bundle.py",
+    "tests/test_c2pa_sidecar.py",
+    "tests/test_plugin_manifest.py",
+    "tests/test_plugin_installation.py",
+    "tests/test_plugin_trust_settings_ui.py",
+    "tests/test_marker_metadata.py",
+    "tests/test_ai_eval_harness.py",
+    "tests/test_fcp_transitions.py",
+    "tests/test_ocio_validate.py",
+    "tests/test_windows_arm64_doc.py",
+    "tests/test_project_health.py",
+    "tests/test_crash_packet.py",
+    "tests/test_job_diagnostics.py",
+    "tests/test_license_gate.py",
+    "tests/test_hardening.py::test_uxp_engine_registry_escapes_dynamic_attribute_values",
+    "tests/test_hardening.py::test_uxp_fetch_wrapper_clears_backend_timeout_timers",
+    "tests/test_config_and_userdata.py::test_server_main_rejects_remote_bind_without_opt_in",
+    "tests/test_config_and_userdata.py::test_server_main_allows_remote_bind_with_explicit_opt_in",
+    "tests/test_platform_ux.py::TestWebUIUpload::test_upload_sanitizes_windows_paths_and_markup",
+    "tests/test_platform_ux.py::TestWebUIOperationCatalog::test_serve_web_ui_uses_text_nodes_for_dynamic_content",
+]
+
+
+def step_pytest_fast(args: argparse.Namespace) -> StepResult:
+    start = time.time()
+    if shutil.which("pytest") is None and not (REPO_ROOT / "pyproject.toml").exists():
+        return StepResult(
+            "pytest-fast",
+            "skipped",
+            skipped_reason="pytest unavailable",
+            duration_ms=int((time.time() - start) * 1000),
+        )
+    cmd = [sys.executable, "-m", "pytest", "-q", "--tb=short", *RELEASE_GATE_TESTS]
+    if args.pytest_extra:
+        cmd.extend(args.pytest_extra)
+    result = _run(cmd, cwd=REPO_ROOT)
+    duration = int((time.time() - start) * 1000)
+    status = "ok" if result.returncode == 0 else "fail"
+    return StepResult(
+        "pytest-fast",
+        status,
+        exit_code=result.returncode,
+        duration_ms=duration,
+        message=(
+            f"{len(RELEASE_GATE_TESTS)} gate tests passed"
+            if status == "ok"
+            else "release-gate tests failed"
+        ),
+        stdout_tail=_tail(result.stdout),
+        stderr_tail=_tail(result.stderr),
+    )
+
+
+def step_pip_audit(_args: argparse.Namespace) -> StepResult:
+    start = time.time()
+    cmd = [
+        sys.executable,
+        "-m",
+        "opencut.tools.pip_audit_extras",
+        "--json",
+        "--extra",
+        "all",
+    ]
+    result = _run(cmd, cwd=REPO_ROOT)
+    duration = int((time.time() - start) * 1000)
+    if "No module named" in (result.stderr or ""):
+        return StepResult(
+            "pip-audit",
+            "skipped",
+            skipped_reason="pip-audit not installed",
+            duration_ms=duration,
+        )
+    payload = {}
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        pass
+    if payload.get("status") == "skipped":
+        return StepResult(
+            "pip-audit",
+            "skipped",
+            skipped_reason=payload.get("message", "pip-audit skipped"),
+            duration_ms=duration,
+            stdout_tail=_tail(result.stdout),
+            stderr_tail=_tail(result.stderr),
+        )
+    status = "ok" if result.returncode == 0 and payload.get("status") == "ok" else "fail"
+    targets = payload.get("targets", [])
+    target_summary = ", ".join(
+        f"{target.get('name')}={target.get('unallowed_vulnerability_count', 0)} unallowed/"
+        f"{target.get('allowed_vulnerability_count', 0)} allowed"
+        for target in targets
+    )
+    return StepResult(
+        "pip-audit",
+        status,
+        exit_code=result.returncode,
+        duration_ms=duration,
+        message=(
+            f"no unallowed advisories ({target_summary})"
+            if status == "ok" and target_summary
+            else "pip-audit reported unallowed advisories or collection errors"
+        ),
+        stdout_tail=_tail(result.stdout),
+        stderr_tail=_tail(result.stderr),
+    )
+
+
+def _node_command(*node_args: str, cwd: Path) -> StepResult:
+    start = time.time()
+    candidates = ["node", "node.exe"]
+    node_bin = next((shutil.which(name) for name in candidates if shutil.which(name)), None)
+    if not node_bin:
+        return StepResult(
+            "panel-script",
+            "skipped",
+            skipped_reason="node not on PATH",
+            duration_ms=int((time.time() - start) * 1000),
+        )
+    result = _run([node_bin, *node_args], cwd=cwd)
+    duration = int((time.time() - start) * 1000)
+    status = "ok" if result.returncode == 0 else "fail"
+    return StepResult(
+        "panel-script",
+        status,
+        exit_code=result.returncode,
+        duration_ms=duration,
+        message="ok" if status == "ok" else "node script failed",
+        stdout_tail=_tail(result.stdout),
+        stderr_tail=_tail(result.stderr),
+    )
+
+
+def _npm_command(*npm_args: str, cwd: Path) -> StepResult:
+    start = time.time()
+    candidates = ["npm", "npm.cmd"]
+    npm_bin = next((shutil.which(name) for name in candidates if shutil.which(name)), None)
+    if not npm_bin:
+        return StepResult(
+            "panel-script",
+            "skipped",
+            skipped_reason="npm not on PATH",
+            duration_ms=int((time.time() - start) * 1000),
+        )
+    result = _run([npm_bin, *npm_args], cwd=cwd)
+    duration = int((time.time() - start) * 1000)
+    status = "ok" if result.returncode == 0 else "fail"
+    return StepResult(
+        "panel-script",
+        status,
+        exit_code=result.returncode,
+        duration_ms=duration,
+        message="ok" if status == "ok" else "npm script failed",
+        stdout_tail=_tail(result.stdout),
+        stderr_tail=_tail(result.stderr),
+    )
+
+
+def step_panel_unit(_args: argparse.Namespace) -> StepResult:
+    start = time.time()
+    if not (PANEL_DIR / "package.json").exists():
+        return StepResult(
+            "panel-unit",
+            "skipped",
+            skipped_reason="panel package.json missing",
+            duration_ms=int((time.time() - start) * 1000),
+        )
+    if not (PANEL_DIR / "node_modules").exists():
+        return StepResult(
+            "panel-unit",
+            "skipped",
+            skipped_reason="node_modules absent; run `npm ci` first",
+            duration_ms=int((time.time() - start) * 1000),
+        )
+    res = _npm_command("test", cwd=PANEL_DIR)
+    res.name = "panel-unit"
+    if res.status == "ok":
+        res.message = "CEP/UXP utility Vitest suite passed"
+    return res
+
+
+def step_panel_rendered(_args: argparse.Namespace) -> StepResult:
+    start = time.time()
+    if not (PANEL_DIR / "playwright.config.mjs").exists():
+        return StepResult(
+            "panel-rendered",
+            "skipped",
+            skipped_reason="playwright.config.mjs missing",
+            duration_ms=int((time.time() - start) * 1000),
+        )
+    if not (PANEL_DIR / "node_modules").exists():
+        return StepResult(
+            "panel-rendered",
+            "skipped",
+            skipped_reason="node_modules absent; run `npm ci` first",
+            duration_ms=int((time.time() - start) * 1000),
+        )
+    res = _npm_command("run", "test:rendered", cwd=PANEL_DIR)
+    res.name = "panel-rendered"
+    if res.status == "ok":
+        res.message = "headless CEP/UXP rendered regression suite passed"
+    return res
+
+
+def step_jsx_mock(_args: argparse.Namespace) -> StepResult:
+    """Run the ExtendScript host harness.
+
+    F394: this is the only automated coverage of ``host/index.jsx``, the code
+    that writes to a real Premiere sequence, and it sat red on a clean checkout
+    because nothing invoked it. README documented it as a test command; no gate
+    ran it.
+    """
+    start = time.time()
+    harness = REPO_ROOT / "tests" / "jsx_mock.js"
+    if not harness.exists():
+        return StepResult(
+            "jsx-mock",
+            "skipped",
+            skipped_reason="tests/jsx_mock.js missing",
+            duration_ms=int((time.time() - start) * 1000),
+        )
+    node = shutil.which("node")
+    if node is None:
+        return StepResult(
+            "jsx-mock",
+            "skipped",
+            skipped_reason="node not installed",
+            duration_ms=int((time.time() - start) * 1000),
+        )
+    result = _run([node, str(harness)], cwd=REPO_ROOT)
+    status = "ok" if result.returncode == 0 else "fail"
+    return StepResult(
+        "jsx-mock",
+        status,
+        exit_code=result.returncode,
+        duration_ms=int((time.time() - start) * 1000),
+        message=(
+            "ExtendScript host harness passed"
+            if status == "ok"
+            else _tail(result.stdout or result.stderr)
+        ),
+    )
+
+
+def step_npm_advisory(_args: argparse.Namespace) -> StepResult:
+    start = time.time()
+    script = PANEL_DIR / "scripts" / "check-advisories.mjs"
+    if not script.exists():
+        return StepResult(
+            "npm-advisory",
+            "skipped",
+            skipped_reason="check-advisories.mjs missing",
+            duration_ms=int((time.time() - start) * 1000),
+        )
+    if not (PANEL_DIR / "node_modules").exists():
+        return StepResult(
+            "npm-advisory",
+            "skipped",
+            skipped_reason="node_modules absent; run `npm ci` first",
+            duration_ms=int((time.time() - start) * 1000),
+        )
+    node_bin = next((shutil.which(name) for name in ("node", "node.exe") if shutil.which(name)), None)
+    if not node_bin:
+        return StepResult(
+            "npm-advisory",
+            "skipped",
+            skipped_reason="node not on PATH",
+            duration_ms=int((time.time() - start) * 1000),
+        )
+
+    result = _run([node_bin, "scripts/check-advisories.mjs", "--json"], cwd=PANEL_DIR)
+    duration = int((time.time() - start) * 1000)
+
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError as exc:
+        return StepResult(
+            "npm-advisory",
+            "fail",
+            exit_code=result.returncode,
+            duration_ms=duration,
+            message=f"advisory checker did not emit parseable JSON: {exc}",
+            stdout_tail=_tail(result.stdout),
+            stderr_tail=_tail(result.stderr),
+        )
+
+    summary = payload.get("summary", {})
+    allowed = int(summary.get("allowed") or 0)
+    unwaived = int(summary.get("unwaived") or 0)
+    status = payload.get("status")
+    ok = result.returncode == 0 and status == "ok" and unwaived == 0
+    message = (
+        f"advisories on allow-list ({allowed} allowed)"
+        if ok and allowed
+        else "no advisories reported by npm audit"
+        if ok
+        else f"unwaived advisories detected ({unwaived})"
+    )
+    return StepResult(
+        "npm-advisory",
+        "ok" if ok else "fail",
+        exit_code=result.returncode,
+        duration_ms=duration,
+        message=message,
+        stdout_tail=_tail(json.dumps(payload, indent=2)),
+        stderr_tail=_tail(result.stderr),
+    )
+
+
+def step_panel_source(_args: argparse.Namespace) -> StepResult:
+    if not (PANEL_DIR / "scripts" / "verify-build.mjs").exists():
+        return StepResult(
+            "panel-source",
+            "skipped",
+            skipped_reason="verify-build.mjs missing",
+        )
+    res = _node_command("scripts/verify-build.mjs", cwd=PANEL_DIR)
+    res.name = "panel-source"
+    if res.status == "ok":
+        res.message = "panel source tree intact"
+    return res
+
+
+def step_openapi_contract(_args: argparse.Namespace) -> StepResult:
+    """Verify the typed-contract manifest and its coverage ratchet."""
+    start = time.time()
+    result = _run(
+        [sys.executable, "-m", "opencut.tools.dump_openapi_contract", "--check"],
+        cwd=REPO_ROOT,
+    )
+    duration = int((time.time() - start) * 1000)
+    status = "ok" if result.returncode == 0 else "fail"
+    return StepResult(
+        "openapi-contract",
+        status,
+        exit_code=result.returncode,
+        duration_ms=duration,
+        message=(
+            "typed OpenAPI contract in sync"
+            if status == "ok"
+            else "typed OpenAPI contract is stale or coverage regressed"
+        ),
+        stdout_tail=_tail(result.stdout),
+        stderr_tail=_tail(result.stderr),
+    )
+
+
+def step_queue_coverage(_args: argparse.Namespace) -> StepResult:
+    """Report queue-allowlist coverage. Informational: never fails the release.
+
+    Whether an async route *should* be queueable is a curation decision, so
+    this surfaces the gap rather than asserting a number. It does fail on a
+    stale allowlist entry, which is unambiguously wrong.
+    """
+    start = time.time()
+    try:
+        from opencut.routes.jobs_routes import queue_coverage
+        from opencut.server import create_app
+
+        app = create_app()
+        with app.test_request_context():
+            report = queue_coverage()
+    except Exception as exc:  # noqa: BLE001 - diagnostics must not block a release
+        return StepResult(
+            "queue-coverage",
+            "warn",
+            exit_code=0,
+            duration_ms=int((time.time() - start) * 1000),
+            message=f"queue coverage unavailable: {exc}",
+        )
+
+    duration = int((time.time() - start) * 1000)
+    stale = report["stale_allowlist_entries"]
+    summary = (
+        f"{report['queueable']}/{report['async_post_routes']} async POST routes "
+        f"queueable ({report['coverage_percent']}%); "
+        f"{report['not_queueable']} not allowlisted"
+    )
+    if stale:
+        return StepResult(
+            "queue-coverage",
+            "fail",
+            exit_code=1,
+            duration_ms=duration,
+            message=f"{summary}; {len(stale)} stale allowlist entries: {', '.join(stale[:5])}",
+        )
+    return StepResult(
+        "queue-coverage", "ok", exit_code=0, duration_ms=duration, message=summary,
+    )
+
+
+def step_sqlite_fts5_floor(_args: argparse.Namespace) -> StepResult:
+    """Report the linked SQLite version against the FTS5 memory-safety floor.
+
+    Informational: an older runtime is common on offline installs and the
+    active policy already refuses foreign indexes there.
+    """
+    start = time.time()
+    try:
+        from opencut.core.sqlite_safety import fts5_safety_report
+
+        report = fts5_safety_report()
+    except Exception as exc:  # noqa: BLE001
+        return StepResult(
+            "sqlite-fts5-floor", "warn", exit_code=0,
+            duration_ms=int((time.time() - start) * 1000),
+            message=f"sqlite safety report unavailable: {exc}",
+        )
+    duration = int((time.time() - start) * 1000)
+    status = "ok" if report["fts5_runtime_patched"] else "warn"
+    return StepResult(
+        "sqlite-fts5-floor", status, exit_code=0, duration_ms=duration,
+        message=(
+            f"SQLite {report['sqlite_version']} vs FTS5 floor "
+            f"{report['fts5_floor']} ({report['cve']}); {report['policy']}"
+        ),
+    )
+
+
+def step_standards_conformance(args: argparse.Namespace) -> StepResult:
+    """Run the independent reference validators over OpenCut's own output.
+
+    Reports ``warn`` — not ``ok`` — when a validator is missing, so a host
+    without the optional validators cannot look like it proved conformance.
+    """
+    start = time.time()
+    try:
+        from opencut.core import standards_validators
+        status = standards_validators.validator_status()
+    except Exception as exc:  # noqa: BLE001
+        return StepResult(
+            "standards-conformance", "fail",
+            duration_ms=int((time.time() - start) * 1000),
+            message=f"validator status unavailable: {exc}",
+        )
+
+    missing = sorted(name for name, entry in status.items() if not entry["available"])
+    cmd = [
+        sys.executable, "-m", "pytest", "-q", "--tb=short",
+        "tests/test_standards_validators.py",
+    ]
+    if getattr(args, "pytest_extra", None):
+        cmd.extend(args.pytest_extra)
+    result = _run(cmd, cwd=REPO_ROOT)
+    duration = int((time.time() - start) * 1000)
+
+    if result.returncode != 0:
+        status_word = "fail"
+        message = "standards conformance failed"
+    elif missing:
+        status_word = "warn"
+        message = "validators unavailable: " + ", ".join(missing)
+    else:
+        status_word = "ok"
+        message = "IMSC, IMF, and loudness validated by reference implementations"
+
+    return StepResult(
+        "standards-conformance",
+        status_word,
+        exit_code=result.returncode,
+        duration_ms=duration,
+        message=message,
+        stdout_tail=_tail(result.stdout),
+        stderr_tail=_tail(result.stderr),
+    )
+
+
+def step_media_conformance(args: argparse.Namespace) -> StepResult:
+    """Run the synthetic media corpus against real FFmpeg operations.
+
+    Skips truthfully (rather than passing) when FFmpeg is unavailable, so a
+    host without FFmpeg cannot look like it proved media conformance.
+    """
+    start = time.time()
+    try:
+        from opencut.helpers import get_ffmpeg_path, get_ffprobe_path
+        has_ffmpeg = bool(get_ffmpeg_path()) and bool(get_ffprobe_path())
+    except Exception:  # noqa: BLE001
+        has_ffmpeg = False
+    if not has_ffmpeg:
+        return StepResult(
+            "media-conformance",
+            "skipped",
+            skipped_reason="FFmpeg/ffprobe unavailable",
+            duration_ms=int((time.time() - start) * 1000),
+        )
+
+    cmd = [
+        sys.executable, "-m", "pytest", "-q", "--tb=short",
+        # Every test in the corpus is marked integration or slow, and the
+        # project's default addopts deselect exactly those. Without this the
+        # step collected nothing, exited 5, and reported the corpus as failing
+        # while having proved nothing about it. Keep --strict-markers.
+        "--override-ini=addopts=--strict-markers",
+        "tests/test_media_conformance.py",
+    ]
+    if getattr(args, "pytest_extra", None):
+        cmd.extend(args.pytest_extra)
+    result = _run(cmd, cwd=REPO_ROOT)
+    duration = int((time.time() - start) * 1000)
+    # pytest exits 5 when it collected nothing. That is not a conformance
+    # failure, it is the step failing to run, and it needs to say which.
+    if result.returncode == PYTEST_NO_TESTS_COLLECTED:
+        return StepResult(
+            "media-conformance",
+            "fail",
+            exit_code=result.returncode,
+            duration_ms=duration,
+            message="media corpus collected no tests; the step proved nothing",
+            stdout_tail=_tail(result.stdout),
+            stderr_tail=_tail(result.stderr),
+        )
+    status = "ok" if result.returncode == 0 else "fail"
+    return StepResult(
+        "media-conformance",
+        status,
+        exit_code=result.returncode,
+        duration_ms=duration,
+        message=(
+            "media corpus conformance passed"
+            if status == "ok"
+            else "media corpus conformance failed"
+        ),
+        stdout_tail=_tail(result.stdout),
+        stderr_tail=_tail(result.stderr),
+    )
+
+
+STEPS: List[StepDefinition] = [
+    StepDefinition("bootstrap", step_bootstrap, "Run scripts/bootstrap_check.py"),
+    StepDefinition("version-sync", step_version_sync, "Check version surfaces"),
+    StepDefinition("badges", step_badges, "Check README badges match live counts"),
+    StepDefinition("generated-docs", step_generated_docs, "Check README/MCP/model/readiness generated docs"),
+    StepDefinition("doc-sizes", step_doc_sizes, "Check documented sizes within ±15% of filesystem"),
+    StepDefinition("subprocess-timeouts", step_subprocess_timeouts, "AST lint: every subprocess call must be bounded by a timeout"),
+    StepDefinition("panel-parity", step_panel_parity, "CEP <-> UXP tab parity ledger up to date"),
+    StepDefinition("panel-feature-parity", step_panel_feature_parity, "Gate owner-classified CEP/UXP backend-route parity"),
+    StepDefinition("i18n-drift", step_i18n_drift, "CEP locale: no missing keys, dead-key floor not exceeded"),
+    StepDefinition("shared-locales", step_shared_locales, "Strings shown by both panels have one canonical source"),
+    StepDefinition("test-breadth", step_test_breadth, "opencut/core/ test-reference ratio within floor"),
+    StepDefinition("route-manifest", step_route_manifest, "Check route manifest is in sync"),
+    StepDefinition("surface-ratchet", step_surface_ratchet, "Direct-surface coverage holds its floor; no new unreachable route families"),
+    StepDefinition("performance-benchmark", step_performance_benchmark, "Validate optional benchmark receipts and same-host baselines"),
+    StepDefinition("openapi-contract", step_openapi_contract, "Check typed OpenAPI contract manifest + coverage ratchet"),
+    StepDefinition("api-aliases", step_api_aliases, "Check /api alias manifest is in sync"),
+    StepDefinition("queue-coverage", step_queue_coverage, "Report queue allowlist coverage; fail only on stale entries"),
+    StepDefinition("sqlite-fts5-floor", step_sqlite_fts5_floor, "Report SQLite FTS5 memory-safety floor (CVE-2026-11822)"),
+    StepDefinition("feature-readiness", step_feature_readiness, "Check route/check readiness manifest is in sync"),
+    StepDefinition("mcp-registry", step_mcp_registry, "Check MCP server registry manifest is in sync (F147)"),
+    StepDefinition("model-cards", step_model_cards, "Check generated model cards in sync"),
+    StepDefinition("license-gate", step_license_gate, "Gate model cards and hash-locked release requirements"),
+    StepDefinition("release-lock", step_release_lock, "Check exact pins and SHA-256 hashes for release inputs"),
+    StepDefinition("ffmpeg-provenance", step_ffmpeg_provenance, "Verify bundled FFmpeg provenance and security floor"),
+    StepDefinition(
+        "embedded-media-provenance",
+        step_embedded_media_provenance,
+        "Verify OpenCV and PyAV embedded FFmpeg provenance",
+    ),
+    StepDefinition("dependency-matrix", step_dependency_matrix, "Check optional dependency support contract"),
+    StepDefinition("installed-versions", step_installed_versions, "Check the tested stack matches the declared specifiers"),
+    StepDefinition("roadmap-lint", step_roadmap_lint, "Lint ROADMAP source appendix"),
+    StepDefinition("roadmap-mirror", step_roadmap_mirror, "Verify docs/ROADMAP*.md stay F184 pointer stubs"),
+    StepDefinition("text-shaping", step_text_shaping, "Check FFmpeg/libass and renderer text shaping support"),
+    StepDefinition("caption-unicode", step_caption_unicode, "Verify RTL/CJK/bidi caption text export preservation"),
+    StepDefinition("contrast-audit", step_contrast_audit, "Check CEP/UXP panel token contrast"),
+    StepDefinition("ruff", step_ruff, "Lint the Python package"),
+    StepDefinition("pytest-fast", step_pytest_fast, "Run release-gate pytest ids"),
+    StepDefinition("media-conformance", step_media_conformance, "Run the synthetic media corpus against real FFmpeg"),
+    StepDefinition("standards-conformance", step_standards_conformance, "Validate standards-labelled output with reference implementations"),
+    StepDefinition("pip-audit", step_pip_audit, "Audit requirements.txt, requirements-lock.txt, and pyproject[all]"),
+    StepDefinition("jsx-mock", step_jsx_mock, "Run the ExtendScript host mock harness"),
+    StepDefinition("panel-unit", step_panel_unit, "Run CEP/UXP panel Vitest utility tests"),
+    StepDefinition("panel-rendered", step_panel_rendered, "Run headless CEP/UXP rendered regression tests"),
+    StepDefinition("npm-advisory", step_npm_advisory, "Run npm advisory allow-list gate"),
+    StepDefinition("esbuild-pin", step_esbuild_pin, "Verify resolved esbuild >= 0.25 (F131)"),
+    StepDefinition("panel-source", step_panel_source, "Smoke the CEP panel source tree"),
+    StepDefinition(
+        "adobe-premierepro-versions",
+        step_adobe_premierepro_versions,
+        "Notify on @adobe/premierepro npm registry drift (informational, F251)",
+    ),
+    StepDefinition(
+        "adobe-uxp-compatibility",
+        step_adobe_uxp_compatibility,
+        "Check static UXP capability declarations and host-band behavior",
+    ),
+]
+
+
+# ---------------------------------------------------------------------------
+# Public API used by tests + the CLI entrypoint
+# ---------------------------------------------------------------------------
+
+
+def run_release_smoke(
+    args: Optional[argparse.Namespace] = None,
+    *,
+    only: Optional[List[str]] = None,
+    skip: Optional[List[str]] = None,
+) -> List[StepResult]:
+    ns = args or argparse.Namespace(pytest_extra=[])
+    if not hasattr(ns, "pytest_extra"):
+        ns.pytest_extra = []
+
+    selected: List[StepDefinition] = []
+    only_set = {name for name in (only or [])}
+    skip_set = {name for name in (skip or [])}
+    for step in STEPS:
+        if only_set and step.name not in only_set:
+            continue
+        if step.name in skip_set:
+            continue
+        selected.append(step)
+
+    results: List[StepResult] = []
+    for step in selected:
+        result = step.runner(ns)
+        results.append(result)
+    return results
+
+
+# Steps whose silent self-skip (missing tool/module) can mask a real release
+# gate. Under ``--strict`` a skip of any of these fails the run instead of
+# letting the matrix report "ok" without ever exercising them.
+CRITICAL_STEP_NAMES = frozenset({"ruff", "pip-audit", "jsx-mock", "panel-unit", "panel-rendered"})
+
+
+def skipped_critical_steps(results: List[StepResult]) -> List[str]:
+    return [r.name for r in results if r.status == "skipped" and r.name in CRITICAL_STEP_NAMES]
+
+
+def overall_status(results: List[StepResult], *, strict: bool = False) -> str:
+    if any(r.status == "fail" for r in results):
+        return "fail"
+    if strict and skipped_critical_steps(results):
+        return "fail"
+    if not results:
+        return "skipped"
+    if all(r.status == "skipped" for r in results):
+        return "skipped"
+    return "ok"
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--json", action="store_true", help="emit a machine-readable summary")
+    parser.add_argument("--only", action="append", default=[], help="run only the named step (repeatable)")
+    parser.add_argument("--skip", action="append", default=[], help="skip the named step (repeatable)")
+    parser.add_argument(
+        "--pytest-extra",
+        nargs="*",
+        default=[],
+        help="extra args appended to the pytest-fast invocation",
+    )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help=(
+            "fail the run when a critical step ("
+            + ", ".join(sorted(CRITICAL_STEP_NAMES))
+            + ") self-skips because its tool is missing, instead of reporting ok"
+        ),
+    )
+    parser.add_argument(
+        "--performance-receipt",
+        default="",
+        help="optional current benchmark receipt for the performance-benchmark step",
+    )
+    parser.add_argument(
+        "--performance-baseline",
+        default="",
+        help="optional compatible benchmark baseline for the performance-benchmark step",
+    )
+    parser.add_argument("--list", action="store_true", help="list available steps and exit")
+    args = parser.parse_args(argv)
+
+    if args.list:
+        for step in STEPS:
+            print(f"{step.name:<14} {step.description}")
+        return 0
+
+    # Several steps import opencut in-process, and importing the package prints
+    # its FFmpeg banner and temp-sweep notice. Under --json that lands on stdout
+    # ahead of the payload and makes the output unparseable, which is why
+    # release_gate.py could never read a receipt out of it. Send anything a step
+    # writes to stderr so stdout carries the JSON document and nothing else.
+    if args.json:
+        with contextlib.redirect_stdout(sys.stderr):
+            results = run_release_smoke(args, only=args.only or None, skip=args.skip or None)
+    else:
+        results = run_release_smoke(args, only=args.only or None, skip=args.skip or None)
+    strict = getattr(args, "strict", False)
+    status = overall_status(results, strict=strict)
+    skipped_critical = skipped_critical_steps(results)
+
+    if args.json:
+        payload = {
+            "status": status,
+            "strict": strict,
+            "skipped_critical_steps": skipped_critical,
+            "steps": [asdict(r) for r in results],
+        }
+        json.dump(payload, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+    else:
+        for r in results:
+            print(r.as_line())
+            if r.status == "fail" and r.stderr_tail:
+                for line in r.stderr_tail.splitlines():
+                    print(f"        {line}")
+        if skipped_critical:
+            severity = "FAIL (--strict)" if strict else "WARNING"
+            print(
+                f"\n{severity}: critical steps skipped without running: "
+                + ", ".join(skipped_critical)
+            )
+        print(f"\nresult: {status.upper()}")
+
+    return 0 if status != "fail" else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -15,7 +15,7 @@ from service.jobs import Jobs
 def health_payload():
     engine = engine_info()
     return {
-        'name': 'Nocturnz Edit Local Service', 'version': '0.2.0', 'status': 'ready',
+        'name': 'Nocturnz/Edit Local Service', 'version': '0.2.0', 'status': 'ready',
         'capabilities': ['silence-analysis', 'silence-review', 'premiere-xml-export'] if engine['available'] else [],
         'mediaProcessing': engine['available'], 'engines': [engine],
     }
@@ -110,7 +110,7 @@ def make_server(port=8765, job_root=None):
 
 if __name__ == '__main__':
     server = make_server()
-    print('Nocturnz Edit : http://127.0.0.1:8765', flush=True)
+    print('Nocturnz/Edit : http://127.0.0.1:8765', flush=True)
     print(json.dumps(health_payload(), ensure_ascii=False), flush=True)
     try:
         server.serve_forever()

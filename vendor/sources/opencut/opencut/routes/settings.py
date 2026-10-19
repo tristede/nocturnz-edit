@@ -1,0 +1,1170 @@
+"""
+OpenCut Settings Routes
+
+Presets, favorites, workflows, settings import/export, job time estimation,
+log export, job retry.
+"""
+
+import json
+import logging
+import os
+import time
+from importlib import resources
+
+from flask import Blueprint, jsonify, request, send_file
+
+from opencut import __version__, credential_store
+from opencut.core.workflow import compile_workflow_template, validate_workflow_steps
+from opencut.errors import safe_error
+from opencut.helpers import OPENCUT_DIR, compute_estimate
+from opencut.security import (
+    build_destructive_plan,
+    destructive_confirmation_required_response,
+    get_json_dict,
+    require_csrf,
+    safe_bool,
+    safe_float,
+    safe_int,
+    verify_destructive_confirm_token,
+)
+from opencut.user_data import (
+    build_user_data_destructive_record,
+    create_user_tombstone,
+    get_user_tombstone,
+    list_user_tombstones,
+    load_favorites,
+    load_presets,
+    load_workflows,
+    mark_user_tombstone_restored,
+    save_assistant_dismissed,
+    save_favorites,
+    save_presets,
+    save_workflows,
+    summarize_user_tombstone,
+    user_file_lock,
+)
+
+settings_bp = Blueprint("settings", __name__)
+logger = logging.getLogger("opencut")
+SETTINGS_SCHEMA_VERSION = 1
+
+
+def _invalid_input_response(message: str):
+    return jsonify({
+        "error": message,
+        "code": "INVALID_INPUT",
+        "suggestion": "Send a top-level JSON object in the request body.",
+    }), 400
+
+
+def _require_json_object():
+    try:
+        return get_json_dict(), None
+    except ValueError as e:
+        return None, _invalid_input_response(str(e))
+
+
+def _restore_tombstone(entry: dict) -> tuple[dict | None, str | None]:
+    kind = entry.get("kind", "")
+    key = str(entry.get("key", "") or "default")
+    value = entry.get("value")
+    if kind == "preset":
+        with user_file_lock("user_presets.json"):
+            presets = load_presets()
+            presets[key] = value
+            save_presets(presets)
+    elif kind == "workflow":
+        if not isinstance(value, dict):
+            return None, "Workflow tombstone payload is invalid"
+        with user_file_lock("workflows.json"):
+            workflows = [wf for wf in load_workflows() if wf.get("name") != key]
+            workflows.append(value)
+            save_workflows(workflows[:100])
+    elif kind == "favorites":
+        if not isinstance(value, list):
+            return None, "Favorites tombstone payload is invalid"
+        save_favorites(value[:200])
+    elif kind == "assistant_dismissed":
+        if not isinstance(value, list):
+            return None, "Assistant dismissal tombstone payload is invalid"
+        save_assistant_dismissed(key, value[:200])
+    else:
+        return None, f"Unsupported tombstone kind: {kind}"
+    restored = mark_user_tombstone_restored(str(entry.get("id", ""))) or entry
+    return restored, None
+
+
+def _parse_log_line(line: str) -> dict:
+    """Parse plain-text and JSON log lines into a filterable record."""
+    raw = line.rstrip()
+    level = ""
+    job_id = ""
+    if not raw:
+        return {"raw": raw, "level": level, "job_id": job_id}
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, dict):
+            level = str(parsed.get("level", "")).upper()
+            job_id = str(parsed.get("job_id", ""))
+            return {"raw": raw, "level": level, "job_id": job_id}
+    except (json.JSONDecodeError, TypeError, ValueError):
+        pass
+    for candidate in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
+        if f"[{candidate}]" in raw:
+            level = candidate
+            break
+    return {"raw": raw, "level": level, "job_id": job_id}
+
+
+def _read_tail_lines(filepath: str, max_lines: int) -> list[str]:
+    """Read roughly the last *max_lines* lines without loading the whole file."""
+    if max_lines <= 0:
+        return []
+    with open(filepath, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        position = f.tell()
+        buffer = bytearray()
+        newline_target = max_lines + 1
+        while position > 0 and buffer.count(b"\n") < newline_target:
+            chunk_size = min(8192, position)
+            position -= chunk_size
+            f.seek(position)
+            buffer[:0] = f.read(chunk_size)
+    return buffer.decode("utf-8", errors="replace").splitlines()
+
+
+def _slugify_template_name(name: str) -> str:
+    slug = "".join(c if c.isalnum() or c in "-_" else "_" for c in name.lower())
+    return slug.strip("_")
+
+
+def _resolve_template_slot(templates_dir: str, name: str) -> tuple[str, str, bool]:
+    """Pick a template filename, preserving updates and avoiding slug collisions."""
+    base_slug = _slugify_template_name(name)
+    if not base_slug:
+        raise ValueError("Invalid template name")
+    desired_name = name.strip().casefold()
+    candidate = base_slug
+    for suffix in range(0, 100):
+        if suffix:
+            candidate = f"{base_slug}_{suffix + 1}"
+        fpath = os.path.join(templates_dir, candidate + ".json")
+        if not os.path.exists(fpath):
+            return candidate, fpath, False
+        try:
+            with open(fpath, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+        except Exception:
+            existing = {}
+        existing_name = str(existing.get("name", "")).strip().casefold()
+        if existing_name and existing_name == desired_name:
+            return candidate, fpath, True
+    raise ValueError("Could not create a unique template filename")
+
+
+# ---------------------------------------------------------------------------
+# User Presets
+# ---------------------------------------------------------------------------
+@settings_bp.route("/presets", methods=["GET"])
+def list_presets():
+    """List all saved user presets."""
+    return jsonify(load_presets())
+
+
+@settings_bp.route("/presets/save", methods=["POST"])
+@require_csrf
+def save_preset():
+    """Save a named preset."""
+    data, error = _require_json_object()
+    if error:
+        return error
+    name = data.get("name", "").strip()
+    if not name:
+        return jsonify({"error": "Preset name required"}), 400
+    if len(name) > 100:
+        return jsonify({"error": "Preset name too long"}), 400
+    settings = data.get("settings", {})
+    if not isinstance(settings, dict):
+        return jsonify({"error": "Settings must be an object"}), 400
+    with user_file_lock("user_presets.json"):
+        presets = load_presets()
+        if name not in presets and len(presets) >= 500:
+            return jsonify({"error": "Too many presets (max 500)"}), 400
+        presets[name] = {"settings": settings, "saved": time.time()}
+        save_presets(presets)
+    return jsonify({"success": True, "name": name})
+
+
+@settings_bp.route("/presets/delete", methods=["POST"])
+@require_csrf
+def delete_preset():
+    """Delete a named preset.
+
+    Returns 400 when ``name`` is missing/empty (was previously a silent
+    no-op that gave the client false confirmation), and 404 when the
+    named preset does not exist (so dashboards can refresh their list).
+    """
+    data, error = _require_json_object()
+    if error:
+        return error
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({
+            "error": "name is required",
+            "code": "INVALID_INPUT",
+            "suggestion": "Pass the preset name to delete in the JSON body.",
+        }), 400
+    with user_file_lock("user_presets.json"):
+        presets = load_presets()
+        if name not in presets:
+            return jsonify({
+                "error": f"Preset '{name}' not found",
+                "code": "NOT_FOUND",
+                "suggestion": "Refresh the preset list — it may have been deleted by another client.",
+            }), 404
+        record = build_user_data_destructive_record(
+            "preset",
+            name,
+            presets[name],
+            source_file="user_presets.json",
+            route="/presets/delete",
+        )
+        plan = build_destructive_plan(
+            "user_data.preset.delete",
+            records=[record],
+            metadata={"route": "/presets/delete", "name": name, "tombstone": True},
+            reversible=True,
+        )
+        dry_run = safe_bool(data.get("dry_run", data.get("preview", False)), False)
+        if dry_run:
+            return jsonify({
+                "success": True,
+                "dry_run": True,
+                "deleted": None,
+                "would_delete": name,
+                "destructive_plan": plan,
+                "confirm_token": plan["confirm_token"],
+            })
+        if not verify_destructive_confirm_token(plan, data.get("confirm_token")):
+            return jsonify(destructive_confirmation_required_response(plan)), 409
+
+        tombstone = create_user_tombstone(
+            "preset",
+            name,
+            presets[name],
+            source_file="user_presets.json",
+            metadata={"route": "/presets/delete"},
+        )
+        del presets[name]
+        save_presets(presets)
+    return jsonify({
+        "success": True,
+        "deleted": name,
+        "tombstone": summarize_user_tombstone(tombstone),
+    })
+
+
+# ---------------------------------------------------------------------------
+# Favorites / Pinned Operations
+# ---------------------------------------------------------------------------
+@settings_bp.route("/favorites", methods=["GET"])
+def get_favorites():
+    """Get user's favorite/pinned operations."""
+    return jsonify(load_favorites())
+
+
+@settings_bp.route("/favorites/save", methods=["POST"])
+@require_csrf
+def save_favorites_route():
+    """Save user's favorite operations list."""
+    data, error = _require_json_object()
+    if error:
+        return error
+    favorites = data.get("favorites", [])
+    if not isinstance(favorites, list):
+        return jsonify({"error": "favorites must be a list"}), 400
+    if len(favorites) > 200:
+        return jsonify({"error": "Too many favorites (max 200)"}), 400
+    with user_file_lock("favorites.json"):
+        current = load_favorites()
+        tombstone = None
+        if current != favorites:
+            tombstone = create_user_tombstone(
+                "favorites",
+                "default",
+                current,
+                source_file="favorites.json",
+                action="replace",
+                metadata={"route": "/favorites/save", "new_count": len(favorites)},
+            )
+        save_favorites(favorites)
+    response = {"success": True}
+    if tombstone:
+        response["tombstone"] = summarize_user_tombstone(tombstone)
+    return jsonify(response)
+
+
+# ---------------------------------------------------------------------------
+# Custom Workflow Templates
+# ---------------------------------------------------------------------------
+@settings_bp.route("/workflows/list", methods=["GET"])
+def list_workflows():
+    """List saved custom workflow templates."""
+    return jsonify(load_workflows())
+
+
+@settings_bp.route("/workflows/save", methods=["POST"])
+@require_csrf
+def save_workflow():
+    """Save a custom workflow template."""
+    data, error = _require_json_object()
+    if error:
+        return error
+    name = data.get("name", "").strip()
+    steps = data.get("steps", [])
+    if not name:
+        return jsonify({"error": "Name required"}), 400
+    if len(name) > 100:
+        return jsonify({"error": "Workflow name too long"}), 400
+    if not steps or not isinstance(steps, list):
+        return jsonify({"error": "Steps must be a non-empty list"}), 400
+    if len(steps) > 50:
+        return jsonify({"error": "Too many workflow steps (max 50)"}), 400
+    try:
+        plan_template = compile_workflow_template(steps)
+    except ValueError as exc:
+        return jsonify({"error": str(exc), "code": "INVALID_WORKFLOW"}), 400
+    if (plan_template.get("preflight") or {}).get("status") == "blocked":
+        return jsonify({
+            "error": "Workflow cannot be saved until preflight blockers are resolved",
+            "code": "WORKFLOW_PREFLIGHT_BLOCKED",
+            "plan": plan_template,
+        }), 400
+    with user_file_lock("workflows.json"):
+        workflows = load_workflows()
+        # Update or add
+        found = False
+        for wf in workflows:
+            if wf.get("name") == name:
+                wf["steps"] = steps
+                wf["definition_id"] = plan_template.get("definition_id", "")
+                wf["plan_template"] = plan_template
+                wf["updated"] = time.time()
+                found = True
+                break
+        if not found:
+            if len(workflows) >= 100:
+                return jsonify({"error": "Too many workflows (max 100)"}), 400
+            workflows.append({
+                "name": name,
+                "steps": steps,
+                "definition_id": plan_template.get("definition_id", ""),
+                "plan_template": plan_template,
+                "created": time.time(),
+            })
+        save_workflows(workflows)
+    return jsonify({
+        "success": True,
+        "definition_id": plan_template.get("definition_id", ""),
+        "plan_template": plan_template,
+    })
+
+
+@settings_bp.route("/workflows/delete", methods=["POST"])
+@require_csrf
+def delete_workflow():
+    """Delete a custom workflow template.
+
+    Returns 400 when ``name`` is missing/empty and 404 when no workflow
+    with that name is registered. Previously this silently succeeded for
+    both cases, which let stale UI state look saved while it wasn't.
+    """
+    data, error = _require_json_object()
+    if error:
+        return error
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({
+            "error": "name is required",
+            "code": "INVALID_INPUT",
+            "suggestion": "Pass the workflow name to delete in the JSON body.",
+        }), 400
+    with user_file_lock("workflows.json"):
+        workflows = load_workflows()
+        remaining = [wf for wf in workflows if wf.get("name") != name]
+        if len(remaining) == len(workflows):
+            return jsonify({
+                "error": f"Workflow '{name}' not found",
+                "code": "NOT_FOUND",
+                "suggestion": "Refresh the workflow list — it may have been deleted by another client.",
+            }), 404
+        removed = next((wf for wf in workflows if wf.get("name") == name), None)
+        record = build_user_data_destructive_record(
+            "workflow",
+            name,
+            removed or {"name": name},
+            source_file="workflows.json",
+            route="/workflows/delete",
+        )
+        plan = build_destructive_plan(
+            "user_data.workflow.delete",
+            records=[record],
+            metadata={"route": "/workflows/delete", "name": name, "tombstone": True},
+            reversible=True,
+        )
+        dry_run = safe_bool(data.get("dry_run", data.get("preview", False)), False)
+        if dry_run:
+            return jsonify({
+                "success": True,
+                "dry_run": True,
+                "deleted": None,
+                "would_delete": name,
+                "destructive_plan": plan,
+                "confirm_token": plan["confirm_token"],
+            })
+        if not verify_destructive_confirm_token(plan, data.get("confirm_token")):
+            return jsonify(destructive_confirmation_required_response(plan)), 409
+
+        tombstone = create_user_tombstone(
+            "workflow",
+            name,
+            removed or {"name": name},
+            source_file="workflows.json",
+            metadata={"route": "/workflows/delete"},
+        )
+        save_workflows(remaining)
+    return jsonify({
+        "success": True,
+        "deleted": name,
+        "tombstone": summarize_user_tombstone(tombstone),
+    })
+
+
+@settings_bp.route("/settings/tombstones", methods=["GET"])
+def list_tombstones_route():
+    """List recent user-data tombstone snapshots."""
+    kind = (request.args.get("kind") or "").strip() or None
+    entries = [summarize_user_tombstone(entry) for entry in list_user_tombstones(kind)]
+    return jsonify({
+        "tombstones": entries,
+        "total": len(entries),
+    })
+
+
+@settings_bp.route("/settings/tombstones/restore", methods=["POST"])
+@require_csrf
+def restore_tombstone_route():
+    """Restore one user-data tombstone snapshot."""
+    data, error = _require_json_object()
+    if error:
+        return error
+    tombstone_id = (data.get("id") or data.get("tombstone_id") or "").strip()
+    if not tombstone_id:
+        return jsonify({
+            "error": "id is required",
+            "code": "INVALID_INPUT",
+            "suggestion": "Pass the tombstone id returned by the delete or list response.",
+        }), 400
+    entry = get_user_tombstone(tombstone_id)
+    if entry is None:
+        return jsonify({
+            "error": "Tombstone not found",
+            "code": "NOT_FOUND",
+            "suggestion": "Refresh the tombstone list; the snapshot may have expired or been pruned.",
+        }), 404
+    restored, restore_error = _restore_tombstone(entry)
+    if restore_error:
+        return jsonify({"error": restore_error, "code": "INVALID_INPUT"}), 400
+    return jsonify({
+        "success": True,
+        "restored": summarize_user_tombstone(restored or entry),
+    })
+
+
+# ---------------------------------------------------------------------------
+# Settings Import/Export
+# ---------------------------------------------------------------------------
+@settings_bp.route("/settings/export", methods=["GET"])
+def export_settings():
+    """Export all OpenCut settings (presets, favorites, workflows) as a single JSON bundle."""
+    bundle = {
+        "schema_version": SETTINGS_SCHEMA_VERSION,
+        "version": __version__,
+        "exported": time.time(),
+    }
+    try:
+        bundle["presets"] = load_presets()
+    except Exception:
+        bundle["presets"] = {}
+    try:
+        bundle["favorites"] = load_favorites()
+    except Exception:
+        bundle["favorites"] = []
+    try:
+        bundle["workflows"] = load_workflows()
+    except Exception:
+        bundle["workflows"] = []
+    return jsonify(bundle)
+
+
+@settings_bp.route("/settings/import", methods=["POST"])
+@require_csrf
+def import_settings():
+    """Import settings bundle (presets, favorites, workflows)."""
+    data, error = _require_json_object()
+    if error:
+        return error
+
+    # Bundles created before schema versioning remain importable as version 1,
+    # while future bundles fail before any section is written.  This keeps a
+    # malformed or newer file non-destructive and gives the panel an actionable
+    # response instead of silently dropping fields.
+    raw_schema_version = data.get("schema_version", SETTINGS_SCHEMA_VERSION)
+    if isinstance(raw_schema_version, bool) or not isinstance(raw_schema_version, int):
+        return jsonify({
+            "error": "Settings bundle schema_version must be an integer",
+            "code": "INVALID_SETTINGS_SCHEMA",
+            "suggestion": "Export a fresh OpenCut settings bundle and import that file.",
+        }), 400
+    if raw_schema_version < 1:
+        return jsonify({
+            "error": f"Settings bundle schema version {raw_schema_version} is invalid",
+            "code": "INVALID_SETTINGS_SCHEMA",
+            "suggestion": "Export a fresh OpenCut settings bundle and import that file.",
+        }), 400
+    if raw_schema_version > SETTINGS_SCHEMA_VERSION:
+        return jsonify({
+            "error": f"Settings bundle schema version {raw_schema_version} is newer than supported version {SETTINGS_SCHEMA_VERSION}",
+            "code": "UNSUPPORTED_SETTINGS_SCHEMA",
+            "suggestion": "Use the same or a newer OpenCut build to import this settings file.",
+        }), 400
+    imported = []
+    sections = {}
+
+    def new_section():
+        return {"imported": 0, "skipped": 0, "reasons": []}
+
+    def record_skip(section, reason, count=1):
+        section["skipped"] += count
+        if len(section["reasons"]) < 20:
+            section["reasons"].append(str(reason))
+
+    if "presets" in data:
+        preset_section = new_section()
+        sections["presets"] = preset_section
+        if not isinstance(data["presets"], dict):
+            record_skip(preset_section, "Presets must be an object")
+        else:
+            valid_presets = {}
+            for name, preset in data["presets"].items():
+                if not isinstance(name, str):
+                    record_skip(preset_section, "Preset name is not a string")
+                    continue
+                clean_name = name.strip()
+                if not clean_name or len(clean_name) > 100:
+                    record_skip(preset_section, f"Invalid preset name: {name!r}")
+                    continue
+                if not isinstance(preset, dict):
+                    record_skip(preset_section, f"Preset '{clean_name}' is not an object")
+                    continue
+                valid_presets[clean_name] = preset
+            preset_section["imported"] = len(valid_presets)
+            existing = load_presets()
+            existing.update(valid_presets)
+            if len(existing) > 500:
+                return jsonify({"error": "Too many presets (max 500)"}), 400
+            save_presets(existing)
+            if preset_section["imported"]:
+                imported.append("presets")
+
+    if "favorites" in data:
+        favorite_section = new_section()
+        sections["favorites"] = favorite_section
+        if not isinstance(data["favorites"], list):
+            record_skip(favorite_section, "Favorites must be a list")
+        else:
+            favorites = data["favorites"]
+            if len(favorites) > 200:
+                record_skip(
+                    favorite_section,
+                    f"{len(favorites) - 200} favorite(s) skipped; maximum is 200",
+                    len(favorites) - 200,
+                )
+            valid_favs = []
+            for fav in favorites[:200]:
+                if isinstance(fav, str) and len(fav) <= 200:
+                    valid_favs.append(fav)
+                elif isinstance(fav, dict) and isinstance(fav.get("id"), str):
+                    # Structured favorites with id + optional label
+                    valid_favs.append({
+                        k: v for k, v in fav.items()
+                        if isinstance(k, str) and len(str(k)) <= 100
+                        and isinstance(v, (str, int, float, bool))
+                    })
+                else:
+                    record_skip(favorite_section, "Favorite must be a short string or an object with a string id")
+            favorite_section["imported"] = len(valid_favs)
+            save_favorites(valid_favs)
+            if favorite_section["imported"]:
+                imported.append("favorites")
+
+    if "workflows" in data:
+        workflow_section = new_section()
+        sections["workflows"] = workflow_section
+        if not isinstance(data["workflows"], list):
+            record_skip(workflow_section, "Workflows must be a list")
+        else:
+            workflows = data["workflows"]
+            if len(workflows) > 100:
+                record_skip(
+                    workflow_section,
+                    f"{len(workflows) - 100} workflow(s) skipped; maximum is 100",
+                    len(workflows) - 100,
+                )
+            valid_wfs = []
+            for index, wf in enumerate(workflows[:100], start=1):
+                if not isinstance(wf, dict):
+                    record_skip(workflow_section, f"Workflow {index} is not an object")
+                    continue
+                name = wf.get("name")
+                if not isinstance(name, str) or not name.strip() or len(name.strip()) > 100:
+                    record_skip(workflow_section, f"Workflow {index} has an invalid name")
+                    continue
+                valid, reason = validate_workflow_steps(wf.get("steps", []))
+                if not valid:
+                    record_skip(workflow_section, f"Workflow '{name.strip()}': {reason}")
+                    continue
+                clean_workflow = dict(wf)
+                clean_workflow["name"] = name.strip()
+                valid_wfs.append(clean_workflow)
+            # Merge with existing workflows (update by name, append new ones)
+            existing_wfs = load_workflows()
+            existing_names = {wf.get("name"): i for i, wf in enumerate(existing_wfs)}
+            for wf in valid_wfs:
+                name = wf["name"]
+                if name in existing_names:
+                    existing_wfs[existing_names[name]] = wf
+                    workflow_section["imported"] += 1
+                elif len(existing_wfs) >= 100:
+                    record_skip(
+                        workflow_section,
+                        f"Workflow '{name}' skipped; maximum is 100",
+                    )
+                else:
+                    existing_names[name] = len(existing_wfs)
+                    existing_wfs.append(wf)
+                    workflow_section["imported"] += 1
+            save_workflows(existing_wfs)
+            if workflow_section["imported"]:
+                imported.append("workflows")
+
+    return jsonify({"success": True, "imported": imported, **sections})
+
+
+# ---------------------------------------------------------------------------
+# Job Time Estimation
+# ---------------------------------------------------------------------------
+@settings_bp.route("/system/estimate-time", methods=["POST"])
+@require_csrf
+def estimate_job_time():
+    """Estimate processing time based on historical data."""
+    data, error = _require_json_object()
+    if error:
+        return error
+    job_type = data.get("type", "")
+    file_duration = safe_float(data.get("file_duration", 0))
+    return jsonify(compute_estimate(job_type, file_duration))
+
+
+# ---------------------------------------------------------------------------
+# Log Export
+# ---------------------------------------------------------------------------
+@settings_bp.route("/logs/export", methods=["GET"])
+def export_logs():
+    """Export the crash log file for debugging."""
+    crash_log = os.path.join(OPENCUT_DIR, "crash.log")
+    if not os.path.isfile(crash_log):
+        return jsonify({"error": "No crash log found"}), 404
+    return send_file(crash_log, mimetype="text/plain", as_attachment=True,
+                     download_name="opencut_crash.log")
+
+
+@settings_bp.route("/logs/tail", methods=["GET"])
+def tail_logs():
+    """Return the last N lines from the server log, optionally filtered.
+
+    Query params:
+        lines (int): Number of lines to return (default 100, max 500)
+        level (str): Filter by log level (DEBUG, INFO, WARNING, ERROR)
+        job_id (str): Filter by job ID
+    """
+    from opencut.server import LOG_FILE
+    lines = safe_int(request.args.get("lines", 100), default=100, min_val=1, max_val=500)
+    level_filter = request.args.get("level", "").upper()
+    job_filter = request.args.get("job_id", "")
+    if not os.path.isfile(LOG_FILE):
+        return jsonify({"lines": [], "total": 0})
+    try:
+        # Read only the tail of the file to avoid loading multi-MB logs
+        # into memory. When filters are active, read more lines to ensure
+        # enough matches survive filtering.
+        read_limit = lines * 10 if (level_filter or job_filter) else lines * 2
+        read_limit = max(read_limit, 500)
+        candidate_lines = _read_tail_lines(LOG_FILE, read_limit)
+    except OSError:
+        return jsonify({"lines": [], "total": 0})
+    # Filter
+    result = []
+    for line in candidate_lines:
+        record = _parse_log_line(line)
+        if level_filter and record["level"] != level_filter:
+            continue
+        if job_filter and job_filter not in record["raw"] and job_filter != record["job_id"]:
+            continue
+        result.append(record["raw"])
+    # Tail
+    tail = result[-lines:]
+    return jsonify({"lines": tail, "total": len(result)})
+
+
+@settings_bp.route("/logs/clear", methods=["POST"])
+@require_csrf
+def clear_logs():
+    """Clear the crash log and active server log."""
+    crash_log = os.path.join(OPENCUT_DIR, "crash.log")
+    try:
+        from opencut.server import LOG_FILE
+
+        data = get_json_dict() if request.data else {}
+        dry_run = safe_bool(data.get("dry_run", data.get("preview", False)), False)
+        targets = []
+        for path in (crash_log, LOG_FILE):
+            exists = os.path.isfile(path)
+            targets.append({
+                "path": path,
+                "name": os.path.basename(path),
+                "category": "log-file",
+                "exists": exists,
+                "bytes": os.path.getsize(path) if exists else 0,
+            })
+        total_bytes = sum(int(target["bytes"]) for target in targets)
+        plan = build_destructive_plan(
+            "logs.clear",
+            targets=targets,
+            metadata={"total_bytes": total_bytes, "existing_count": sum(1 for target in targets if target["exists"])},
+            reversible=False,
+        )
+        if dry_run:
+            return jsonify({
+                "success": True,
+                "dry_run": True,
+                "plan": plan,
+                "total_bytes": total_bytes,
+                "cleared": [],
+            })
+        if not verify_destructive_confirm_token(plan, data.get("confirm_token")):
+            return jsonify(destructive_confirmation_required_response(plan)), 409
+        cleared = []
+        for target in targets:
+            if not target["exists"]:
+                continue
+            with open(target["path"], "w", encoding="utf-8"):
+                pass
+            cleared.append(target["name"])
+        return jsonify({
+            "success": True,
+            "dry_run": False,
+            "plan": plan,
+            "total_bytes": total_bytes,
+            "cleared": cleared,
+        })
+    except OSError as e:
+        return safe_error(e, "clear_logs")
+
+
+# ---------------------------------------------------------------------------
+# Job Retry
+# ---------------------------------------------------------------------------
+@settings_bp.route("/jobs/retry/<job_id>", methods=["POST"])
+@require_csrf
+def retry_job(job_id):
+    """Retry a failed/cancelled job by re-submitting its original parameters."""
+    from opencut.jobs import _get_job_copy
+
+    job = _get_job_copy(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+    if job.get("status") not in ("error", "cancelled"):
+        return jsonify({"error": "Only failed or cancelled jobs can be retried"}), 400
+
+    job_type = job.get("type", "")
+    filepath = job.get("filepath", "")
+    if not job_type or not filepath:
+        return jsonify({"error": "Cannot retry: missing job type or filepath"}), 400
+
+    return jsonify({
+        "retry_available": True,
+        "original_type": job_type,
+        "original_filepath": filepath,
+        "message": "Use the original endpoint to re-run this operation",
+    })
+
+
+# ---------------------------------------------------------------------------
+# Local-Only Privacy Mode
+# ---------------------------------------------------------------------------
+
+@settings_bp.route("/settings/local-only", methods=["GET"])
+def get_local_only_setting():
+    """Get local-only privacy mode status."""
+    try:
+        from ..config import is_local_only
+        from ..user_data import load_local_only_setting
+    except ImportError:
+        from opencut.config import is_local_only
+        from opencut.user_data import load_local_only_setting
+    setting = load_local_only_setting()
+    setting["active"] = is_local_only()
+    setting["credential_store"] = credential_store.status().to_dict()
+    return jsonify(setting)
+
+
+@settings_bp.route("/settings/local-only", methods=["POST"])
+@require_csrf
+def save_local_only_setting_route():
+    """Toggle local-only privacy mode."""
+    try:
+        from ..user_data import save_local_only_setting
+    except ImportError:
+        from opencut.user_data import save_local_only_setting
+    data, error = _require_json_object()
+    if error:
+        return error
+    enabled = safe_bool(data.get("enabled", False), default=False)
+    save_local_only_setting(enabled)
+    return jsonify({"success": True, "enabled": enabled})
+
+
+# ---------------------------------------------------------------------------
+# LLM Settings
+# ---------------------------------------------------------------------------
+
+@settings_bp.route("/settings/llm", methods=["GET"])
+def get_llm_settings():
+    """Get LLM provider configuration."""
+    try:
+        from ..user_data import load_llm_settings
+    except ImportError:
+        from opencut.user_data import load_llm_settings
+    settings = load_llm_settings()
+    # Never return the API key in full — mask it
+    if settings.get("api_key"):
+        settings = dict(settings)
+        settings["api_key"] = "***" + settings["api_key"][-4:] if len(settings["api_key"]) > 4 else "****"
+    return jsonify(settings)
+
+
+@settings_bp.route("/settings/llm", methods=["POST"])
+@require_csrf
+def save_llm_settings_route():
+    """Save LLM provider configuration."""
+    try:
+        from ..user_data import load_llm_settings, save_llm_settings
+    except ImportError:
+        from opencut.user_data import load_llm_settings, save_llm_settings
+    data, error = _require_json_object()
+    if error:
+        return error
+    raw_api_key = data.get("api_key", "")
+    if raw_api_key is not None and not isinstance(raw_api_key, str):
+        return _invalid_input_response("'api_key' must be a string")
+    current = load_llm_settings()
+    # Don't overwrite key if masked value sent back
+    api_key = str(raw_api_key or "")
+    if api_key.startswith("***"):
+        data["api_key"] = current.get("api_key", "")
+    normalized = {k: v for k, v in data.items() if k in current}
+    if "provider" in normalized:
+        normalized["provider"] = str(normalized["provider"]).strip()[:50] or current.get("provider", "ollama")
+    if "model" in normalized:
+        normalized["model"] = str(normalized["model"]).strip()[:100] or current.get("model", "llama3")
+    if "base_url" in normalized:
+        normalized["base_url"] = str(normalized["base_url"]).strip()[:500]
+    if "api_key" in normalized:
+        normalized["api_key"] = str(normalized["api_key"]).strip()
+    if "max_tokens" in normalized:
+        normalized["max_tokens"] = safe_int(
+            normalized["max_tokens"],
+            default=current.get("max_tokens", 2000),
+            min_val=1,
+            max_val=32768,
+        )
+    if "temperature" in normalized:
+        normalized["temperature"] = safe_float(
+            normalized["temperature"],
+            default=current.get("temperature", 0.3),
+            min_val=0.0,
+            max_val=2.0,
+        )
+    current.update(normalized)
+    save_llm_settings(current)
+    return jsonify({"success": True})
+
+
+# ---------------------------------------------------------------------------
+# Footage Index Settings
+# ---------------------------------------------------------------------------
+
+@settings_bp.route("/settings/footage-index", methods=["GET"])
+def get_footage_index_config():
+    try:
+        from ..user_data import load_footage_index_config
+    except ImportError:
+        from opencut.user_data import load_footage_index_config
+    return jsonify(load_footage_index_config())
+
+
+@settings_bp.route("/settings/footage-index", methods=["POST"])
+@require_csrf
+def save_footage_index_config_route():
+    try:
+        from ..user_data import load_footage_index_config, save_footage_index_config
+    except ImportError:
+        from opencut.user_data import load_footage_index_config, save_footage_index_config
+    data, error = _require_json_object()
+    if error:
+        return error
+    config = load_footage_index_config()
+    config.update({k: v for k, v in data.items() if k in config})
+    save_footage_index_config(config)
+    return jsonify({"success": True})
+
+
+# ---------------------------------------------------------------------------
+# Loudness Target
+# ---------------------------------------------------------------------------
+
+@settings_bp.route("/settings/loudness-target", methods=["GET"])
+def get_loudness_target():
+    try:
+        from ..user_data import load_loudness_target
+    except ImportError:
+        from opencut.user_data import load_loudness_target
+    return jsonify(load_loudness_target())
+
+
+@settings_bp.route("/settings/loudness-target", methods=["POST"])
+@require_csrf
+def save_loudness_target_route():
+    try:
+        from ..user_data import load_loudness_target, save_loudness_target
+    except ImportError:
+        from opencut.user_data import load_loudness_target, save_loudness_target
+    data, error = _require_json_object()
+    if error:
+        return error
+    settings = load_loudness_target()
+    settings.update({k: v for k, v in data.items() if k in settings})
+    save_loudness_target(settings)
+    return jsonify({"success": True})
+
+
+# ---------------------------------------------------------------------------
+# Multicam Defaults
+# ---------------------------------------------------------------------------
+
+@settings_bp.route("/settings/multicam", methods=["GET"])
+def get_multicam_config():
+    try:
+        from ..user_data import load_multicam_config
+    except ImportError:
+        from opencut.user_data import load_multicam_config
+    return jsonify(load_multicam_config())
+
+
+@settings_bp.route("/settings/multicam", methods=["POST"])
+@require_csrf
+def save_multicam_config_route():
+    try:
+        from ..user_data import load_multicam_config, save_multicam_config
+    except ImportError:
+        from opencut.user_data import load_multicam_config, save_multicam_config
+    data, error = _require_json_object()
+    if error:
+        return error
+    config = load_multicam_config()
+    config.update({k: v for k, v in data.items() if k in config})
+    save_multicam_config(config)
+    return jsonify({"success": True})
+
+
+# ---------------------------------------------------------------------------
+# Auto Zoom Presets
+# ---------------------------------------------------------------------------
+
+@settings_bp.route("/settings/auto-zoom", methods=["GET"])
+def get_auto_zoom_presets():
+    try:
+        from ..user_data import load_auto_zoom_presets
+    except ImportError:
+        from opencut.user_data import load_auto_zoom_presets
+    return jsonify(load_auto_zoom_presets())
+
+
+@settings_bp.route("/settings/auto-zoom", methods=["POST"])
+@require_csrf
+def save_auto_zoom_presets_route():
+    try:
+        from ..user_data import load_auto_zoom_presets, save_auto_zoom_presets
+    except ImportError:
+        from opencut.user_data import load_auto_zoom_presets, save_auto_zoom_presets
+    data, error = _require_json_object()
+    if error:
+        return error
+    presets = load_auto_zoom_presets()
+    presets.update({k: v for k, v in data.items() if k in presets})
+    save_auto_zoom_presets(presets)
+    return jsonify({"success": True})
+
+
+# ---------------------------------------------------------------------------
+# Chapter Generation Defaults
+# ---------------------------------------------------------------------------
+
+@settings_bp.route("/settings/chapters", methods=["GET"])
+def get_chapter_defaults():
+    try:
+        from ..user_data import load_chapter_defaults
+    except ImportError:
+        from opencut.user_data import load_chapter_defaults
+    return jsonify(load_chapter_defaults())
+
+
+@settings_bp.route("/settings/chapters", methods=["POST"])
+@require_csrf
+def save_chapter_defaults_route():
+    try:
+        from ..user_data import load_chapter_defaults, save_chapter_defaults
+    except ImportError:
+        from opencut.user_data import load_chapter_defaults, save_chapter_defaults
+    data, error = _require_json_object()
+    if error:
+        return error
+    defaults = load_chapter_defaults()
+    defaults.update({k: v for k, v in data.items() if k in defaults})
+    save_chapter_defaults(defaults)
+    return jsonify({"success": True})
+
+
+# ---------------------------------------------------------------------------
+# Project Templates
+# ---------------------------------------------------------------------------
+
+def _load_builtin_templates():
+    """Load built-in project templates from the data directory."""
+    try:
+        with resources.files("opencut.data").joinpath("project_templates.json").open(
+            "r", encoding="utf-8"
+        ) as f:
+            return json.load(f)
+    except Exception as exc:
+        logger.warning("Failed to load built-in templates: %s", exc)
+        return []
+
+
+def _load_user_templates():
+    """Load user-saved templates from ~/.opencut/templates/."""
+    templates_dir = os.path.join(OPENCUT_DIR, "templates")
+    templates = []
+    if not os.path.isdir(templates_dir):
+        return templates
+    for fname in os.listdir(templates_dir):
+        if not fname.endswith(".json"):
+            continue
+        try:
+            fpath = os.path.join(templates_dir, fname)
+            with open(fpath, "r", encoding="utf-8") as f:
+                tpl = json.load(f)
+            if isinstance(tpl, dict) and tpl.get("id"):
+                tpl["user_template"] = True
+                templates.append(tpl)
+        except Exception:
+            continue
+    return templates
+
+
+@settings_bp.route("/templates/list", methods=["GET"])
+def list_templates():
+    """Return all project templates (built-in + user-saved)."""
+    builtin = _load_builtin_templates()
+    user = _load_user_templates()
+    return jsonify({"builtin": builtin, "builtins": builtin, "user": user})
+
+
+@settings_bp.route("/templates/save", methods=["POST"])
+@require_csrf
+def save_template():
+    """Save a custom project template."""
+    data, error = _require_json_object()
+    if error:
+        return error
+    name = data.get("name", "").strip()
+    if not name:
+        return jsonify({"error": "Template name required"}), 400
+    if len(name) > 100:
+        return jsonify({"error": "Template name too long"}), 400
+    templates_dir = os.path.join(OPENCUT_DIR, "templates")
+    os.makedirs(templates_dir, exist_ok=True)
+    try:
+        safe_id, fpath, is_update = _resolve_template_slot(templates_dir, name)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    existing = [f for f in os.listdir(templates_dir) if f.endswith(".json")]
+    if len(existing) >= 50 and not is_update:
+        return jsonify({"error": "Too many user templates (max 50)"}), 400
+    tpl = {
+        "id": "user_" + safe_id,
+        "name": name,
+        "description": data.get("description", "Custom template"),
+        "export": data.get("export", {}),
+        "audio": data.get("audio", {}),
+        "captions": data.get("captions", {}),
+        "aspect": data.get("aspect", "16:9"),
+        "saved": time.time(),
+    }
+    # Atomic write via temp file + rename to prevent corruption
+    import tempfile
+    fd, tmp_path = tempfile.mkstemp(dir=templates_dir, suffix=".tmp", prefix=safe_id + ".")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(tpl, f, indent=2)
+        os.replace(tmp_path, fpath)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+    return jsonify({"success": True, "template": tpl})
+
+
+@settings_bp.route("/templates/apply", methods=["POST"])
+@require_csrf
+def apply_template():
+    """Apply a template's settings. Returns the settings to apply on the frontend."""
+    data, error = _require_json_object()
+    if error:
+        return error
+    template_id = data.get("id", "").strip()
+    if not template_id:
+        return jsonify({"error": "Template ID required"}), 400
+    # Search built-in first, then user templates
+    all_templates = _load_builtin_templates() + _load_user_templates()
+    tpl = None
+    for t in all_templates:
+        if t.get("id") == template_id:
+            tpl = t
+            break
+    if not tpl:
+        return jsonify({"error": "Template not found"}), 404
+    return jsonify({"success": True, "template": tpl})

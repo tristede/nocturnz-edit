@@ -1,0 +1,294 @@
+[build-system]
+# PEP 639 SPDX license expressions need setuptools 77.0+.
+requires = ["setuptools>=77.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+# Distribution/PyPI token is disambiguated from opencut.app (the browser-based
+# editor at github.com/OpenCut-app/OpenCut, ~48K stars) which would otherwise
+# dominate search. The "-ppro" qualifier signals the Adobe Premiere Pro
+# integration that uniquely identifies this project. The product name
+# ("OpenCut"), the import package (`opencut`), the CLI commands, and the CEP/UXP
+# extension IDs are unchanged. See README "Naming & distribution".
+name = "opencut-ppro"
+version = "1.55.1"
+description = "OpenCut for Premiere Pro - local AI video editing automation (captions, audio, VFX) for Adobe Premiere Pro via CEP/UXP, CLI, REST, and MCP"
+readme = "README.md"
+# PEP 639: an SPDX expression, not the deprecated table form. The
+# "License :: OSI Approved" classifier is deprecated alongside it and
+# setuptools rejects declaring both.
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11,<3.15"
+authors = [
+    {name = "OpenCut Contributors"},
+]
+keywords = [
+    "video-editing", "premiere-pro", "silence-removal", "captions", "whisper",
+    "ffmpeg", "podcast", "ai-video", "audio-processing", "visual-effects",
+    "chromakey", "upscaling", "face-enhancement", "music-generation",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: End Users/Desktop",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+]
+
+dependencies = [
+    # CVE-2026-7246 / PYSEC-2026-2132 — command injection in click.edit() via the
+    # editor shell invocation, fixed in Click 8.3.3. Floor above it in every lane.
+    "click>=8.3.3,<9",
+    "rich>=13.0,<14",
+    "flask>=3.1.3,<4",
+    "flask-cors>=6.0,<7",
+    "waitress>=3.0.1,<4",
+    "python-json-logger>=2.0,<3",
+    "psutil>=5.9",
+    "keyring>=25.7,<26",
+    # Ed25519 verification for authenticated plugin artifacts. PyCA
+    # cryptography is Apache-2.0 OR BSD-3-Clause and supports Python 3.11+.
+    # 50.0.0 fixes the 2026 PKCS#7 oracle, certificate-chain DoS, and DNS
+    # constraint advisories in the verifier used for authenticated plugins.
+    "cryptography>=50.0.0,<51",
+    # RA-23 — Werkzeug/Jinja2 ship transitively with flask and are always
+    # present. Pin the resolver floor to the same security level the lockfile
+    # already holds so `pip install opencut` (no lock) cannot pull the
+    # vulnerable releases: Werkzeug CVE-2026-21860 / CVE-2025-66221
+    # (safe_join Windows device-name DoS, fixed 3.1.5), CVE-2026-27199
+    # (safe_join Windows device-name bypass causing hanging reads, fixed
+    # 3.1.6), and Jinja2 CVE-2025-27516 (sandbox breakout, fixed 3.1.6).
+    "Werkzeug>=3.1.6",
+    "Jinja2>=3.1.6",
+    # 1.26 rejects absolute, UNC, drive-relative, and traversal filenames on
+    # every platform before local_dir download paths are created (CVE-2026-15717).
+    "huggingface-hub>=1.26,<2",
+]
+
+[project.optional-dependencies]
+standard = [
+    "faster-whisper>=1.1,<2",
+    # PySceneDetect 0.7 requires the OpenCV distribution directly. Standard
+    # and video use that provider rather than declaring a second cv2 package.
+    "opencv-python==4.14.0.94",
+    "Pillow>=12.3.0,<13",
+    "numpy>=1.24",
+    "librosa>=0.10,<1",
+    # F123 — pydub dropped (vestigial; not imported by the OpenCut tree;
+    # complicates Python 3.13 because pydub still imports stdlib audioop).
+    # See opencut.core.audioop_shim for the optional 3.13 bridge if a
+    # downstream plugin needs pydub.
+    "scenedetect>=0.7.1,<1",
+    # RA-23 — requests/urllib3 enter transitively via faster-whisper's
+    # huggingface-hub fetch path. Floor them to the lockfile security level so
+    # this lane cannot resolve urllib3<2.7.0 (CVE-2026-21441 decompression-bomb
+    # DoS; CVE-2026-44431 sensitive headers forwarded across origins on proxied
+    # low-level redirects; CVE-2026-44432 decompression-bomb safeguards bypassed
+    # in parts of the streaming API — the latter two fixed only in 2.7.0) or
+    # requests<2.33.0 (CVE-2026-25645).
+    "requests>=2.33.0",
+    "urllib3>=2.7.0",
+]
+captions = [
+    "faster-whisper>=1.1,<2",
+    "Pillow>=12.3.0,<13",
+]
+audio = [
+    # python-audio-separator is the maintained separation backend and the
+    # route default. Demucs was archived upstream on 2024-04-24 and stays only
+    # so existing callers that name a Demucs-only model keep working.
+    "audio-separator>=0.44,<1",
+    "demucs>=4.0,<5",
+    "pedalboard>=0.9,<1",
+    "librosa>=0.10,<1",
+    # F123 — pydub dropped (see [standard] extra for rationale).
+    "edge-tts>=6.1,<8",
+]
+video = [
+    "opencv-python==4.14.0.94",
+    "Pillow>=12.3.0,<13",
+    "numpy>=1.24",
+    "scenedetect>=0.7.1,<1",
+]
+ai = [
+    "realesrgan>=0.3,<1",
+    "rembg>=2.0,<3",
+    "gfpgan>=1.3,<2",
+    "insightface>=0.7,<1",
+    "onnxruntime>=1.26,<2",
+    # CVE-2026-24747 torch.load RCE bypasses weights_only; scan pickle weights.
+    "picklescan>=1.0.3",
+]
+ai-gpu = [
+    "realesrgan>=0.3,<1",
+    "rembg>=2.0,<3",
+    "gfpgan>=1.3,<2",
+    "insightface>=0.7,<1",
+    "onnxruntime-gpu>=1.26,<2",
+    "picklescan>=1.0.3",
+]
+diarize = [
+    "pyannote.audio>=4.0,<5",
+]
+nemo-asr = [
+    # Security hold: NeMo 2.7.3 requires huggingface-hub<1, but filename
+    # containment is fixed only in Hub 1.26+. Keep the named extra empty and
+    # report it as unavailable until NVIDIA publishes a compatible lane.
+]
+auto-edit = [
+    # LEGACY ONLY. Upstream rewrote auto-editor in Nim and stopped publishing
+    # to PyPI at 29.3.1 (2025-11-04), so this pin is frozen and receives no
+    # fixes: partial-lossless GOP-copy rendering, linked dissolve transitions,
+    # Parakeet TDT word timestamps, and MLT export ship only in the native
+    # binary. OpenCut resolves that binary first (OPENCUT_AUTO_EDITOR, then a
+    # bundled copy, then PATH) and only falls back to this package.
+    # Native builds: https://github.com/WyattBlue/auto-editor/releases
+    "auto-editor>=29.3,<30",
+]
+scene-ml = [
+    "transnetv2-pytorch>=1.0.5,<2",
+]
+reframe = [
+    # 1.0.0 is the GA release; the previous `<1` ceiling excluded it and
+    # pinned face-tracked reframe to the pre-GA line.
+    "mediapipe>=0.10,<2",
+]
+standards = [
+    # Independent reference validators for standards-labelled output:
+    # ttconv is the W3C TTML reference implementation, imschrm runs the IMSC
+    # Hypothetical Render Model. Both are pure Python and MIT/BSD licensed.
+    "ttconv>=1.2,<2",
+    "imschrm>=1.1,<2",
+]
+mcp = [
+    # OpenCut speaks JSON-RPC directly, but this extra is also used as
+    # reference client tooling. Keep installs on the tested 1.x API line
+    # until the 1.x -> 2.x protocol/client break has its own compatibility
+    # pass.
+    "mcp>=1.26,<2",
+]
+otio = [
+    "opentimelineio>=0.17,<0.19",
+    # F126/F263 — adapters split out of core OTIO after 0.15; pin the AAF
+    # adapter here so `opencut[otio]` keeps an Avid-compatible export
+    # path without the user installing a second extra by hand. F263 refreshed
+    # the pin to the currently published 2.x line so `opencut[all]` resolves.
+    "otio-aaf-adapter>=2.0,<3",
+]
+tts = [
+    "edge-tts>=6.1,<8",
+    "kokoro>=0.3",
+]
+depth = [
+    "torch>=2.10.0",
+    "torchvision>=0.25.0",
+    "picklescan>=1.0.3",
+    # Standalone depth/model-loading features can take the current
+    # Transformers security floor because they are not coupled to WhisperX.
+    # >=5.10 clears CVE-2026-9856 (save_pretrained path traversal via
+    # chat_template keys, affects through 5.9.x). OpenCut never calls
+    # save_pretrained, so this is hygiene for transitive callers; it does
+    "transformers>=5.10",
+]
+torch-stack = [
+    # WhisperX 3.8.x is intentionally absent: it requires torchvision<0.24,
+    # which cannot coexist with OpenCut's torchvision>=0.25/Torch>=2.10
+    # security floor. Runtime readiness reports that conflict explicitly.
+    "audio-separator>=0.44,<1",
+    "demucs>=4.0,<5",
+    "realesrgan>=0.3,<1",
+    "gfpgan>=1.3,<2",
+    "pyannote.audio>=4.0,<5",
+    "transnetv2-pytorch>=1.0.5,<2",
+    "torch>=2.10.0",
+    "torchvision>=0.25.0",
+    "picklescan>=1.0.3",
+    # >=5.10 clears CVE-2026-9856 (save_pretrained path traversal via
+    # chat_template keys, affects through 5.9.x). OpenCut never calls
+    # save_pretrained, so this is hygiene for transitive callers; it does
+    "transformers>=5.10",
+]
+all = [
+    "faster-whisper>=1.1,<2",
+    # RA-15 - [all] is the release-audited convenience lane. Torch-backed
+    # features remain explicit extras so pip-audit can fail closed here.
+    "opencv-python==4.14.0.94",
+    "Pillow>=12.3.0,<13",
+    "numpy>=1.24",
+    "librosa>=0.10,<1",
+    # F123 — pydub dropped (see [standard] extra).
+    "scenedetect>=0.7.1,<1",
+    "pedalboard>=0.9,<1",
+    "edge-tts>=6.1,<8",
+    "rembg>=2.0,<3",
+    "insightface>=0.7,<1",
+    "onnxruntime>=1.26,<2",
+    # Legacy-only; see the [auto-edit] extra for why the native binary is
+    # the supported path.
+    "auto-editor>=29.3,<30",
+    "opentimelineio>=0.17,<0.19",
+    "otio-aaf-adapter>=2.0,<3",
+    # RA-23 — floor the transitive web stack in the release-audited [all] lane
+    # so a clean resolver (no requirements-lock.txt) cannot select vulnerable
+    # urllib3/requests releases. Werkzeug/Jinja2 floors come from core deps.
+    # urllib3 2.7.0 is the fix for CVE-2026-44431 and CVE-2026-44432 as well as
+    # the earlier CVE-2026-21441.
+    "requests>=2.33.0",
+    "urllib3>=2.7.0",
+]
+dev = [
+    "pytest>=7.0,<10",
+    "pytest-cov>=4.0,<7",
+    "pytest-xdist>=3.0,<5",
+    "ruff>=0.1,<1",
+    "pre-commit>=3.0,<5",
+]
+
+[project.scripts]
+opencut = "opencut.cli:main"
+opencut-server = "opencut.server:main"
+opencut-mcp-server = "opencut.mcp_server:main"
+
+[project.urls]
+Homepage = "https://github.com/SysAdminDoc/OpenCut"
+Repository = "https://github.com/SysAdminDoc/OpenCut"
+Issues = "https://github.com/SysAdminDoc/OpenCut/issues"
+Documentation = "https://github.com/SysAdminDoc/OpenCut/wiki"
+
+[tool.setuptools.packages.find]
+include = ["opencut*"]
+
+[tool.pytest.ini_options]
+# --strict-markers so a mistyped marker fails loudly instead of silently
+# selecting nothing, and testpaths so a bare `pytest` collects the suite
+# rather than walking the whole tree.
+addopts = '-m "not integration and not slow" --strict-markers'
+testpaths = ["tests"]
+markers = [
+    "integration: requires real FFmpeg processing",
+    "slow: tests that take >30 seconds",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+# The rule selection lives here so an editor-integrated ruff applies the same
+# rules the release gate does. It used to be stated only in
+# .pre-commit-config.yaml and scripts/release_smoke.py, so an editor ran ruff's
+# default rule set and disagreed with the gate about what was clean.
+# E501 (line length) and E402 (import position) are excluded deliberately: the
+# codebase uses long evidence comments and delayed imports for optional deps.
+[tool.ruff.lint]
+# B018 came from the release gate, which selected a strictly larger set than
+# the pre-commit hook did; the union is the honest floor.
+select = ["E", "F", "I", "B018"]
+ignore = ["E501", "E402"]

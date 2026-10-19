@@ -1,0 +1,820 @@
+"""
+OpenCut Enhanced Captions Module v0.7.1
+
+Enhanced caption features:
+- WhisperX word-level phoneme alignment (wav2vec2)
+- Speaker diarization labels
+- Restricted-license NLLB / SeamlessM4T translation engines
+- ASS karaoke subtitle export with smooth fill/wipe
+- pysubs2 subtitle format conversion (SRT/ASS/VTT/MicroDVD)
+
+WhisperX extends faster-whisper with precise word boundaries.
+NLLB runs through CTranslate2 (already a dep via faster-whisper). NLLB
+and SeamlessM4T checkpoints are non-commercial-license engines, so route
+callers must explicitly opt in before either model is downloaded or used.
+"""
+
+import logging
+import os
+from typing import Callable, Dict, List, Optional, Tuple
+
+from opencut.core.model_safety import PINNED_HF_MODELS, safe_snapshot_download
+from opencut.helpers import ensure_package
+
+logger = logging.getLogger("opencut")
+
+
+class TranslationLicenseError(ValueError):
+    """Raised when a restricted translation backend was not explicitly accepted."""
+
+
+TRANSLATION_LICENSE_OPT_IN_FIELDS = (
+    "accept_restricted_license",
+    "accept_model_license",
+    "allow_restricted_translation",
+    "allow_noncommercial",
+)
+
+TRANSLATION_BACKENDS = {
+    "nllb": {
+        "id": "nllb",
+        "label": "NLLB-200 distilled 600M",
+        "license": "CC-BY-NC-4.0",
+        "commercial_safe": False,
+        "opt_in_required": True,
+        "privacy": "local-only after model download",
+        "install_component": "nllb",
+        "install_hint": "pip install ctranslate2 sentencepiece 'huggingface-hub>=1.26,<2'",
+        "model_id": "JustFrederik/nllb-200-distilled-600M-ct2-float16",
+        "upstream": "https://huggingface.co/facebook/nllb-200-distilled-600M",
+        "redistribution": (
+            "OpenCut does not bundle NLLB weights; operators must accept the "
+            "upstream non-commercial license before downloading."
+        ),
+        "notice": (
+            "NLLB-200 is CC-BY-NC-4.0 and is not selected automatically for "
+            "commercial-safe workflows. Choose it only after accepting the "
+            "non-commercial model terms."
+        ),
+    },
+    "seamless": {
+        "id": "seamless",
+        "label": "SeamlessM4T v2 Large",
+        "license": "CC-BY-NC-4.0",
+        "commercial_safe": False,
+        "opt_in_required": True,
+        "privacy": "local-only after model download",
+        "install_component": "seamless",
+        "install_hint": "pip install transformers torch sentencepiece",
+        "model_id": "facebook/seamless-m4t-v2-large",
+        "upstream": "https://huggingface.co/facebook/seamless-m4t-v2-large",
+        "redistribution": (
+            "OpenCut does not bundle SeamlessM4T weights; operators must accept "
+            "the upstream non-commercial model terms before downloading."
+        ),
+        "notice": (
+            "SeamlessM4T v2 is a non-commercial-license engine and is not "
+            "selected automatically for commercial-safe workflows. Choose it "
+            "only after accepting the model terms."
+        ),
+    },
+}
+
+
+def translation_license_opted_in(data: Dict) -> bool:
+    """Return whether a caller explicitly accepted restricted model terms."""
+    if not isinstance(data, dict):
+        return False
+    for key in TRANSLATION_LICENSE_OPT_IN_FIELDS:
+        value = data.get(key)
+        if isinstance(value, bool):
+            if value:
+                return True
+        elif isinstance(value, str) and value.strip().lower() in {"1", "true", "yes", "on", "accepted"}:
+            return True
+    return False
+
+
+def translation_backends_manifest() -> List[Dict]:
+    """Return public, JSON-safe metadata for caption translation engines."""
+    return [dict(info) for info in TRANSLATION_BACKENDS.values()]
+
+
+def get_translation_backend_info(backend: str) -> Dict:
+    backend = (backend or "auto").strip().lower()
+    return dict(TRANSLATION_BACKENDS.get(backend, {}))
+
+
+def resolve_translation_backend(backend: str = "auto", *, allow_restricted: bool = False) -> str:
+    """Resolve a requested backend without silently choosing restricted engines."""
+    requested = (backend or "auto").strip().lower()
+    if requested not in {"auto", *TRANSLATION_BACKENDS.keys()}:
+        requested = "auto"
+
+    if requested == "auto":
+        safe = [name for name, info in TRANSLATION_BACKENDS.items() if info.get("commercial_safe")]
+        if safe:
+            return safe[0]
+        raise TranslationLicenseError(
+            "No commercial-safe local caption translation backend is configured. "
+            "NLLB-200 and SeamlessM4T are non-commercial-license engines; choose "
+            "backend `nllb` or `seamless` with `accept_restricted_license=true` "
+            "only after accepting the upstream model terms."
+        )
+
+    info = TRANSLATION_BACKENDS[requested]
+    if info.get("opt_in_required") and not allow_restricted:
+        raise TranslationLicenseError(
+            f"{info['label']} uses {info['license']} and requires explicit opt-in. "
+            f"Send backend `{requested}` with `accept_restricted_license=true` "
+            "after reviewing the upstream non-commercial model terms."
+        )
+    return requested
+
+# ---------------------------------------------------------------------------
+# Availability Checks
+# ---------------------------------------------------------------------------
+def check_whisperx_available() -> bool:
+    try:
+        import whisperx  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def check_nllb_available() -> bool:
+    try:
+        import ctranslate2  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def check_pysubs2_available() -> bool:
+    try:
+        import pysubs2  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# WhisperX Word-Level Alignment
+# ---------------------------------------------------------------------------
+def whisperx_transcribe(
+    audio_path: str,
+    model_size: str = "base",
+    model_revision: str = "",
+    language: str = "",
+    diarize: bool = False,
+    hf_token: str = "",
+    device: str = "auto",
+    on_progress: Optional[Callable] = None,
+) -> Dict:
+    """
+    Transcribe audio with WhisperX for precise word-level timestamps.
+
+    Uses wav2vec2 phoneme alignment on top of faster-whisper for
+    60-70x realtime speed with per-word start/end timestamps.
+
+    Args:
+        audio_path: Path to audio/video file.
+        model_size: Whisper model (tiny, base, small, medium, large-v3).
+        language: Language code (auto-detect if empty).
+        diarize: Enable speaker diarization (requires HuggingFace token).
+        hf_token: HuggingFace API token for diarization model.
+        device: "auto", "cuda", or "cpu".
+
+    Returns:
+        Dict with segments, each containing words with precise timestamps.
+    """
+    if not ensure_package("whisperx", "whisperx", on_progress):
+        raise RuntimeError(
+            "WhisperX is unavailable in OpenCut's supported dependency matrix."
+        )
+    import torch
+    import whisperx
+    from faster_whisper.utils import download_model
+
+    from opencut.core.asr_provenance import (
+        apply_language_decision,
+        build_provenance,
+        model_identity,
+        whisperx_alignment_identity,
+    )
+
+    if device == "auto":
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    if device == "cuda":
+        from opencut.gpu import activate_selected_gpu
+
+        activate_selected_gpu(torch_module=torch)
+    compute_type = "float16" if device == "cuda" else "int8"
+
+    if on_progress:
+        on_progress(10, f"Loading WhisperX model ({model_size})...")
+
+    # Step 1: Transcribe with batched inference
+    _model_id, resolved_revision = model_identity(
+        "whisperx",
+        model_size,
+        model_revision or None,
+    )
+    model_source = (
+        model_size
+        if os.path.isdir(model_size)
+        else download_model(model_size, revision=resolved_revision)
+    )
+    model = whisperx.load_model(model_source, device, compute_type=compute_type)
+    align_model = None
+    try:
+        audio = whisperx.load_audio(audio_path)
+
+        if on_progress:
+            on_progress(25, "Transcribing audio...")
+
+        result = model.transcribe(audio, batch_size=16, language=language or None)
+        detected_lang = result.get("language", language or "en")
+
+        if on_progress:
+            on_progress(50, "Aligning word timestamps (wav2vec2)...")
+
+        # Step 2: Word-level alignment
+        align_model, align_metadata = whisperx.load_align_model(
+            language_code=detected_lang, device=device
+        )
+        result = whisperx.align(
+            result["segments"], align_model, align_metadata,
+            audio, device, return_char_alignments=False
+        )
+
+        # Step 3: Optional speaker diarization
+        if diarize and hf_token:
+            if on_progress:
+                on_progress(70, "Running speaker diarization...")
+            try:
+                diarize_model = whisperx.DiarizationPipeline(
+                    use_auth_token=hf_token, device=device
+                )
+                diarize_segments = diarize_model(audio)
+                result = whisperx.assign_word_speakers(diarize_segments, result)
+            except Exception as e:
+                logger.warning(f"Diarization failed: {e}")
+
+        if on_progress:
+            on_progress(90, "Formatting results...")
+
+        # Format output
+        segments = []
+        for seg in result.get("segments", []):
+            words = []
+            for w in seg.get("words", []):
+                words.append({
+                    "text": w.get("word", ""),
+                    "start": round(w.get("start", 0), 3),
+                    "end": round(w.get("end", 0), 3),
+                    "score": round(w.get("score", 1.0), 3),
+                    "confidence": round(w.get("probability", 1.0), 3),
+                    "boundary_confidence": round(w.get("score", 1.0), 3),
+                })
+            segments.append({
+                "text": seg.get("text", "").strip(),
+                "start": round(seg.get("start", 0), 3),
+                "end": round(seg.get("end", 0), 3),
+                "words": words,
+                "speaker": seg.get("speaker", None),
+            })
+    finally:
+        # Free GPU memory
+        try:
+            del model
+            if align_model is not None:
+                del align_model
+            if device == "cuda":
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+
+    if on_progress:
+        on_progress(100, "WhisperX transcription complete")
+
+    provenance = build_provenance(
+        engine="whisperx",
+        requested_engine="whisperx",
+        model=model_size,
+        model_revision=model_revision or None,
+        requested_language=language or None,
+        word_timestamps=True,
+        translate=False,
+        diarize=diarize,
+        min_speakers=None,
+        max_speakers=None,
+    )
+    provenance.device = device
+    provenance.compute_type = compute_type
+    apply_language_decision(provenance, detected_lang)
+    align_id, align_revision = whisperx_alignment_identity(detected_lang)
+    provenance.alignment_model_id = align_id
+    provenance.alignment_model_revision = align_revision
+
+    return {
+        "segments": segments,
+        "language": detected_lang,
+        "word_count": sum(len(s["words"]) for s in segments),
+        "asr_provenance": provenance.to_dict(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# NLLB Translation
+# ---------------------------------------------------------------------------
+# Common language codes for NLLB
+NLLB_LANGUAGES = {
+    "en": "eng_Latn", "es": "spa_Latn", "fr": "fra_Latn", "de": "deu_Latn",
+    "it": "ita_Latn", "pt": "por_Latn", "nl": "nld_Latn", "ru": "rus_Cyrl",
+    "zh": "zho_Hans", "ja": "jpn_Jpan", "ko": "kor_Hang", "ar": "arb_Arab",
+    "hi": "hin_Deva", "tr": "tur_Latn", "pl": "pol_Latn", "sv": "swe_Latn",
+    "da": "dan_Latn", "no": "nob_Latn", "fi": "fin_Latn", "el": "ell_Grek",
+    "cs": "ces_Latn", "ro": "ron_Latn", "hu": "hun_Latn", "uk": "ukr_Cyrl",
+    "th": "tha_Thai", "vi": "vie_Latn", "id": "ind_Latn", "ms": "zsm_Latn",
+    "he": "heb_Hebr", "fa": "pes_Arab", "bg": "bul_Cyrl", "hr": "hrv_Latn",
+    "sk": "slk_Latn", "lt": "lit_Latn", "lv": "lvs_Latn", "et": "est_Latn",
+    "sl": "slv_Latn", "mk": "mkd_Cyrl", "bn": "ben_Beng", "ta": "tam_Taml",
+    "te": "tel_Telu", "ml": "mal_Mlym", "ur": "urd_Arab", "sw": "swh_Latn",
+}
+
+TRANSLATION_LANGUAGES = [
+    {"code": "en", "label": "English"},
+    {"code": "es", "label": "Spanish"},
+    {"code": "fr", "label": "French"},
+    {"code": "de", "label": "German"},
+    {"code": "it", "label": "Italian"},
+    {"code": "pt", "label": "Portuguese"},
+    {"code": "nl", "label": "Dutch"},
+    {"code": "ru", "label": "Russian"},
+    {"code": "zh", "label": "Chinese (Simplified)"},
+    {"code": "ja", "label": "Japanese"},
+    {"code": "ko", "label": "Korean"},
+    {"code": "ar", "label": "Arabic"},
+    {"code": "hi", "label": "Hindi"},
+    {"code": "tr", "label": "Turkish"},
+    {"code": "pl", "label": "Polish"},
+    {"code": "sv", "label": "Swedish"},
+    {"code": "th", "label": "Thai"},
+    {"code": "vi", "label": "Vietnamese"},
+    {"code": "id", "label": "Indonesian"},
+]
+
+
+def translate_text(
+    text: str,
+    source_lang: str = "en",
+    target_lang: str = "es",
+    on_progress: Optional[Callable] = None,
+) -> str:
+    """
+    Translate text using NLLB via CTranslate2.
+
+    CTranslate2 is already a dependency of faster-whisper.
+    Uses the distilled 600M NLLB model for good quality with fast inference.
+    """
+    if not ensure_package("ctranslate2", "ctranslate2", on_progress):
+        raise RuntimeError("Failed to install ctranslate2. Install manually: pip install ctranslate2")
+    if not ensure_package("sentencepiece", "sentencepiece", on_progress):
+        raise RuntimeError("Failed to install sentencepiece. Install manually: pip install sentencepiece")
+    import ctranslate2
+    import sentencepiece
+
+    model_dir = os.path.join(os.path.expanduser("~"), ".opencut", "models", "nllb-200-distilled-600M")
+
+    if not os.path.isdir(model_dir):
+        if on_progress:
+            on_progress(10, "Downloading NLLB translation model (~1.2GB)...")
+        if not ensure_package("huggingface_hub", "huggingface-hub>=1.26,<2", on_progress):
+            raise RuntimeError(
+                "Failed to install a safe huggingface-hub release. "
+                "Install manually: pip install 'huggingface-hub>=1.26,<2'"
+            )
+        model_id = "JustFrederik/nllb-200-distilled-600M-ct2-float16"
+        safe_snapshot_download(
+            model_id,
+            revision=PINNED_HF_MODELS[model_id],
+            local_dir=model_dir,
+        )
+
+    src_code = NLLB_LANGUAGES.get(source_lang, f"{source_lang}_Latn")
+    tgt_code = NLLB_LANGUAGES.get(target_lang, f"{target_lang}_Latn")
+
+    if on_progress:
+        on_progress(30, "Loading translation model...")
+
+    from opencut.gpu import selected_ct2_device_kwargs
+
+    translator = ctranslate2.Translator(model_dir, **selected_ct2_device_kwargs())
+    try:
+        sp_path = os.path.join(model_dir, "sentencepiece.bpe.model")
+
+        if not os.path.isfile(sp_path):
+            # Try alternate name
+            sp_path = os.path.join(model_dir, "source.spm")
+        if not os.path.isfile(sp_path):
+            raise FileNotFoundError(f"SentencePiece model not found in {model_dir}")
+
+        sp = sentencepiece.SentencePieceProcessor()
+        sp.Load(sp_path)
+
+        if on_progress:
+            on_progress(50, "Translating...")
+
+        # Tokenize and translate
+        source_tokens = sp.Encode(text, out_type=str)
+        source_tokens = [src_code] + source_tokens
+
+        results = translator.translate_batch(
+            [source_tokens],
+            target_prefix=[[tgt_code]],
+            max_batch_size=1,
+            beam_size=4,
+        )
+
+        if not results or not results[0].hypotheses:
+            raise RuntimeError("Translation produced no output")
+        translated_tokens = results[0].hypotheses[0]
+        # Remove language tag from output
+        if translated_tokens and translated_tokens[0] == tgt_code:
+            translated_tokens = translated_tokens[1:]
+
+        translated = sp.Decode(translated_tokens)
+    finally:
+        del translator
+
+    if on_progress:
+        on_progress(100, "Translation complete")
+
+    return translated
+
+
+def translate_segments(
+    segments: List[Dict],
+    source_lang: str = "en",
+    target_lang: str = "es",
+    on_progress: Optional[Callable] = None,
+) -> List[Dict]:
+    """
+    Translate a list of caption segments, preserving timestamps.
+    """
+    if not ensure_package("ctranslate2", "ctranslate2", on_progress):
+        raise RuntimeError("Failed to install ctranslate2. Install manually: pip install ctranslate2")
+    if not ensure_package("sentencepiece", "sentencepiece", on_progress):
+        raise RuntimeError("Failed to install sentencepiece. Install manually: pip install sentencepiece")
+    import ctranslate2
+    import sentencepiece
+
+    model_dir = os.path.join(os.path.expanduser("~"), ".opencut", "models", "nllb-200-distilled-600M")
+
+    if not os.path.isdir(model_dir):
+        if on_progress:
+            on_progress(10, "Downloading NLLB model (~1.2GB)...")
+        if not ensure_package("huggingface_hub", "huggingface-hub>=1.26,<2", on_progress):
+            raise RuntimeError(
+                "Failed to install a safe huggingface-hub release. "
+                "Install manually: pip install 'huggingface-hub>=1.26,<2'"
+            )
+        model_id = "JustFrederik/nllb-200-distilled-600M-ct2-float16"
+        safe_snapshot_download(
+            model_id,
+            revision=PINNED_HF_MODELS[model_id],
+            local_dir=model_dir,
+        )
+
+    src_code = NLLB_LANGUAGES.get(source_lang, f"{source_lang}_Latn")
+    tgt_code = NLLB_LANGUAGES.get(target_lang, f"{target_lang}_Latn")
+
+    if on_progress:
+        on_progress(20, "Loading translation model...")
+
+    from opencut.gpu import selected_ct2_device_kwargs
+
+    translator = ctranslate2.Translator(model_dir, **selected_ct2_device_kwargs())
+    try:
+        sp_path = os.path.join(model_dir, "sentencepiece.bpe.model")
+        if not os.path.isfile(sp_path):
+            sp_path = os.path.join(model_dir, "source.spm")
+        if not os.path.isfile(sp_path):
+            raise FileNotFoundError(f"SentencePiece model not found in {model_dir}")
+
+        sp = sentencepiece.SentencePieceProcessor()
+        sp.Load(sp_path)
+
+        translated_segments = []
+        total = len(segments)
+        for i, seg in enumerate(segments):
+            text = seg.get("text", "").strip()
+            if not text:
+                translated_segments.append(seg.copy())
+                continue
+
+            source_tokens = [src_code] + sp.Encode(text, out_type=str)
+            results = translator.translate_batch(
+                [source_tokens],
+                target_prefix=[[tgt_code]],
+                beam_size=4,
+            )
+            if not results or not results[0].hypotheses:
+                raise RuntimeError("Translation produced no output")
+            out_tokens = results[0].hypotheses[0]
+            if out_tokens and out_tokens[0] == tgt_code:
+                out_tokens = out_tokens[1:]
+            translated_text = sp.Decode(out_tokens)
+
+            new_seg = seg.copy()
+            new_seg["text"] = translated_text
+            new_seg["original_text"] = text
+            translated_segments.append(new_seg)
+
+            if on_progress and i % max(1, total // 10) == 0:
+                pct = 20 + int((i / total) * 75)
+                on_progress(pct, f"Translating {i+1}/{total}...")
+    finally:
+        del translator
+
+    if on_progress:
+        on_progress(100, "Translation complete")
+
+    return translated_segments
+
+
+# ---------------------------------------------------------------------------
+# SeamlessM4T v2 Translation (higher quality, multimodal)
+# ---------------------------------------------------------------------------
+def translate_text_seamless(
+    text: str,
+    source_lang: str = "eng",
+    target_lang: str = "spa",
+    on_progress: Optional[Callable] = None,
+) -> str:
+    """
+    Translate text using Meta's SeamlessM4T v2 (higher quality than NLLB).
+
+    20% BLEU improvement over NLLB. Supports ~100 languages.
+    Heavier model (~2.3GB) but significantly better quality.
+
+    Args:
+        source_lang: SeamlessM4T language code (e.g. "eng", "spa", "fra", "deu").
+        target_lang: Target language code.
+    """
+    if not ensure_package("transformers", "transformers", on_progress):
+        raise RuntimeError("transformers not installed")
+
+    if on_progress:
+        on_progress(10, "Loading SeamlessM4T v2...")
+
+    import torch
+    from transformers import AutoProcessor, SeamlessM4Tv2ForTextToText
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if device == "cuda":
+        from opencut.gpu import activate_selected_gpu
+
+        activate_selected_gpu(torch_module=torch)
+    model_id = "facebook/seamless-m4t-v2-large"
+    revision = PINNED_HF_MODELS[model_id]
+
+    processor = AutoProcessor.from_pretrained(model_id, revision=revision)
+    model = SeamlessM4Tv2ForTextToText.from_pretrained(
+        model_id,
+        revision=revision,
+        use_safetensors=True,
+    ).to(device)
+
+    if on_progress:
+        on_progress(50, "Translating...")
+
+    try:
+        inputs = processor(text=text, src_lang=source_lang, return_tensors="pt").to(device)
+        with torch.inference_mode():
+            output_tokens = model.generate(**inputs, tgt_lang=target_lang, max_new_tokens=512)
+        translated = processor.decode(output_tokens[0].tolist(), skip_special_tokens=True)
+    finally:
+        del model
+        try:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+
+    if on_progress:
+        on_progress(100, "Translation complete (SeamlessM4T)")
+
+    return translated
+
+
+# ---------------------------------------------------------------------------
+# Unified Translation (SeamlessM4T > NLLB fallback)
+# ---------------------------------------------------------------------------
+def translate(
+    text: str,
+    source_lang: str = "eng",
+    target_lang: str = "spa",
+    on_progress: Optional[Callable] = None,
+) -> str:
+    """Translate text using best available backend (SeamlessM4T > NLLB)."""
+    try:
+        return translate_text_seamless(text, source_lang, target_lang, on_progress)
+    except (ImportError, RuntimeError) as e:
+        logger.info("SeamlessM4T unavailable (%s), falling back to NLLB", e)
+        return translate_text(text, source_lang, target_lang, on_progress)
+
+
+def translate_segments_auto(
+    segments: List[Dict],
+    source_lang: str = "en",
+    target_lang: str = "es",
+    on_progress: Optional[Callable] = None,
+) -> List[Dict]:
+    """Translate segments using best available backend (SeamlessM4T > NLLB)."""
+    try:
+        # SeamlessM4T uses 3-letter codes (eng, spa); convert if needed
+        if not ensure_package("transformers", "transformers", on_progress):
+            raise ImportError("transformers not available")
+
+        if on_progress:
+            on_progress(10, "Loading SeamlessM4T v2...")
+
+        import torch
+        from transformers import AutoProcessor, SeamlessM4Tv2ForTextToText
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        if device == "cuda":
+            from opencut.gpu import activate_selected_gpu
+
+            activate_selected_gpu(torch_module=torch)
+        model_id = "facebook/seamless-m4t-v2-large"
+        revision = PINNED_HF_MODELS[model_id]
+
+        processor = AutoProcessor.from_pretrained(model_id, revision=revision)
+        model = SeamlessM4Tv2ForTextToText.from_pretrained(
+            model_id,
+            revision=revision,
+            use_safetensors=True,
+        ).to(device)
+
+        try:
+            translated_segments = []
+            total = len(segments)
+            for i, seg in enumerate(segments):
+                text = seg.get("text", "").strip()
+                if not text:
+                    translated_segments.append(seg.copy())
+                    continue
+                inputs = processor(text=text, src_lang=source_lang, return_tensors="pt").to(device)
+                with torch.inference_mode():
+                    output_tokens = model.generate(**inputs, tgt_lang=target_lang, max_new_tokens=512)
+                translated_text = processor.decode(output_tokens[0].tolist(), skip_special_tokens=True)
+
+                new_seg = seg.copy()
+                new_seg["text"] = translated_text
+                new_seg["original_text"] = text
+                translated_segments.append(new_seg)
+
+                if on_progress and i % max(1, total // 10) == 0:
+                    pct = 10 + int((i / total) * 85)
+                    on_progress(pct, f"Translating {i+1}/{total} (SeamlessM4T)...")
+        finally:
+            del model
+            try:
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
+
+        if on_progress:
+            on_progress(100, "Translation complete (SeamlessM4T)")
+        return translated_segments
+
+    except (ImportError, RuntimeError) as e:
+        logger.info("SeamlessM4T unavailable for segments (%s), falling back to NLLB", e)
+        return translate_segments(segments, source_lang, target_lang, on_progress)
+
+
+# ---------------------------------------------------------------------------
+# ASS Karaoke Export
+# ---------------------------------------------------------------------------
+def segments_to_ass_karaoke(
+    segments: List[Dict],
+    output_path: str,
+    style: str = "Default",
+    font_name: str = "Arial",
+    font_size: int = 48,
+    primary_color: str = "&H00FFFFFF",
+    highlight_color: str = "&H0000FFFF",
+    outline_color: str = "&H00000000",
+    outline_width: int = 3,
+    on_progress: Optional[Callable] = None,
+) -> str:
+    """
+    Export segments with word-level timestamps to ASS with karaoke tags.
+
+    Uses \\kf (smooth fill) for word-by-word highlight animation.
+    """
+    if not ensure_package("pysubs2", "pysubs2", on_progress):
+        raise RuntimeError("Failed to install pysubs2. Install manually: pip install pysubs2")
+    import pysubs2
+
+    subs = pysubs2.SSAFile()
+
+    # Configure style
+    s = pysubs2.SSAStyle()
+    s.fontname = font_name
+    s.fontsize = font_size
+    s.primarycolor = pysubs2.Color(*_parse_ass_color(primary_color))
+    s.secondarycolor = pysubs2.Color(*_parse_ass_color(highlight_color))
+    s.outlinecolor = pysubs2.Color(*_parse_ass_color(outline_color))
+    s.outline = outline_width
+    s.shadow = 1
+    s.alignment = 2  # Bottom center
+    s.marginv = 40
+    subs.styles[style] = s
+
+    for seg in segments:
+        words = seg.get("words", [])
+        if not words:
+            # No word-level timing, use plain text
+            evt = pysubs2.SSAEvent(
+                start=int(seg["start"] * 1000),
+                end=int(seg["end"] * 1000),
+                text=seg["text"],
+                style=style,
+            )
+            subs.events.append(evt)
+            continue
+
+        # Build karaoke line with \kf tags
+        parts = []
+        for w in words:
+            duration_cs = max(1, int((w["end"] - w["start"]) * 100))
+            word_text = w["text"].strip()
+            if word_text:
+                parts.append(f"{{\\kf{duration_cs}}}{word_text} ")
+
+        if parts:
+            evt = pysubs2.SSAEvent(
+                start=int(words[0]["start"] * 1000),
+                end=int(words[-1]["end"] * 1000),
+                text="".join(parts).strip(),
+                style=style,
+            )
+            subs.events.append(evt)
+
+    subs.save(output_path)
+    if on_progress:
+        on_progress(100, "ASS karaoke exported")
+    return output_path
+
+
+def _parse_ass_color(color_str: str) -> Tuple:
+    """Parse ASS color string (&HAABBGGRR) to (R,G,B,A) tuple."""
+    try:
+        color_str = color_str.replace("&H", "").replace("&h", "")
+        val = int(color_str, 16)
+        a = (val >> 24) & 0xFF
+        b = (val >> 16) & 0xFF
+        g = (val >> 8) & 0xFF
+        r = val & 0xFF
+        return (r, g, b, a)
+    except Exception:
+        return (255, 255, 255, 0)
+
+
+# ---------------------------------------------------------------------------
+# Subtitle Format Conversion
+# ---------------------------------------------------------------------------
+def convert_subtitle_format(
+    input_path: str,
+    output_format: str = "srt",
+    output_path: Optional[str] = None,
+    on_progress: Optional[Callable] = None,
+) -> str:
+    """
+    Convert between subtitle formats using pysubs2.
+
+    Supported formats: srt, ass, ssa, vtt, microdvd, json, txt
+    """
+    if not ensure_package("pysubs2", "pysubs2", on_progress):
+        raise RuntimeError("Failed to install pysubs2. Install manually: pip install pysubs2")
+    import pysubs2
+
+    if output_path is None:
+        base = os.path.splitext(input_path)[0]
+        ext_map = {
+            "srt": ".srt", "ass": ".ass", "ssa": ".ssa",
+            "vtt": ".vtt", "microdvd": ".sub", "json": ".json", "txt": ".txt",
+        }
+        output_path = base + ext_map.get(output_format, f".{output_format}")
+
+    subs = pysubs2.load(input_path)
+    subs.save(output_path, format_=output_format)
+
+    if on_progress:
+        on_progress(100, f"Converted to {output_format.upper()}")
+    return output_path

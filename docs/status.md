@@ -17,7 +17,7 @@
 | Lecture des effets et paramètres sélectionnés | Implémentée dans le panneau | Vérifiée sur `C3887.MP4`, dont Trajectoire et échelle |
 | Zoom relatif | Implémenté dans le panneau | Appliqué au clip réel: 112,99 % → 124,29 %; retour après Annuler à revalider |
 | Format temporel partagé et calcul du zoom | Implémentés au cœur | Tests Node locaux à jour; cadence fractionnaire, ticks longs et calcul relatif |
-| Service local | Squelette écrit | Contrat santé testé; écoute HTTP impossible dans le bac à sable qui refuse le bind loopback |
+| Service local | Tâches et routes Silences implémentées | Contrat HTTP testé hors restriction de bind du bac à sable avec le moteur réel; pairage utilisateur restant |
 | Duplication/coupe/images clés | À faire | Pas encore intégrées |
 | Autres modules du périmètre final | À faire | Voir feuille de route |
 
@@ -29,3 +29,9 @@
 - Validation réelle locale : audio synthétique de 5 s, silences détectés, marges contrôlées, refus de la seconde coupe, XML final de 81 images à 25 i/s. Tests HTTP avec le même moteur. Aucun objet simulé pour cette validation moteur.
 - Panneau : formulaire et révision implémentés; choix de fichier, sélection source et import XML UXP restent à vérifier dans Premiere. Module maintenu grisé.
 - Périmètre restant : analyse de timeline complète, préservation des effets/corrections, VAD, cache partagé, import Premiere validé.
+
+## Import des sources du brief
+
+Sources de six dépôts copiées avec licences, commits et SHA-256 dans `vendor/manifest.json`. Correspondance des 17 modules dans `vendor/module-map.json`. Les fichiers sources importés sont inchangés; les tests et installateurs amont n’ont pas été exécutés. Aucun nouveau module n’est déclaré opérationnel sur la seule base de cet import : les adaptateurs UXP restent à développer. Les outils partiels restent grisés.
+
+`auto-zoom-premiere` est référencé sans copie publique, faute de licence identifiable. Voir `vendor/README.md` pour les exclusions de médias, modèles et binaires.

@@ -1,0 +1,125 @@
+<Window x:Class="OpenCut.Installer.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:OpenCut.Installer.Controls"
+        xmlns:models="clr-namespace:OpenCut.Installer.Models"
+        Title="OpenCut Setup" Width="820" Height="620"
+        WindowStartupLocation="CenterScreen"
+        ResizeMode="NoResize"
+        Background="{DynamicResource Base}"
+        WindowStyle="None" AllowsTransparency="True">
+
+    <WindowChrome.WindowChrome>
+        <WindowChrome CaptionHeight="44" GlassFrameThickness="0"
+                      ResizeBorderThickness="0" CornerRadius="12" />
+    </WindowChrome.WindowChrome>
+
+    <Border Margin="14" CornerRadius="12" Background="{DynamicResource Base}"
+            BorderBrush="{DynamicResource Surface1}" BorderThickness="1">
+        <Border.Effect>
+            <DropShadowEffect BlurRadius="28" ShadowDepth="0" Opacity="0.28" Color="{DynamicResource WindowShadowColor}" />
+        </Border.Effect>
+        <Grid Background="{DynamicResource WindowChromeBrush}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="44" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <!-- Custom Titlebar -->
+            <Grid Grid.Row="0" Background="{DynamicResource WindowTitleBarBrush}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <!-- Icon + Title -->
+                <StackPanel Grid.Column="0" Orientation="Horizontal"
+                            VerticalAlignment="Center" Margin="12,0,0,0">
+                    <Image Source="Assets/logo.png" Width="18" Height="18"
+                           AutomationProperties.Name="OpenCut setup logo"
+                           RenderOptions.BitmapScalingMode="HighQuality" Margin="0,0,8,0" />
+                    <TextBlock x:Name="WindowTitleText" Text="OpenCut Setup" Foreground="{DynamicResource TextBrush}"
+                               FontSize="12.5" FontFamily="{DynamicResource UIFont}"
+                               FontWeight="SemiBold"
+                               VerticalAlignment="Center" />
+                    <Border Background="{DynamicResource BuildBadgeBrush}" BorderBrush="{DynamicResource BuildBadgeStrokeBrush}" BorderThickness="1"
+                            CornerRadius="6" Padding="8,2" Margin="8,0,0,0">
+                        <TextBlock x:Name="WindowVersionText"
+                                   Text="{Binding Source={x:Static models:AppConstants.AppVersion}, StringFormat='v{0}'}"
+                                   Foreground="{DynamicResource Blue}" FontSize="10.5"
+                                   FontFamily="{DynamicResource UIFont}" FontWeight="SemiBold" />
+                    </Border>
+                </StackPanel>
+
+                <!-- Window Controls -->
+                <StackPanel Grid.Column="2" Orientation="Horizontal"
+                            VerticalAlignment="Stretch"
+                            WindowChrome.IsHitTestVisibleInChrome="True">
+                    <Button x:Name="MinBtn" Content="&#xE921;" Click="MinBtn_Click"
+                            FontFamily="Segoe MDL2 Assets" FontSize="10"
+                            Width="46" Background="Transparent" Foreground="{DynamicResource Overlay1}"
+                            BorderThickness="0" Cursor="Hand" VerticalAlignment="Stretch"
+                            ToolTip="Minimize"
+                            AutomationProperties.Name="Minimize setup window"
+                            AutomationProperties.HelpText="Minimizes the OpenCut Setup window.">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border x:Name="Bd" Background="{TemplateBinding Background}">
+                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="Bd" Property="Background" Value="{StaticResource Surface0}" />
+                                    </Trigger>
+                                    <Trigger Property="IsKeyboardFocused" Value="True">
+                                        <Setter TargetName="Bd" Property="Background" Value="{StaticResource Surface0}" />
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
+                    </Button>
+                    <Button x:Name="CloseBtn" Content="&#xE8BB;" Click="CloseBtn_Click"
+                            FontFamily="Segoe MDL2 Assets" FontSize="10"
+                            Width="46" Background="Transparent" Foreground="{DynamicResource Overlay1}"
+                            BorderThickness="0" Cursor="Hand" VerticalAlignment="Stretch"
+                            ToolTip="Close"
+                            AutomationProperties.Name="Close setup window"
+                            AutomationProperties.HelpText="Closes the OpenCut Setup window.">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border x:Name="Bd" Background="{TemplateBinding Background}"
+                                        CornerRadius="0,12,0,0">
+                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Red}" />
+                                        <Setter Property="Foreground" Value="{DynamicResource OnDangerBrush}" />
+                                    </Trigger>
+                                    <Trigger Property="IsKeyboardFocused" Value="True">
+                                        <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Red}" />
+                                        <Setter Property="Foreground" Value="{DynamicResource OnDangerBrush}" />
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
+                    </Button>
+                </StackPanel>
+            </Grid>
+
+            <!-- Step Indicator -->
+            <controls:StepIndicator x:Name="StepIndicator" Grid.Row="1"
+                                     AutomationProperties.Name="Setup progress steps"
+                                     Margin="0,10,0,0" />
+
+            <!-- Page Content -->
+            <Frame x:Name="PageFrame" Grid.Row="2"
+                   NavigationUIVisibility="Hidden"
+                   AutomationProperties.Name="Setup page content"
+                   Margin="0,4,0,0"
+                   Background="Transparent" />
+        </Grid>
+    </Border>
+</Window>

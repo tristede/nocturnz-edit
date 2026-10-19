@@ -1,0 +1,171 @@
+"""
+OpenCut Configuration
+
+Centralized config dataclass. All environment variable reads happen here
+so the rest of the codebase accesses config values, not raw env vars.
+"""
+
+import os
+from dataclasses import dataclass, field
+from typing import Optional
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _env_int(name: str, default: int, *, min_val: Optional[int] = None,
+             max_val: Optional[int] = None) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    if min_val is not None and value < min_val:
+        return min_val
+    if max_val is not None and value > max_val:
+        return max_val
+    return value
+
+
+def _env_optional_int(name: str) -> Optional[int]:
+    """Parse an optional non-negative integer, treating ``auto`` as unset."""
+    raw = os.environ.get(name)
+    if raw is None or raw.strip().lower() in {"", "auto", "default", "none", "-1"}:
+        return None
+    try:
+        value = int(raw.strip())
+    except (TypeError, ValueError):
+        return None
+    return value if value >= 0 else None
+
+
+def _env_csv(name: str, default: list[str]) -> list[str]:
+    """Parse a comma-separated env var.
+
+    * Unset (``None``) → *default*.
+    * Explicit empty string → ``[]`` (lets operators disable CORS via
+      ``OPENCUT_CORS_ORIGINS=""`` without the default creeping back in).
+    * Non-empty → split, strip, drop blanks.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return list(default)
+    items = [item.strip() for item in raw.split(",")]
+    return [item for item in items if item]
+
+
+@dataclass
+class OpenCutConfig:
+    """Application configuration, populated from environment or overrides."""
+
+    local_only: bool = False
+    bundled_mode: bool = False
+    whisper_models_dir: Optional[str] = None
+    torch_home: Optional[str] = None
+    florence_model_dir: Optional[str] = None
+    lama_model_dir: Optional[str] = None
+    # CUDA device index used by GPU-backed work. ``None`` keeps the runtime's
+    # automatic/default-device behaviour; a non-negative index pins work to a
+    # specific CUDA adapter.
+    gpu_index: Optional[int] = None
+    max_content_length: int = 100 * 1024 * 1024  # 100 MB
+    # Cross-origin browser development must opt in with OPENCUT_CORS_ORIGINS.
+    # The default stays closed because /health is the CSRF bootstrap endpoint.
+    cors_origins: list[str] = field(default_factory=list)
+
+    # Bind address and the ``Host`` values this server answers for. Loopback
+    # names/literals plus ``bind_host`` are always trusted; every other name
+    # must be listed in OPENCUT_TRUSTED_HOSTS so a rebound DNS name cannot
+    # reach the local API. See opencut/trusted_hosts.py.
+    bind_host: str = "127.0.0.1"
+    trusted_hosts: list[str] = field(default_factory=list)
+
+    # Job system defaults (single source of truth; mirrored as module-level
+    # constants in opencut/jobs.py for use outside Flask app context)
+    job_max_age: int = 3600              # Auto-clean jobs older than 1 hour
+    max_concurrent_jobs: int = 10        # Prevent job spam / GPU OOM
+    max_batch_files: int = 100           # Max files per batch request
+    job_stuck_timeout: int = 7200        # Mark running jobs as error after 2 hours
+
+    @classmethod
+    def from_env(cls) -> "OpenCutConfig":
+        """Create config from environment variables (single source of truth)."""
+        whisper_dir = os.environ.get("WHISPER_MODELS_DIR", None)
+        bundled = (
+            _env_bool("OPENCUT_BUNDLED", default=False)
+            or whisper_dir is not None
+        )
+        return cls(
+            local_only=_env_bool("OPENCUT_LOCAL_ONLY", default=False),
+            bundled_mode=bundled,
+            whisper_models_dir=whisper_dir,
+            torch_home=os.environ.get("TORCH_HOME", None),
+            florence_model_dir=os.environ.get("OPENCUT_FLORENCE_DIR", None),
+            lama_model_dir=os.environ.get("OPENCUT_LAMA_DIR", None),
+            gpu_index=_env_optional_int("OPENCUT_GPU_INDEX"),
+            max_content_length=_env_int(
+                "OPENCUT_MAX_CONTENT_LENGTH",
+                100 * 1024 * 1024,
+                min_val=1024 * 1024,
+                max_val=2 * 1024 * 1024 * 1024,  # 2 GB hard cap
+            ),
+            cors_origins=_env_csv("OPENCUT_CORS_ORIGINS", []),  # see field comment above
+            bind_host=os.environ.get("OPENCUT_HOST", "127.0.0.1").strip() or "127.0.0.1",
+            trusted_hosts=_env_csv("OPENCUT_TRUSTED_HOSTS", []),
+            job_max_age=_env_int("OPENCUT_JOB_MAX_AGE", 3600, min_val=60, max_val=86400),
+            max_concurrent_jobs=_env_int("OPENCUT_MAX_CONCURRENT_JOBS", 10, min_val=1, max_val=100),
+            max_batch_files=_env_int("OPENCUT_MAX_BATCH_FILES", 100, min_val=1, max_val=10000),
+            job_stuck_timeout=_env_int("OPENCUT_JOB_STUCK_TIMEOUT", 7200, min_val=60, max_val=86400),
+        )
+
+
+_LOCAL_ONLY_SETTING_FILE = "local_only.json"
+
+
+def is_local_only() -> bool:
+    """Check if local-only mode is active (env var OR user setting)."""
+    if _env_bool("OPENCUT_LOCAL_ONLY", default=False):
+        return True
+    try:
+        from flask import current_app, has_app_context
+
+        if has_app_context():
+            app_config = current_app.config.get("OPENCUT")
+            if bool(getattr(app_config, "local_only", False)):
+                return True
+    except (ImportError, RuntimeError):
+        pass
+    try:
+        from . import user_data  # noqa: E402
+        settings = user_data.read_user_file(_LOCAL_ONLY_SETTING_FILE, default={})
+        return bool(settings.get("enabled", False))
+    except Exception:
+        return False
+
+
+def require_network_allowed(feature: str, local_alternative: str = "") -> None:
+    """Raise a stable policy error if local-only mode blocks a cloud feature."""
+    if not is_local_only():
+        return
+    from opencut.network_policy import LocalOnlyNetworkError
+
+    raise LocalOnlyNetworkError(
+        "non-loopback network",
+        feature=feature,
+        local_alternative=(
+            f"Use {local_alternative} instead."
+            if local_alternative
+            else ""
+        ),
+    )

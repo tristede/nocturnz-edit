@@ -1,0 +1,2 @@
+# Keep pinned source snapshots byte-for-byte across Git configurations.
+vendor/sources/** -text -filter -ident

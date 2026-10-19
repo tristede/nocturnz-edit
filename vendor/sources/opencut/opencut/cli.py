@@ -1,0 +1,2297 @@
+"""
+OpenCut CLI - Command line interface for video editing automation.
+
+Usage:
+    opencut silence  input.mp4 -o output.xml       # Remove silences, export Premiere XML
+    opencut captions input.mp4 -o output.srt        # Generate captions
+    opencut podcast  input.mp4 -o output.xml        # Diarize + multicam switch
+    opencut full     input.mp4 -o output.xml        # All features combined
+    opencut info     input.mp4                      # Show media info
+"""
+
+import json
+import os
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+from typing import Any, Mapping, Optional
+
+import click
+from rich import box
+from rich.console import Console
+from rich.panel import Panel
+from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+from rich.table import Table
+
+from opencut import __version__
+
+console = Console()
+ROUTE_MANIFEST_PATH = Path(__file__).resolve().parent / "_generated" / "route_manifest.json"
+_CLI_ROUTE_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
+_CLI_MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+# F354: concrete examples keep the generic route command discoverable. Each
+# entry is checked against route_manifest.json before the request is sent.
+CLI_SURFACE_EXAMPLES = (
+    {
+        "family": "wave_l",
+        "method": "POST",
+        "path": "/analyze/video/narrate",
+        "description": "Generate a narrated analysis for a video.",
+    },
+    {
+        "family": "platform_infra",
+        "method": "GET",
+        "path": "/branches/list",
+        "description": "List local project branches.",
+    },
+    {
+        "family": "wave_k",
+        "method": "POST",
+        "path": "/audio/sfx/generate",
+        "description": "Generate a sound effect from a prompt.",
+    },
+    {
+        "family": "wave_qrs",
+        "method": "GET",
+        "path": "/analyze/video/qwen3vl/info",
+        "description": "Inspect the Qwen3-VL analysis lane.",
+    },
+    {
+        "family": "integration",
+        "method": "POST",
+        "path": "/api/drone/flight-map",
+        "description": "Build a flight map from drone metadata.",
+    },
+    {
+        "family": "color_mam",
+        "method": "GET",
+        "path": "/video/aces/idts",
+        "description": "List available ACES input transforms.",
+    },
+    {
+        "family": "system",
+        "method": "GET",
+        "path": "/llm/status",
+        "description": "Read local language-model service status.",
+    },
+    {
+        "family": "batch_data",
+        "method": "POST",
+        "path": "/batch-metadata/template",
+        "description": "Create a batch metadata template.",
+    },
+    {
+        "family": "editing_wf",
+        "method": "POST",
+        "path": "/copilot/query",
+        "description": "Query the editing workflow assistant.",
+    },
+    {
+        "family": "workflow_dev",
+        "method": "GET",
+        "path": "/api/scripting/modules",
+        "description": "List available scripting modules.",
+    },
+)
+
+BANNER = r"""
+  ___                    ____      _
+ / _ \ _ __   ___ _ __  / ___|   _| |_
+| | | | '_ \ / _ \ '_ \| |  | | | | __|
+| |_| | |_) |  __/ | | | |__| |_| | |_
+ \___/| .__/ \___|_| |_|\____\__,_|\__|
+      |_|
+"""
+
+
+def print_banner():
+    console.print(Panel(
+        BANNER + "  Open Source Video Editing Automation\n  github.com/SysAdminDoc/OpenCut",
+        style="bold cyan",
+        box=box.ROUNDED,
+        padding=(0, 2),
+    ))
+
+
+def _load_cli_route_manifest(path: Path = ROUTE_MANIFEST_PATH) -> Mapping[str, Any]:
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        if not path.is_file():
+            raise click.ClickException(
+                f"Route manifest missing at {path}. This build was packaged without "
+                "opencut/_generated; reinstall OpenCut."
+            ) from exc
+        raise click.ClickException(f"Cannot load route manifest: {exc}") from exc
+    routes = manifest.get("routes")
+    if not isinstance(routes, list):
+        raise click.ClickException("Route manifest is malformed: routes must be a list")
+    return manifest
+
+
+def _normalize_cli_route_path(path: str) -> str:
+    clean = str(path or "").strip()
+    if not clean.startswith("/") or clean.startswith("//"):
+        raise click.ClickException("Route path must start with a single '/'")
+    if "\x00" in clean or "://" in clean:
+        raise click.ClickException("Route path must be an internal OpenCut path")
+    if "?" in clean:
+        raise click.ClickException("Pass query parameters with --query key=value")
+    return clean
+
+
+def _match_manifest_route(
+    method: str,
+    path: str,
+    *,
+    manifest: Optional[Mapping[str, Any]] = None,
+) -> Mapping[str, Any]:
+    """Return the manifest route matching ``method path`` or raise."""
+    from werkzeug.exceptions import MethodNotAllowed, NotFound
+    from werkzeug.routing import Map, Rule
+
+    method = str(method or "").upper()
+    if method not in _CLI_ROUTE_METHODS:
+        raise click.ClickException(
+            f"Unsupported method {method!r}. Use one of: {', '.join(sorted(_CLI_ROUTE_METHODS))}"
+        )
+    path = _normalize_cli_route_path(path)
+    manifest = manifest or _load_cli_route_manifest()
+
+    endpoint_to_route: dict[str, Mapping[str, Any]] = {}
+    rules = []
+    for index, route in enumerate(manifest.get("routes", [])):
+        if not isinstance(route, Mapping):
+            continue
+        rule = str(route.get("rule") or "")
+        methods = [str(item).upper() for item in route.get("methods") or []]
+        if not rule or not methods:
+            continue
+        endpoint = f"route-{index}"
+        endpoint_to_route[endpoint] = route
+        rules.append(Rule(rule, methods=methods, endpoint=endpoint))
+
+    try:
+        endpoint, _values = Map(rules).bind("").match(path, method=method)
+    except MethodNotAllowed as exc:
+        allowed = ", ".join(sorted(exc.valid_methods or []))
+        suffix = f" Available methods: {allowed}." if allowed else ""
+        raise click.ClickException(f"Route exists but does not allow {method}: {path}.{suffix}") from exc
+    except NotFound as exc:
+        raise click.ClickException(f"Route not found in manifest: {method} {path}") from exc
+    return endpoint_to_route[endpoint]
+
+
+def _parse_key_value_pairs(values, *, option_name: str) -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
+    for raw in values or ():
+        item = str(raw)
+        if "=" not in item:
+            raise click.ClickException(f"{option_name} expects key=value, got {item!r}")
+        key, value = item.split("=", 1)
+        key = key.strip()
+        if not key:
+            raise click.ClickException(f"{option_name} requires a non-empty key")
+        pairs.append((key, value))
+    return pairs
+
+
+def _parse_cli_json_value(value: str) -> Any:
+    text = str(value)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return text
+
+
+def _load_cli_json_body(data: str, data_file: Optional[str], fields) -> Optional[Any]:
+    if data and data_file:
+        raise click.ClickException("Use either --data or --data-file, not both")
+    if data_file:
+        text = Path(data_file).read_text(encoding="utf-8")
+        body: Any = json.loads(text)
+    elif data:
+        text = sys.stdin.read() if data == "-" else data
+        body = json.loads(text)
+    else:
+        body = None
+
+    field_pairs = _parse_key_value_pairs(fields, option_name="--field")
+    if field_pairs:
+        if body is None:
+            body = {}
+        if not isinstance(body, dict):
+            raise click.ClickException("--field can only extend a JSON object body")
+        for key, value in field_pairs:
+            body[key] = _parse_cli_json_value(value)
+    return body
+
+
+def _validated_backend_base(host: str, port: int) -> str:
+    clean_host = str(host or "").strip()
+    if not clean_host or "://" in clean_host or "/" in clean_host or "\\" in clean_host:
+        raise click.ClickException("Backend host must be a hostname or IP address, not a URL")
+    if not (1 <= int(port) <= 65535):
+        raise click.ClickException("Backend port must be between 1 and 65535")
+    display_host = clean_host
+    if ":" in display_host and not display_host.startswith("["):
+        display_host = f"[{display_host}]"
+    return f"http://{display_host}:{int(port)}"
+
+
+def _read_json_http_response(response) -> tuple[str, Any]:
+    text = response.read().decode("utf-8", errors="replace")
+    try:
+        return text, json.loads(text) if text else None
+    except json.JSONDecodeError:
+        return text, None
+
+
+def _fetch_cli_csrf_token(base_url: str, timeout: float) -> str:
+    with urllib.request.urlopen(f"{base_url}/health", timeout=timeout) as response:
+        _text, data = _read_json_http_response(response)
+    if isinstance(data, dict):
+        return str(data.get("csrf_token") or "")
+    return ""
+
+
+def _request_cli_route(
+    method: str,
+    path: str,
+    *,
+    base_url: str,
+    query_pairs: list[tuple[str, str]],
+    body: Optional[Any],
+    timeout: float,
+) -> tuple[int, str, Any]:
+    query = urllib.parse.urlencode(query_pairs, doseq=True)
+    url = f"{base_url}{path}{'?' + query if query else ''}"
+    headers = {"Accept": "application/json"}
+    data = None
+    if method in _CLI_MUTATING_METHODS:
+        headers["Content-Type"] = "application/json"
+        csrf_token = _fetch_cli_csrf_token(base_url, timeout)
+        if csrf_token:
+            headers["X-OpenCut-Token"] = csrf_token
+        data = json.dumps(body if body is not None else {}).encode("utf-8")
+
+    request = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            text, decoded = _read_json_http_response(response)
+            return getattr(response, "status", 200), text, decoded
+    except urllib.error.HTTPError as exc:
+        text = exc.read().decode("utf-8", errors="replace")
+        try:
+            decoded = json.loads(text) if text else None
+        except json.JSONDecodeError:
+            decoded = None
+        return exc.code, text, decoded
+
+
+@click.group()
+@click.version_option(version=__version__, prog_name="opencut")
+def cli():
+    """OpenCut - Open source video editing automation for Premiere Pro."""
+    pass
+
+
+@cli.command()
+@click.argument("input_file", type=click.Path(exists=True))
+@click.option("-o", "--output", type=click.Path(), default=None, help="Output timeline file path")
+@click.option("-t", "--threshold", type=float, default=-30.0, help="Silence threshold in dB (default: -30)")
+@click.option("-d", "--min-duration", type=float, default=0.5, help="Minimum silence duration in seconds (default: 0.5)")
+@click.option("--padding-before", type=float, default=0.1, help="Padding before speech in seconds (default: 0.1)")
+@click.option("--padding-after", type=float, default=0.1, help="Padding after speech in seconds (default: 0.1)")
+@click.option("--min-speech", type=float, default=0.25, help="Minimum speech segment duration (default: 0.25)")
+@click.option("--preset", type=click.Choice(["default", "aggressive", "conservative", "podcast", "youtube"]), default=None, help="Use a preset configuration")
+@click.option("--format", "export_format", type=click.Choice(["premiere", "resolve", "otio", "mlt"]), default="premiere", help="Export format (default: premiere)")
+@click.option("--name", "seq_name", type=str, default="OpenCut Edit", help="Sequence name in the exported timeline")
+@click.option("--otio-schema", default="current", help="OTIO schema target: current or OTIO_CORE:<version>")
+@click.option("--otio-adapter", default="otio_json", help="Installed OTIO adapter name (default: otio_json)")
+@click.option("--accept-lossy-otio", is_flag=True, help="Allow fields reported as lost by OTIO downgrade preflight")
+@click.option("--otio-preflight", is_flag=True, help="Check OTIO compatibility without writing a file")
+@click.option("--dry-run", is_flag=True, help="Analyze only, don't export")
+def silence(
+    input_file,
+    output,
+    threshold,
+    min_duration,
+    padding_before,
+    padding_after,
+    min_speech,
+    preset,
+    export_format,
+    seq_name,
+    otio_schema,
+    otio_adapter,
+    accept_lossy_otio,
+    otio_preflight,
+    dry_run,
+):
+    """Remove silences from a video/audio file.
+
+    Detects silent sections and exports a Premiere/Resolve XML, an MLT project
+    for Kdenlive/Shotcut, or a version-targeted OpenTimelineIO timeline with
+    only the speech segments.
+    """
+    print_banner()
+
+    from .core.silence import detect_speech, get_edit_summary
+    from .export.premiere import export_premiere_xml
+    from .utils.config import ExportConfig, SilenceConfig, get_preset
+
+    # Apply preset or manual settings
+    if preset:
+        cfg = get_preset(preset)
+        scfg = cfg.silence
+    else:
+        scfg = SilenceConfig(
+            threshold_db=threshold,
+            min_duration=min_duration,
+            padding_before=padding_before,
+            padding_after=padding_after,
+            min_speech_duration=min_speech,
+        )
+
+    ecfg = ExportConfig(format=export_format, sequence_name=seq_name)
+
+    # Default output path
+    if output is None:
+        base = os.path.splitext(input_file)[0]
+        if export_format == "otio":
+            try:
+                from .export.otio_compat import adapter_output_suffix
+
+                suffix = adapter_output_suffix(otio_adapter)
+            except (ImportError, ValueError) as exc:
+                raise click.ClickException(str(exc)) from exc
+            output = f"{base}_opencut.{suffix}"
+        elif export_format == "mlt":
+            output = f"{base}_opencut.mlt"
+        else:
+            output = f"{base}_opencut.xml"
+
+    # Detect speech
+    console.print(f"\n[bold]Analyzing:[/bold] {input_file}")
+    console.print(f"[dim]Threshold: {scfg.threshold_db} dB | Min silence: {scfg.min_duration}s | Padding: {scfg.padding_before}s/{scfg.padding_after}s[/dim]\n")
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Detecting silences...", total=None)
+        start_time = time.time()
+
+        segments = detect_speech(input_file, config=scfg)
+
+        elapsed = time.time() - start_time
+        progress.update(task, description=f"[green]Detection complete ({elapsed:.1f}s)")
+        progress.stop()
+
+    # Show summary
+    summary = get_edit_summary(input_file, segments)
+    _print_summary(summary, segments)
+
+    if dry_run:
+        console.print("\n[yellow]Dry run — no file exported.[/yellow]")
+        return
+
+    # Export
+    console.print(f"\n[bold]Exporting:[/bold] {output}")
+    if export_format == "otio":
+        from .export.otio_compat import OTIOPreflightError
+        from .export.otio_export import export_otio
+
+        try:
+            report = export_otio(
+                input_file,
+                segments,
+                output,
+                sequence_name=seq_name,
+                schema_target=otio_schema,
+                adapter_name=otio_adapter,
+                accept_lossy=accept_lossy_otio,
+                preflight_only=otio_preflight,
+                return_report=True,
+            )
+        except OTIOPreflightError as exc:
+            fields = ", ".join(exc.report.get("lossy_fields", []))
+            detail = f" Lost fields: {fields}" if fields else ""
+            raise click.ClickException(f"OTIO preflight failed: {exc}.{detail}") from exc
+        console.print(
+            "[bold]OTIO compatibility:[/bold] "
+            f"adapter {report['adapter']['name']} {report['adapter']['version']}; "
+            f"schema {report['schema_target']}; lossy={str(report['lossy']).lower()}"
+        )
+        if otio_preflight:
+            console.print("[green bold]Preflight passed.[/green bold] No file was written.\n")
+        else:
+            console.print("[green bold]Done![/green bold] Import the timeline into an OTIO-compatible editor.\n")
+    elif export_format == "mlt":
+        from .export.mlt_export import export_mlt
+
+        result = export_mlt(input_file, segments, output, sequence_name=seq_name)
+        console.print(
+            f"[green bold]Done![/green bold] Import {result['output_path']} into Kdenlive or Shotcut.\n"
+        )
+    else:
+        export_premiere_xml(input_file, segments, output, config=ecfg)
+        console.print("[green bold]Done![/green bold] Import this XML into Premiere Pro via File > Import.\n")
+
+
+@cli.command()
+@click.argument("input_file", type=click.Path(exists=True))
+@click.option("-o", "--output", type=click.Path(), default=None, help="Output subtitle file path")
+@click.option("--format", "sub_format", type=click.Choice(["srt", "vtt", "json"]), default="srt", help="Subtitle format (default: srt)")
+@click.option("--model", type=str, default="base", help="Whisper model: tiny, base, small, medium, large-v3, turbo")
+@click.option("--language", type=str, default=None, help="Language code (auto-detect if not set)")
+@click.option("--translate", is_flag=True, help="Translate to English")
+@click.option("--word-timestamps/--no-word-timestamps", default=True, help="Enable word-level timestamps")
+@click.option("--srt-legacy-bom", is_flag=True, help="Write SRT as UTF-8 with BOM for legacy Windows players")
+def captions(input_file, output, sub_format, model, language, translate, word_timestamps, srt_legacy_bom):
+    """Generate captions/subtitles using AI speech recognition.
+
+    Uses OpenAI Whisper to transcribe speech and generate subtitle files.
+    Supports 99+ languages with auto-detection.
+    """
+    print_banner()
+
+    from .core.captions import check_whisper_available, transcribe
+    from .export.srt import export_json, export_srt, export_vtt
+    from .utils.config import CaptionConfig
+
+    # Check Whisper availability
+    available, backend = check_whisper_available()
+    if not available:
+        console.print("[red bold]Error:[/red bold] No Whisper backend installed.\n")
+        console.print("Install one of:")
+        console.print("  [cyan]pip install openai-whisper[/cyan]        # Reference implementation")
+        console.print("  [cyan]pip install faster-whisper[/cyan]        # Fastest (recommended)")
+        console.print("  [dim]WhisperX is unavailable in OpenCut's supported dependency matrix.[/dim]")
+        sys.exit(1)
+
+    console.print(f"[dim]Using Whisper backend: {backend}[/dim]")
+
+    config = CaptionConfig(
+        model=model,
+        language=language,
+        word_timestamps=word_timestamps,
+        translate=translate,
+        output_format=sub_format,
+    )
+
+    # Default output path
+    if output is None:
+        base = os.path.splitext(input_file)[0]
+        output = f"{base}.{sub_format}"
+
+    console.print(f"\n[bold]Transcribing:[/bold] {input_file}")
+    console.print(f"[dim]Model: {model} | Language: {language or 'auto'} | Format: {sub_format}[/dim]\n")
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Transcribing audio...", total=None)
+        start_time = time.time()
+
+        result = transcribe(input_file, config=config)
+
+        elapsed = time.time() - start_time
+        progress.update(task, description=f"[green]Transcription complete ({elapsed:.1f}s)")
+        progress.stop()
+
+    # Export
+    console.print(f"\n[bold]Language detected:[/bold] {result.language}")
+    console.print(f"[bold]Segments:[/bold] {len(result.segments)}")
+    console.print(f"[bold]Words:[/bold] {result.word_count}")
+    review_count = getattr(result, "review_segment_count", 0)
+    if review_count:
+        console.print(
+            f"[yellow]Human review recommended for {review_count} segment(s) "
+            "because of language or ASR confidence.[/yellow]"
+        )
+
+    if sub_format == "srt":
+        export_srt(result, output, legacy_windows_bom=srt_legacy_bom)
+    elif sub_format == "vtt":
+        export_vtt(result, output)
+    elif sub_format == "json":
+        export_json(result, output)
+
+    console.print(f"\n[green bold]Saved:[/green bold] {output}\n")
+
+
+@cli.command("subtitle-resync")
+@click.argument("subtitle_file", type=click.Path(exists=True, dir_okay=False))
+@click.option("--video", "video_file", type=click.Path(exists=True, dir_okay=False), default=None,
+              help="Video/audio file to transcribe for reference timing")
+@click.option("--reference-json", type=click.Path(exists=True, dir_okay=False), default=None,
+              help="JSON transcript with a segments array (useful for offline review/tests)")
+@click.option("-o", "--output", type=click.Path(dir_okay=False), default=None,
+              help="Output SRT path (preview mode never writes it)")
+@click.option("--fps", type=float, default=30.0, show_default=True,
+              help="Video frame rate used for the one-frame quality report")
+@click.option("--match-threshold", type=float, default=0.72, show_default=True,
+              help="Minimum normalized text similarity for a cue match")
+@click.option("--model", type=str, default="base", show_default=True,
+              help="Whisper model used when --video is supplied")
+@click.option("--language", type=str, default=None,
+              help="Language code for reference transcription")
+@click.option("--apply", is_flag=True, help="Write the reviewed timing transform")
+@click.option("--overwrite", is_flag=True, help="Allow replacing an existing output, including the source")
+def subtitle_resync(
+    subtitle_file,
+    video_file,
+    reference_json,
+    output,
+    fps,
+    match_threshold,
+    model,
+    language,
+    apply,
+    overwrite,
+):
+    """Preview or apply timing corrections to an existing SRT file.
+
+    Supply --video to transcribe the source media, or --reference-json to use
+    an existing timestamped transcript. Without --apply this command is
+    strictly read-only and prints the transformed SRT for review.
+    """
+    print_banner()
+    if not video_file and not reference_json:
+        raise click.ClickException("Pass --video or --reference-json to provide reference timing")
+    if video_file and reference_json:
+        raise click.ClickException("Pass only one of --video or --reference-json")
+
+    reference_segments = None
+    if reference_json:
+        try:
+            reference_payload = json.loads(
+                Path(reference_json).read_text(encoding="utf-8-sig")
+            )
+        except (OSError, json.JSONDecodeError) as exc:
+            raise click.ClickException(f"Cannot read reference JSON: {exc}") from exc
+        reference_segments = reference_payload
+
+    from .core.subtitle_resync import resync_subtitles, write_resynced_srt
+
+    console.print(f"\n[bold]Resynchronising:[/bold] {subtitle_file}")
+    preview = resync_subtitles(
+        subtitle_file,
+        reference_segments=reference_segments,
+        video_path=video_file,
+        fps=fps,
+        match_threshold=match_threshold,
+        model=model,
+        language=language,
+    )
+    console.print(
+        "[bold]Timing fit:[/bold] "
+        f"{preview['fit_mode']} | offset {preview['offset_seconds']:.3f}s | "
+        f"rate {preview['rate']:.6f} | matched {preview['matched_count']}/"
+        f"{preview['source_cue_count']}"
+    )
+    quality = "within one frame" if preview["within_one_frame"] else "needs review"
+    console.print(f"[bold]Boundary check:[/bold] {quality} (max error {preview['max_boundary_error']:.4f}s)")
+    console.print("\n[bold]Preview (no file written):[/bold]")
+    console.print(preview["preview_srt"], markup=False)
+
+    if not apply:
+        console.print("\n[yellow]Preview only — pass --apply after reviewing the result.[/yellow]\n")
+        return
+
+    if output is None:
+        output = f"{os.path.splitext(subtitle_file)[0]}_resynced.srt"
+    try:
+        written = write_resynced_srt(preview, output, overwrite=overwrite)
+    except (OSError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    console.print(f"\n[green bold]Saved:[/green bold] {written['output_path']}\n")
+
+
+@cli.command()
+@click.argument("input_file", type=click.Path(exists=True))
+@click.option("-o", "--output", type=click.Path(), default=None, help="Output XML file path")
+@click.option("--speakers", type=int, default=None, help="Expected number of speakers (auto-detect if not set)")
+@click.option("--hf-token", type=str, default=None, help="HuggingFace auth token for pyannote")
+@click.option("--min-segment", type=float, default=1.5, help="Minimum segment duration before camera switch (default: 1.5)")
+@click.option("--name", "seq_name", type=str, default="OpenCut Podcast", help="Sequence name")
+def podcast(input_file, output, speakers, hf_token, min_segment, seq_name):
+    """Edit podcasts with automatic speaker-based camera switching.
+
+    Uses AI speaker diarization to detect who is speaking and generates
+    a multicam timeline that switches cameras at speaker changes.
+    """
+    print_banner()
+
+    from .core.diarize import check_pyannote_available, diarize
+    from .utils.config import DiarizeConfig
+
+    if not check_pyannote_available():
+        console.print("[red bold]Error:[/red bold] pyannote.audio not installed.\n")
+        console.print("Install with: [cyan]pip install pyannote.audio[/cyan]")
+        console.print("\nYou also need a HuggingFace token:")
+        console.print("  1. Create account at [link]https://huggingface.co[/link]")
+        console.print("  2. Accept model terms at [link]https://huggingface.co/pyannote/speaker-diarization-3.1[/link]")
+        console.print("  3. Pass token via [cyan]--hf-token[/cyan] or [cyan]HUGGINGFACE_TOKEN[/cyan] env var")
+        sys.exit(1)
+
+    config = DiarizeConfig(
+        num_speakers=speakers,
+        hf_token=hf_token,
+        min_segment_duration=min_segment,
+    )
+
+    if output is None:
+        base = os.path.splitext(input_file)[0]
+        output = f"{base}_podcast.xml"
+
+    console.print(f"\n[bold]Diarizing:[/bold] {input_file}")
+    console.print(f"[dim]Speakers: {speakers or 'auto'} | Min segment: {min_segment}s[/dim]\n")
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Analyzing speakers...", total=None)
+        start_time = time.time()
+
+        result = diarize(input_file, config=config)
+
+        elapsed = time.time() - start_time
+        progress.update(task, description=f"[green]Diarization complete ({elapsed:.1f}s)")
+        progress.stop()
+
+    # Show speaker breakdown
+    console.print(f"\n[bold]Speakers detected:[/bold] {result.num_speakers}")
+    durations = result.get_speaker_durations()
+
+    table = Table(box=box.SIMPLE)
+    table.add_column("Speaker", style="cyan")
+    table.add_column("Duration", justify="right")
+    table.add_column("Segments", justify="right")
+
+    for speaker in result.speakers:
+        dur = durations.get(speaker, 0)
+        seg_count = len(result.get_speaker_segments(speaker))
+        table.add_row(speaker, f"{dur:.1f}s", str(seg_count))
+
+    console.print(table)
+
+    # Convert to camera switches and export
+    switches = result.to_camera_switches(min_segment_duration=min_segment)
+    console.print(f"\n[bold]Camera switches:[/bold] {len(switches)}")
+
+    # Export multicam XML
+    from .core.multicam_xml import generate_multicam_xml
+
+    # Build source files mapping from command args or auto-detect
+    source_map = {}
+    for i, speaker in enumerate(result.speakers):
+        source_map[speaker] = input_file  # Same file, different tracks
+
+    xml_result = generate_multicam_xml(
+        cuts=switches,
+        source_files=source_map,
+        sequence_name=f"Multicam - {os.path.basename(input_file)}",
+        output_path=output,
+    )
+    console.print(f"\n[green]Multicam XML exported:[/green] {xml_result['output']}")
+    console.print(f"  Cuts: {xml_result['cuts_count']}, Duration: {xml_result['duration']:.1f}s\n")
+
+
+@cli.command()
+@click.argument("input_file", type=click.Path(exists=True))
+@click.option("-o", "--output", type=click.Path(), default=None, help="Output directory for all generated files")
+@click.option("--preset", type=click.Choice(["default", "aggressive", "conservative", "podcast", "youtube"]), default="youtube", help="Preset configuration")
+@click.option("--skip-captions", is_flag=True, help="Skip caption generation")
+@click.option("--skip-zoom", is_flag=True, help="Skip auto-zoom")
+@click.option("--name", "seq_name", type=str, default="OpenCut Full Edit", help="Sequence name")
+@click.option("--srt-legacy-bom", is_flag=True, help="Write SRT as UTF-8 with BOM for legacy Windows players")
+def full(input_file, output, preset, skip_captions, skip_zoom, seq_name, srt_legacy_bom):
+    """Run the full editing pipeline: silence removal + captions + zoom.
+
+    Combines all OpenCut features into a single workflow.
+    Generates Premiere Pro XML and subtitle files.
+    """
+    print_banner()
+
+    from .core.silence import detect_speech, get_edit_summary
+    from .core.zoom import generate_zoom_events
+    from .export.premiere import export_premiere_xml
+    from .utils.config import ExportConfig, get_preset
+
+    cfg = get_preset(preset)
+    ecfg = ExportConfig(sequence_name=seq_name)
+
+    # Setup output paths
+    base = os.path.splitext(input_file)[0]
+    if output:
+        os.makedirs(output, exist_ok=True)
+        base = os.path.join(output, os.path.basename(base))
+
+    xml_path = f"{base}_opencut.xml"
+    srt_path = f"{base}_opencut.srt"
+
+    console.print(f"\n[bold]Full pipeline:[/bold] {input_file}")
+    console.print(f"[dim]Preset: {preset}[/dim]\n")
+
+    # Step 1: Silence detection
+    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), TimeElapsedColumn(), console=console) as progress:
+        task = progress.add_task("[bold]Step 1/3:[/bold] Detecting silences...", total=None)
+        segments = detect_speech(input_file, config=cfg.silence)
+        progress.update(task, description=f"[green]Step 1/3: Found {len(segments)} speech segments")
+        progress.stop()
+
+    summary = get_edit_summary(input_file, segments)
+    _print_summary(summary, segments)
+
+    # Step 2: Zoom detection
+    zoom_events = None
+    if not skip_zoom:
+        with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), TimeElapsedColumn(), console=console) as progress:
+            task = progress.add_task("[bold]Step 2/3:[/bold] Analyzing zoom points...", total=None)
+            zoom_events = generate_zoom_events(input_file, config=cfg.zoom, speech_segments=segments)
+            progress.update(task, description=f"[green]Step 2/3: Found {len(zoom_events)} zoom points")
+            progress.stop()
+    else:
+        console.print("[dim]Step 2/3: Zoom skipped[/dim]")
+
+    # Step 3: Captions
+    if not skip_captions:
+        from .core.captions import check_whisper_available
+        available, backend = check_whisper_available()
+        if available:
+            with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), TimeElapsedColumn(), console=console) as progress:
+                task = progress.add_task("[bold]Step 3/3:[/bold] Generating captions...", total=None)
+                from .core.captions import transcribe
+                from .export.srt import export_srt
+                result = transcribe(input_file, config=cfg.captions)
+                export_srt(result, srt_path, legacy_windows_bom=srt_legacy_bom)
+                progress.update(task, description=f"[green]Step 3/3: Generated {len(result.segments)} caption segments")
+                progress.stop()
+            console.print(f"[bold]Captions saved:[/bold] {srt_path}")
+        else:
+            console.print("[yellow]Step 3/3: Whisper not installed, skipping captions[/yellow]")
+    else:
+        console.print("[dim]Step 3/3: Captions skipped[/dim]")
+
+    # Export timeline
+    console.print(f"\n[bold]Exporting timeline:[/bold] {xml_path}")
+    export_premiere_xml(input_file, segments, xml_path, config=ecfg, zoom_events=zoom_events)
+    console.print("\n[green bold]Done![/green bold] Import the XML into Premiere Pro via File > Import.\n")
+
+
+@cli.command()
+@click.argument("input_file", type=click.Path(exists=True))
+def info(input_file):
+    """Display media file information."""
+    print_banner()
+
+    from .utils.media import probe
+
+    info = probe(input_file)
+
+    console.print(f"\n[bold]File:[/bold] {info.filename}")
+    console.print(f"[bold]Path:[/bold] {os.path.abspath(info.path)}")
+    console.print(f"[bold]Duration:[/bold] {info.duration:.3f}s")
+    console.print(f"[bold]Format:[/bold] {info.format_name}")
+
+    if info.has_video:
+        v = info.video
+        console.print("\n[bold cyan]Video:[/bold cyan]")
+        console.print(f"  Resolution: {v.width}x{v.height}")
+        console.print(f"  Frame Rate: {v.fps:.3f} fps (timebase={v.effective_timebase}, ntsc={v.ntsc})")
+        console.print(f"  Codec: {v.codec}")
+        console.print(f"  PAR: {v.pixel_aspect_ratio}")
+
+    if info.has_audio:
+        a = info.audio
+        console.print("\n[bold cyan]Audio:[/bold cyan]")
+        console.print(f"  Sample Rate: {a.sample_rate} Hz")
+        console.print(f"  Channels: {a.channels}")
+        console.print(f"  Bit Depth: {a.bit_depth}")
+        console.print(f"  Codec: {a.codec}")
+
+    console.print()
+
+
+def _print_summary(summary: dict, segments):
+    """Print edit summary table."""
+    table = Table(title="Edit Summary", box=box.ROUNDED, show_header=False, padding=(0, 2))
+    table.add_column("Metric", style="bold")
+    table.add_column("Value", justify="right", style="cyan")
+
+    table.add_row("Original duration", summary["original_formatted"])
+    table.add_row("Kept duration", summary["kept_formatted"])
+    table.add_row("Removed duration", f"[red]{summary['removed_formatted']}[/red]")
+    table.add_row("Reduction", f"[green]{summary['reduction_percent']:.1f}%[/green]")
+    table.add_row("Speech segments", str(summary["segments_count"]))
+
+    console.print(table)
+
+
+@cli.command()
+@click.option("--host", default="127.0.0.1", help="Host to bind to (default: 127.0.0.1)")
+@click.option("--port", type=int, default=5679, help="Port to listen on (default: 5679)")
+@click.option("--debug", is_flag=True, help="Enable debug mode")
+def server(host, port, debug):
+    """Start the OpenCut backend server for the Premiere Pro panel.
+
+    The server runs on localhost:5679 and handles processing requests
+    from the CEP panel inside Premiere Pro.
+    """
+    from .server import run_server
+    run_server(host=host, port=port, debug=debug)
+
+
+@cli.command("route")
+@click.argument("method")
+@click.argument("path")
+@click.option("--host", default="127.0.0.1", show_default=True, help="Backend host.")
+@click.option("--port", type=click.IntRange(1, 65535), default=5679, show_default=True, help="Backend port.")
+@click.option("--query", multiple=True, help="Query parameter as key=value. May be repeated.")
+@click.option("--data", default="", help="JSON request body. Use '-' to read JSON from stdin.")
+@click.option("--data-file", type=click.Path(exists=True), default=None, help="Read JSON request body from a file.")
+@click.option("--field", multiple=True, help="Add/override a JSON object body field as key=value.")
+@click.option("--timeout", type=float, default=120.0, show_default=True, help="HTTP timeout in seconds.")
+@click.option("--raw", is_flag=True, help="Print the raw response body instead of formatted JSON.")
+def route(method, path, host, port, query, data, data_file, field, timeout, raw):
+    """Call a backend API route after validating it against route_manifest.json.
+
+    Examples:
+
+      opencut route GET /system/check-failures
+
+      opencut route POST /queue/add --data '{"endpoint":"/captions","payload":{"filepath":"C:/clip.mp4"}}'
+    """
+    method = str(method or "").upper()
+    matched = _match_manifest_route(method, path)
+    path = _normalize_cli_route_path(path)
+    query_pairs = _parse_key_value_pairs(query, option_name="--query")
+    if method == "GET" and (data or data_file or field):
+        raise click.ClickException("GET routes do not send a JSON body; use --query instead")
+    try:
+        body = _load_cli_json_body(data, data_file, field)
+    except json.JSONDecodeError as exc:
+        raise click.ClickException(f"Invalid JSON body: {exc}") from exc
+
+    base_url = _validated_backend_base(host, port)
+    try:
+        status, text, decoded = _request_cli_route(
+            method,
+            path,
+            base_url=base_url,
+            query_pairs=query_pairs,
+            body=body,
+            timeout=max(0.1, float(timeout)),
+        )
+    except urllib.error.URLError as exc:
+        raise click.ClickException(
+            f"Backend unreachable at {base_url}. Start it with `opencut server` or `opencut-server`. ({exc})"
+        ) from exc
+
+    if raw or decoded is None:
+        click.echo(text)
+    else:
+        console.print_json(json.dumps(decoded, ensure_ascii=False))
+
+    if status >= 400:
+        raise click.ClickException(
+            f"{method} {matched.get('rule', path)} returned HTTP {status}"
+        )
+
+
+@cli.command("surfaces")
+@click.option("--json", "json_output", is_flag=True, help="Print machine-readable JSON.")
+def surfaces(json_output):
+    """List curated route-family entry points for the route command."""
+    payload = {"surfaces": list(CLI_SURFACE_EXAMPLES)}
+    if json_output:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    table = Table(title="Curated Route Surfaces", box=box.ROUNDED)
+    table.add_column("Family", style="cyan")
+    table.add_column("Method", style="magenta")
+    table.add_column("Path", style="green")
+    table.add_column("Description")
+    for item in CLI_SURFACE_EXAMPLES:
+        table.add_row(item["family"], item["method"], item["path"], item["description"])
+    console.print(table)
+
+
+def _local_db_diagnostics_payload() -> dict[str, Any]:
+    from opencut.local_db_diagnostics import collect_local_db_diagnostics
+
+    stores = collect_local_db_diagnostics()
+    return {"count": len(stores), "stores": stores}
+
+
+@cli.command("local-db-diagnostics")
+@click.option("--json", "json_output", is_flag=True, help="Print machine-readable JSON.")
+def local_db_diagnostics(json_output):
+    """Show read-only diagnostics for local SQLite databases."""
+    payload = _local_db_diagnostics_payload()
+    if json_output:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    table = Table(title="Local SQLite Diagnostics", box=box.ROUNDED)
+    table.add_column("Store", style="cyan")
+    table.add_column("DB bytes", justify="right")
+    table.add_column("WAL bytes", justify="right")
+    table.add_column("Pages", justify="right")
+    table.add_column("Freelist", justify="right")
+    table.add_column("Action")
+    for item in payload["stores"]:
+        files = item.get("files") or {}
+        database = files.get("database") or {}
+        wal = files.get("wal") or {}
+        table.add_row(
+            str(item.get("store") or ""),
+            str(database.get("bytes") or 0),
+            str(wal.get("bytes") or 0),
+            str(item.get("page_count") or 0),
+            str(item.get("freelist_count") or 0),
+            str(item.get("recommended_action") or ""),
+        )
+    console.print(table)
+
+
+def _scene_boundaries_to_rows(scenes):
+    """Turn a ``SceneInfo`` into ``[{start, end, score, frame}]`` rows.
+
+    Every backend returns a ``SceneInfo`` whose ``boundaries`` are *cut
+    points* (a single ``time``), not ranges. Treating that dataclass as a
+    list-or-dict reported "Scenes found: 0" and wrote `[]` for every run.
+    """
+    boundaries = getattr(scenes, "boundaries", None)
+    if boundaries is None:
+        if isinstance(scenes, dict):
+            boundaries = scenes.get("boundaries", scenes.get("scenes", []))
+        elif isinstance(scenes, list):
+            boundaries = scenes
+        else:
+            boundaries = []
+
+    duration = float(getattr(scenes, "duration", 0.0) or 0.0)
+
+    points = []
+    for boundary in boundaries:
+        if isinstance(boundary, dict):
+            value = boundary.get("time", boundary.get("start"))
+            label = boundary.get("label", "")
+        else:
+            value = getattr(boundary, "time", getattr(boundary, "start", None))
+            label = getattr(boundary, "label", "")
+        if value is None:
+            continue
+        try:
+            points.append((float(value), str(label or "")))
+        except (TypeError, ValueError):
+            continue
+
+    rows = []
+    for index, (start, label) in enumerate(points):
+        # A boundary marks where a scene begins; the last one runs to the end.
+        end = points[index + 1][0] if index + 1 < len(points) else duration
+        if end < start:
+            end = start
+        rows.append({
+            "index": index + 1,
+            "start": start,
+            "end": end,
+            "label": label or f"Scene {index + 1}",
+        })
+    return rows
+
+
+def _resolve_output_dir(input_file, output_dir):
+    """Resolve output directory, creating it if needed. Returns base path."""
+    base = os.path.splitext(input_file)[0]
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+        base = os.path.join(output_dir, os.path.basename(base))
+    return base
+
+
+@cli.command()
+@click.argument("file", type=click.Path(exists=True))
+@click.option("--provider", type=click.Choice(["ollama", "openai", "anthropic", "gemini"]), default="ollama", help="LLM provider")
+@click.option("--model", default="llama3", help="LLM model name")
+@click.option("--api-key", default="", help="API key (for OpenAI/Anthropic/Gemini)")
+@click.option("--max-chapters", type=click.IntRange(1, 100), default=15, help="Maximum chapters to generate (1-100)")
+@click.option("--whisper-model", default="turbo", help="Whisper model for transcription (turbo, base, small, medium, large-v3, distil-large-v3)")
+@click.option("--output", "-o", default=None, help="Output text file path")
+def chapters(file, provider, model, api_key, max_chapters, whisper_model, output):
+    """Generate YouTube chapter timestamps from video transcript."""
+    print_banner()
+
+    try:
+        from .core.captions import transcribe_audio
+        from .core.chapter_gen import generate_chapters
+        from .core.llm import LLMConfig
+    except ImportError as e:
+        console.print(f"[red bold]Error:[/red bold] Missing dependency: {e}")
+        console.print("Ensure opencut[chapters] extras are installed.")
+        sys.exit(1)
+
+    # Validate whisper model — same allowlist used by the route layer.
+    from .security import VALID_WHISPER_MODELS
+    if whisper_model not in VALID_WHISPER_MODELS:
+        console.print(f"[red bold]Error:[/red bold] Invalid --whisper-model '{whisper_model}'.")
+        console.print(f"Valid models: {', '.join(sorted(VALID_WHISPER_MODELS))}")
+        sys.exit(2)
+
+    llm_cfg = LLMConfig(provider=provider, model=model, api_key=api_key)
+
+    console.print(f"\n[bold]Generating chapters:[/bold] {file}")
+    console.print(f"[dim]Provider: {provider} | Model: {model} | Whisper: {whisper_model} | Max chapters: {max_chapters}[/dim]\n")
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Transcribing audio...", total=None)
+        start_time = time.time()
+        segments = transcribe_audio(file, model=whisper_model)
+        elapsed = time.time() - start_time
+        progress.update(task, description=f"[green]Transcription complete ({elapsed:.1f}s)")
+        progress.stop()
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Generating chapter timestamps...", total=None)
+        start_time = time.time()
+        result = generate_chapters(segments, llm_cfg, max_chapters=max_chapters)
+        elapsed = time.time() - start_time
+        progress.update(task, description=f"[green]Chapters generated ({elapsed:.1f}s)")
+        progress.stop()
+
+    description_block = result.get("description_block", "") if isinstance(result, dict) else getattr(result, "description_block", "")
+
+    if output:
+        with open(output, "w", encoding="utf-8") as f:
+            f.write(description_block)
+        console.print(f"\n[green bold]Saved:[/green bold] {output}\n")
+    else:
+        console.print("\n[bold]Chapter Timestamps:[/bold]\n")
+        console.print(description_block)
+
+
+@cli.command("repeat-detect")
+@click.argument("file", type=click.Path(exists=True))
+@click.option("--threshold", default=0.6, help="Similarity threshold (0-1)")
+@click.option("--model", default="base", help="Whisper model")
+@click.option("--output", "-o", default=None, help="Output JSON path")
+def repeat_detect(file, threshold, model, output):
+    """Detect and list repeated/fumbled takes in a recording."""
+    print_banner()
+
+    try:
+        from .core.captions import transcribe_audio
+        from .core.repeat_detect import detect_repeated_takes
+    except ImportError as e:
+        console.print(f"[red bold]Error:[/red bold] Missing dependency: {e}")
+        console.print("Ensure opencut[repeat-detect] extras are installed.")
+        sys.exit(1)
+
+    console.print(f"\n[bold]Detecting repeated takes:[/bold] {file}")
+    console.print(f"[dim]Whisper model: {model} | Similarity threshold: {threshold}[/dim]\n")
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Transcribing audio...", total=None)
+        start_time = time.time()
+        segments = transcribe_audio(file, model=model)
+        elapsed = time.time() - start_time
+        progress.update(task, description=f"[green]Transcription complete ({elapsed:.1f}s)")
+        progress.stop()
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Analyzing repeated takes...", total=None)
+        start_time = time.time()
+        result = detect_repeated_takes(segments, threshold=threshold)
+        elapsed = time.time() - start_time
+        progress.update(task, description=f"[green]Analysis complete ({elapsed:.1f}s)")
+        progress.stop()
+
+    repeats = result.get("repeats", []) if isinstance(result, dict) else result
+    console.print(f"\n[bold]Repeated takes found:[/bold] {len(repeats)}\n")
+
+    if repeats:
+        if output:
+            import json
+            with open(output, "w", encoding="utf-8") as f:
+                json.dump([r if isinstance(r, dict) else vars(r) for r in repeats], f, indent=2)
+            console.print(f"[green bold]Saved:[/green bold] {output}\n")
+        else:
+            table = Table(title="Repeated Takes", box=box.ROUNDED)
+            table.add_column("Take #", style="cyan", justify="right")
+            table.add_column("Start", justify="right")
+            table.add_column("End", justify="right")
+            table.add_column("Similarity", justify="right", style="yellow")
+            table.add_column("Text", style="dim")
+
+            for i, r in enumerate(repeats, 1):
+                data = r if isinstance(r, dict) else vars(r)
+                table.add_row(
+                    str(i),
+                    f"{data.get('start', 0):.2f}s",
+                    f"{data.get('end', 0):.2f}s",
+                    f"{data.get('similarity', 0):.2f}",
+                    str(data.get('text', ''))[:60],
+                )
+            console.print(table)
+    else:
+        console.print("[green]No repeated takes detected.[/green]\n")
+
+
+@cli.group()
+def search():
+    """Footage search commands."""
+    pass
+
+
+@search.command("index")
+@click.argument("files", nargs=-1, type=click.Path(exists=True))
+@click.option("--model", default="base", help="Whisper model")
+def search_index(files, model):
+    """Index media files for content search."""
+    print_banner()
+
+    try:
+        from .core.captions import transcribe_audio
+        from .core.footage_search import index_file
+    except ImportError as e:
+        console.print(f"[red bold]Error:[/red bold] Missing dependency: {e}")
+        console.print("Ensure opencut[search] extras are installed.")
+        sys.exit(1)
+
+    if not files:
+        console.print("[yellow]No files provided to index.[/yellow]")
+        return
+
+    console.print(f"\n[bold]Indexing {len(files)} file(s):[/bold]")
+    console.print(f"[dim]Whisper model: {model}[/dim]\n")
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task(f"Indexing {len(files)} file(s)...", total=None)
+        start_time = time.time()
+        for filepath in files:
+            segments = transcribe_audio(filepath, model=model)
+            index_file(filepath, segments)
+        elapsed = time.time() - start_time
+        progress.update(task, description=f"[green]Indexing complete ({elapsed:.1f}s)")
+        progress.stop()
+
+    console.print(f"[green bold]Indexed {len(files)} file(s) successfully.[/green bold]\n")
+
+
+@search.command("query")
+@click.argument("query")
+@click.option("--top-k", default=10, help="Number of results")
+def search_query(query, top_k):
+    """Search indexed footage by spoken content."""
+    print_banner()
+
+    try:
+        from .core.footage_search import search_footage
+    except ImportError as e:
+        console.print(f"[red bold]Error:[/red bold] Missing dependency: {e}")
+        console.print("Ensure opencut[search] extras are installed.")
+        sys.exit(1)
+
+    console.print(f"\n[bold]Searching:[/bold] {query!r}")
+    console.print(f"[dim]Top {top_k} results[/dim]\n")
+
+    results = search_footage(query, top_k=top_k)
+
+    if not results:
+        console.print("[yellow]No results found. Have you indexed any files with [cyan]opencut search index[/cyan]?[/yellow]\n")
+        return
+
+    table = Table(title=f'Search results for "{query}"', box=box.ROUNDED)
+    table.add_column("File", style="cyan")
+    table.add_column("Start", justify="right")
+    table.add_column("End", justify="right")
+    table.add_column("Score", justify="right", style="yellow")
+    table.add_column("Text", style="dim")
+
+    for r in results:
+        data = r if isinstance(r, dict) else vars(r)
+        table.add_row(
+            os.path.basename(str(data.get('path', data.get('file', '')))),
+            f"{data.get('start', 0):.2f}s",
+            f"{data.get('end', 0):.2f}s",
+            f"{data.get('score', 0):.3f}",
+            str(data.get('text', ''))[:60],
+        )
+    console.print(table)
+    console.print()
+
+
+@search.group("federated")
+def federated_search():
+    """Manage the offline, configured-root media search index."""
+    pass
+
+
+def _print_federated_payload(payload, *, as_json=False):
+    if as_json:
+        console.print(json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True))
+        return
+    if isinstance(payload, dict) and isinstance(payload.get("roots"), list):
+        table = Table(title="Federated media roots", box=box.ROUNDED)
+        table.add_column("ID", justify="right")
+        table.add_column("Label", style="cyan")
+        table.add_column("Enabled")
+        table.add_column("Files", justify="right")
+        for root in payload["roots"]:
+            counts = root.get("file_counts") or {}
+            table.add_row(
+                str(root.get("root_id", "")),
+                str(root.get("label", "")),
+                "yes" if root.get("enabled") else "no",
+                str(counts.get("active", counts.get("total", 0))),
+            )
+        console.print(table)
+        return
+    if isinstance(payload, dict) and isinstance(payload.get("results"), list):
+        table = Table(title="Federated search results", box=box.ROUNDED)
+        table.add_column("Root", style="cyan")
+        table.add_column("File")
+        table.add_column("Modalities")
+        table.add_column("Timecodes", justify="right")
+        for result in payload["results"]:
+            table.add_row(
+                str(result.get("root_label", result.get("root_id", ""))),
+                str(result.get("relative_path", "")),
+                ", ".join(result.get("matched_modalities") or []),
+                str(len(result.get("timestamps") or [])),
+            )
+        console.print(table)
+        return
+    console.print_json(json.dumps(payload, ensure_ascii=False))
+
+
+@federated_search.command("root-add")
+@click.argument("path", type=click.Path(exists=True, file_okay=False, dir_okay=True))
+@click.option("--label", default="", help="Human-readable root label")
+@click.option("--retention-days", default=30, show_default=True, type=click.IntRange(1, 3650))
+@click.option("--max-files", default=5000, show_default=True, type=click.IntRange(1, 5000))
+@click.option("--max-bytes", default=50 * 1024 * 1024 * 1024, show_default=True, type=click.IntRange(1, 50 * 1024 * 1024 * 1024))
+@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON")
+def federated_root_add(path, label, retention_days, max_files, max_bytes, as_json):
+    """Add or re-enable a local project root."""
+    from .core.federated_media_index import add_root
+
+    try:
+        payload = add_root(
+            path,
+            label=label,
+            retention_days=retention_days,
+            max_files=max_files,
+            max_bytes=max_bytes,
+        )
+    except (TypeError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    payload = dict(payload)
+    payload.pop("path", None)
+    _print_federated_payload({"root": payload}, as_json=as_json)
+
+
+@federated_search.command("roots")
+@click.option("--include-paths", is_flag=True, help="Include absolute root paths")
+@click.option("--include-disabled", is_flag=True, help="Include disabled roots")
+@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON")
+def federated_roots(include_paths, include_disabled, as_json):
+    """List configured federation roots."""
+    from .core.federated_media_index import list_roots
+
+    _print_federated_payload(
+        {"manifest_version": 1, "roots": list_roots(include_paths=include_paths, include_disabled=include_disabled)},
+        as_json=as_json,
+    )
+
+
+@federated_search.command("root-remove")
+@click.argument("root_id", type=click.IntRange(1))
+@click.option("--purge", is_flag=True, help="Permanently remove indexed records for the root")
+@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON")
+def federated_root_remove(root_id, purge, as_json):
+    """Disable or purge one configured root."""
+    from .core.federated_media_index import remove_root
+
+    try:
+        payload = remove_root(root_id, purge=purge)
+    except (TypeError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    _print_federated_payload(payload, as_json=as_json)
+
+
+@federated_search.command("index")
+@click.option("--root-id", "root_ids", multiple=True, type=click.IntRange(1), help="Restrict scan to a root (repeatable)")
+@click.option("--max-files", type=click.IntRange(1, 5000))
+@click.option("--max-bytes", type=click.IntRange(1, 50 * 1024 * 1024 * 1024))
+@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON")
+def federated_index(root_ids, max_files, max_bytes, as_json):
+    """Incrementally scan configured roots offline."""
+    from .core.federated_media_index import scan_roots
+
+    payload = scan_roots(
+        list(root_ids) or None,
+        max_files=max_files,
+        max_bytes=max_bytes,
+    )
+    _print_federated_payload(payload, as_json=as_json)
+
+
+@federated_search.command("query")
+@click.argument("query", required=False, default="")
+@click.option("--modality", "modalities", multiple=True, help="Limit to text, ocr, audio, or visual")
+@click.option("--root-id", "root_ids", multiple=True, type=click.IntRange(1), help="Restrict to a root (repeatable)")
+@click.option("--limit", default=50, show_default=True, type=click.IntRange(1, 100))
+@click.option("--include-paths", is_flag=True, help="Include absolute media and thumbnail paths")
+@click.option("--include-stale", is_flag=True, help="Include stale or missing media records")
+@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON")
+def federated_query(query, modalities, root_ids, limit, include_paths, include_stale, as_json):
+    """Search federated transcript, OCR, audio, and sidecar metadata."""
+    from .core.federated_media_index import search
+
+    try:
+        payload = search(
+            query,
+            modalities=list(modalities) or None,
+            root_ids=list(root_ids) or None,
+            limit=limit,
+            include_paths=include_paths,
+            include_stale=include_stale,
+        )
+    except (TypeError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    _print_federated_payload(payload, as_json=as_json)
+
+
+@federated_search.command("prune")
+@click.option("--retention-days", type=click.IntRange(1, 3650))
+@click.option("--root-id", "root_ids", multiple=True, type=click.IntRange(1))
+@click.option("--dry-run", is_flag=True, help="Preview retention actions without changing the index")
+@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON")
+def federated_prune(retention_days, root_ids, dry_run, as_json):
+    """Prune records missing longer than their retention window."""
+    from .core.federated_media_index import prune_missing
+
+    try:
+        payload = prune_missing(
+            retention_days=retention_days,
+            root_ids=list(root_ids) or None,
+            dry_run=dry_run,
+        )
+    except (TypeError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    _print_federated_payload(payload, as_json=as_json)
+
+
+@cli.command("color-match")
+@click.argument("source", type=click.Path(exists=True))
+@click.argument("reference", type=click.Path(exists=True))
+@click.option("--output-dir", "-o", default=None)
+@click.option("--strength", default=1.0, help="Match strength 0-1")
+def color_match(source, reference, output_dir, strength):
+    """Match the color profile of source clip to reference clip."""
+    print_banner()
+
+    try:
+        from .core.color_match import color_match_video
+    except ImportError as e:
+        console.print(f"[red bold]Error:[/red bold] Missing dependency: {e}")
+        console.print("Ensure opencv-python and numpy are installed.")
+        sys.exit(1)
+
+    base = _resolve_output_dir(source, output_dir)
+    output_path = f"{base}_color_matched{os.path.splitext(source)[1]}"
+
+    console.print(f"\n[bold]Color matching:[/bold] {source}")
+    console.print(f"[bold]Reference:[/bold] {reference}")
+    console.print(f"[dim]Strength: {strength}[/dim]\n")
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Applying color match...", total=None)
+        start_time = time.time()
+        color_match_video(source, reference, output_path, strength=strength)
+        elapsed = time.time() - start_time
+        progress.update(task, description=f"[green]Color match complete ({elapsed:.1f}s)")
+        progress.stop()
+
+    console.print(f"\n[green bold]Saved:[/green bold] {output_path}\n")
+
+
+@cli.command("loudness-match")
+@click.argument("files", nargs=-1, type=click.Path(exists=True), required=True)
+@click.option("--target-lufs", default=-14.0, help="Target LUFS level")
+@click.option("--output-dir", "-o", default=None)
+def loudness_match(files, target_lufs, output_dir):
+    """Normalize loudness across multiple clips to a target LUFS level."""
+    print_banner()
+
+    try:
+        from .core.loudness_match import batch_loudness_match
+    except ImportError as e:
+        console.print(f"[red bold]Error:[/red bold] Missing dependency: {e}")
+        console.print("FFmpeg must be installed for loudness normalization.")
+        sys.exit(1)
+
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+
+    console.print(f"\n[bold]Loudness normalizing {len(files)} file(s):[/bold]")
+    console.print(f"[dim]Target: {target_lufs} LUFS[/dim]\n")
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task(f"Normalizing {len(files)} file(s)...", total=None)
+        start_time = time.time()
+        results = batch_loudness_match(list(files), output_dir=output_dir or os.path.dirname(os.path.abspath(files[0])), target_lufs=target_lufs)
+        elapsed = time.time() - start_time
+        progress.update(task, description=f"[green]Normalization complete ({elapsed:.1f}s)")
+        progress.stop()
+
+    console.print(f"\n[green bold]Normalized {len(files)} file(s):[/green bold]")
+    for r in results:
+        path = r.get("output", r) if isinstance(r, dict) else r
+        console.print(f"  {path}")
+    console.print()
+
+
+@cli.command("auto-zoom")
+@click.argument("file", type=click.Path(exists=True))
+@click.option("--zoom-amount", default=1.15, help="Zoom factor (e.g. 1.15 = 15%% zoom)")
+@click.option("--easing", default="ease_in_out", type=click.Choice(["linear", "ease_in", "ease_out", "ease_in_out"]))
+@click.option("--output-dir", "-o", default=None)
+@click.option("--apply/--keyframes-only", default=True, help="Bake zoom into output or return keyframe JSON")
+def auto_zoom(file, zoom_amount, easing, output_dir, apply):
+    """Apply face-tracked auto-zoom effect to a talking-head clip."""
+    print_banner()
+
+    try:
+        from .core.auto_zoom import build_zoompan_filter, generate_zoom_keyframes
+    except ImportError as e:
+        console.print(f"[red bold]Error:[/red bold] Missing dependency: {e}")
+        console.print("Ensure opencv-python is installed: pip install opencv-python")
+        sys.exit(1)
+
+    base = _resolve_output_dir(file, output_dir)
+    ext = os.path.splitext(file)[1]
+    keyframes_path = f"{base}_autozoom_keyframes.json"
+
+    console.print(f"\n[bold]Auto-zoom:[/bold] {file}")
+    console.print(f"[dim]Zoom: {zoom_amount}x | Easing: {easing} | Apply: {apply}[/dim]\n")
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Detecting faces and generating keyframes...", total=None)
+        start_time = time.time()
+        result = generate_zoom_keyframes(
+            file, zoom_amount=zoom_amount, easing=easing,
+        )
+        elapsed = time.time() - start_time
+        progress.update(task, description=f"[green]Keyframe generation complete ({elapsed:.1f}s)")
+        progress.stop()
+
+    keyframes = result.get("keyframes", []) if isinstance(result, dict) else result
+    console.print(f"\n[bold]Generated {len(keyframes)} zoom keyframes[/bold]")
+
+    if apply and keyframes:
+        # Apply zoom via FFmpeg zoompan filter
+        from .helpers import get_ffmpeg_path, get_video_info, run_ffmpeg
+        info = get_video_info(file)
+        fps = info.get("fps", 30)
+        output_path = f"{base}_autozoom{ext}"
+        console.print("[bold]Applying zoom to video...[/bold]")
+        w = info.get("width", 1920)
+        h = info.get("height", 1080)
+        source_fps = result.get("fps", fps) if isinstance(result, dict) else fps
+        zoompan_filter = build_zoompan_filter(keyframes, w, h, source_fps)
+        run_ffmpeg([
+            get_ffmpeg_path(), "-hide_banner", "-loglevel", "error", "-y",
+            "-i", file,
+            "-vf", zoompan_filter,
+            "-c:a", "copy", output_path,
+        ])
+        console.print(f"\n[green bold]Saved:[/green bold] {output_path}\n")
+    else:
+        import json as _json
+        with open(keyframes_path, "w", encoding="utf-8") as f:
+            _json.dump(keyframes, f, indent=2)
+        console.print(f"\n[green bold]Keyframes saved:[/green bold] {keyframes_path}\n")
+
+
+@cli.command()
+@click.option("--sequence-json", required=True, type=click.Path(exists=True), help="Sequence data JSON file")
+@click.option("--output-dir", "-o", default=None)
+@click.option("--type", "doc_type", default="all", type=click.Choice(["all", "vfx", "adr", "music", "asset"]))
+def deliverables(sequence_json, output_dir, doc_type):
+    """Generate post-production deliverable documents from sequence data."""
+    print_banner()
+
+    import json as _json
+
+    try:
+        from .core.deliverables import (
+            generate_adr_list,
+            generate_asset_list,
+            generate_music_cue_sheet,
+            generate_vfx_sheet,
+        )
+    except ImportError as e:
+        console.print(f"[red bold]Error:[/red bold] Missing dependency: {e}")
+        sys.exit(1)
+
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+
+    # Load sequence data JSON
+    try:
+        with open(sequence_json, "r", encoding="utf-8") as f:
+            seq_data = _json.load(f)
+    except Exception as e:
+        console.print(f"[red bold]Error:[/red bold] Could not read sequence JSON: {e}")
+        sys.exit(1)
+
+    console.print(f"\n[bold]Generating deliverables:[/bold] {sequence_json}")
+    console.print(f"[dim]Type: {doc_type} | Output dir: {output_dir or '(same as input)'}[/dim]\n")
+
+    generators = {
+        "vfx": ("VFX Sheet", generate_vfx_sheet),
+        "adr": ("ADR List", generate_adr_list),
+        "music": ("Music Cue Sheet", generate_music_cue_sheet),
+        "asset": ("Asset List", generate_asset_list),
+    }
+
+    if doc_type == "all":
+        gen_list = list(generators.values())
+    else:
+        gen_list = [generators[doc_type]] if doc_type in generators else []
+
+    docs = []
+    out_dir = output_dir or os.path.dirname(sequence_json)
+    for label, gen_fn in gen_list:
+        console.print(f"  Generating {label}...")
+        base_name = os.path.splitext(os.path.basename(sequence_json))[0]
+        out_path = os.path.join(out_dir, f"{base_name}_{label.lower().replace(' ', '_')}.csv")
+        result = gen_fn(seq_data, out_path)
+        if isinstance(result, dict):
+            docs.append(result.get("output", out_path))
+        else:
+            docs.append(out_path)
+
+    console.print(f"\n[green bold]Generated {len(docs)} document(s):[/green bold]")
+    for doc in docs:
+        console.print(f"  {doc}")
+    console.print()
+
+
+@cli.command()
+@click.argument("command_text")
+@click.option("--file", type=click.Path(), default=None, help="Media file to operate on")
+@click.option("--provider", default="ollama")
+@click.option("--model", default="llama3")
+@click.option("--api-key", default="")
+def nlp(command_text, file, provider, model, api_key):
+    """Parse a natural language editing command and show the matched route.
+
+    Uses the LLM (when configured) or the keyword matcher to map the
+    English instruction to an OpenCut backend route plus parameters.
+    Currently displays the result; pass ``--file`` together with a
+    running backend to execute it by POSTing to the matched route.
+    """
+    print_banner()
+
+    try:
+        from .core.llm import LLMConfig
+        from .core.nlp_command import parse_command
+    except ImportError as e:
+        console.print(f"[red bold]Error:[/red bold] Missing dependency: {e}")
+        console.print("Ensure opencut[nlp] extras are installed.")
+        sys.exit(1)
+
+    llm_cfg = LLMConfig(provider=provider, model=model, api_key=api_key)
+
+    console.print(f"\n[bold]NLP command:[/bold] {command_text!r}")
+    if file:
+        console.print(f"[bold]File:[/bold] {file}")
+    console.print(f"[dim]Provider: {provider} | Model: {model}[/dim]\n")
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Parsing command...", total=None)
+        start_time = time.perf_counter()
+        parsed = parse_command(command_text, llm_cfg)
+        elapsed = time.perf_counter() - start_time
+        progress.update(task, description=f"[green]Parsed ({elapsed:.2f}s)")
+        progress.stop()
+
+    if parsed is None:
+        console.print("[red]Could not parse command.[/red]")
+        sys.exit(1)
+
+    route = parsed.get("route", "")
+    params = parsed.get("params", {})
+    confidence = parsed.get("confidence", 0.0)
+    source = parsed.get("param_source", "?")
+    console.print(f"[bold]Matched route:[/bold] [cyan]{route}[/cyan]  "
+                  f"[dim](confidence={confidence:.2f}, via={source})[/dim]")
+    console.print(f"[bold]Parameters:[/bold] {params}\n")
+
+    if not file:
+        console.print("[dim]Pass --file to execute the command against a "
+                      "running backend.[/dim]\n")
+        return
+
+    # Execute against the local backend by POSTing to the matched route.
+    try:
+        import json as _json
+        import urllib.error
+        import urllib.request
+
+        body = dict(params)
+        body["filepath"] = file
+        url = f"http://127.0.0.1:5679{route}"
+        # Refresh CSRF first
+        try:
+            with urllib.request.urlopen("http://127.0.0.1:5679/health", timeout=5) as resp:
+                csrf = _json.loads(resp.read()).get("csrf_token", "")
+        except Exception:
+            csrf = ""
+
+        req = urllib.request.Request(
+            url,
+            data=_json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json", "X-OpenCut-Token": csrf},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            result = _json.loads(resp.read())
+        console.print(f"\n[green bold]Done:[/green bold] {result}\n")
+    except urllib.error.URLError as exc:
+        console.print(f"\n[red bold]Backend unreachable[/red bold] ({exc}).")
+        console.print("Start the OpenCut server first: [cyan]python -m opencut.server[/cyan]\n")
+        sys.exit(1)
+    except Exception as exc:
+        console.print(f"\n[red bold]Execution failed:[/red bold] {exc}\n")
+        sys.exit(1)
+
+
+@cli.command()
+@click.argument("input_file", type=click.Path(exists=True))
+@click.option("-o", "--output", type=click.Path(), default=None, help="Output file path")
+@click.option("--method", type=click.Choice(["afftdn", "highpass", "gate"]), default="afftdn", help="Denoise method")
+@click.option("--strength", type=float, default=0.5, help="Denoise strength 0-1")
+def denoise(input_file, output, method, strength):
+    """Remove background noise from audio/video."""
+    print_banner()
+
+    from .helpers import get_ffmpeg_path, run_ffmpeg
+    from .helpers import output_path as _out_path
+
+    if output is None:
+        output = _out_path(input_file, "denoised")
+
+    console.print(f"\n[bold]Denoising:[/bold] {input_file}")
+    console.print(f"[dim]Method: {method} | Strength: {strength}[/dim]\n")
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Applying noise reduction...", total=None)
+        start_time = time.time()
+
+        if method == "afftdn":
+            nf = int(strength * 97)  # 0-97 range
+            af = f"afftdn=nf=-{max(1, nf)}"
+        elif method == "highpass":
+            freq = int(100 + strength * 200)  # 100-300 Hz
+            af = f"highpass=f={freq}"
+        else:
+            af = f"agate=threshold={0.01 + strength * 0.04}"
+
+        run_ffmpeg([
+            get_ffmpeg_path(), "-hide_banner", "-loglevel", "error", "-y",
+            "-i", input_file, "-af", af,
+            "-c:v", "copy", output,
+        ])
+        elapsed = time.time() - start_time
+        progress.update(task, description=f"[green]Denoise complete ({elapsed:.1f}s)")
+        progress.stop()
+
+    console.print(f"\n[green bold]Saved:[/green bold] {output}\n")
+
+
+@cli.command("scene-detect")
+@click.argument("input_file", type=click.Path(exists=True))
+@click.option("--method", type=click.Choice(["ffmpeg", "ml", "pyscenedetect"]), default="ffmpeg", help="Detection method")
+@click.option(
+    "--threshold",
+    type=float,
+    default=None,
+    help="Detection sensitivity. Scale differs per method (ffmpeg/ml: 0-1, "
+         "pyscenedetect: ~15-50); omit to use the method's own default.",
+)
+@click.option("--output", "-o", type=click.Path(), default=None, help="Output JSON file")
+def scene_detect(input_file, method, threshold, output):
+    """Detect scene boundaries/cuts in a video."""
+    print_banner()
+
+    try:
+        from .core.scene_detect import (
+            detect_scenes,
+            detect_scenes_ml,
+            detect_scenes_pyscenedetect,
+        )
+    except ImportError as e:
+        console.print(f"[red bold]Error:[/red bold] Missing dependency: {e}")
+        sys.exit(1)
+
+    # Each backend is its own entry point with its own threshold scale; there
+    # is no `method` keyword on any of them.
+    detectors = {
+        "ffmpeg": detect_scenes,
+        "ml": detect_scenes_ml,
+        "pyscenedetect": detect_scenes_pyscenedetect,
+    }
+    detector = detectors[method]
+    kwargs = {} if threshold is None else {"threshold": threshold}
+
+    console.print(f"\n[bold]Scene detection:[/bold] {input_file}")
+    console.print(
+        f"[dim]Method: {method} | Threshold: "
+        f"{'method default' if threshold is None else threshold}[/dim]\n"
+    )
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Detecting scenes...", total=None)
+        start_time = time.time()
+        scenes = detector(input_file, **kwargs)
+        elapsed = time.time() - start_time
+        progress.update(task, description=f"[green]Detection complete ({elapsed:.1f}s)")
+        progress.stop()
+
+    scene_list = _scene_boundaries_to_rows(scenes)
+    console.print(f"\n[bold]Scenes found:[/bold] {len(scene_list)}")
+
+    if scene_list:
+        table = Table(title="Scene Boundaries", box=box.ROUNDED)
+        table.add_column("#", style="cyan", justify="right")
+        table.add_column("Start", justify="right")
+        table.add_column("End", justify="right")
+        table.add_column("Duration", justify="right")
+
+        for i, data in enumerate(scene_list[:30], 1):
+            start = data["start"]
+            end = data["end"]
+            table.add_row(str(i), f"{start:.2f}s", f"{end:.2f}s", f"{end - start:.2f}s")
+
+        if len(scene_list) > 30:
+            console.print(f"[dim](showing first 30 of {len(scene_list)})[/dim]")
+        console.print(table)
+
+    if output:
+        import json as _json
+        with open(output, "w", encoding="utf-8") as f:
+            _json.dump(scene_list, f, indent=2)
+        console.print(f"\n[green bold]Saved:[/green bold] {output}")
+
+    console.print()
+
+
+@cli.command()
+@click.argument("input_file", type=click.Path(exists=True))
+@click.option("-o", "--output", type=click.Path(), default=None, help="Output directory")
+@click.option("--port", type=int, default=None, help="Backend port (default: auto-scan 5679-5689)")
+@click.option("--no-repeats", is_flag=True, help="Skip repeated-take detection")
+@click.option("--no-fillers", is_flag=True, help="Skip filler-word removal")
+@click.option("--no-chapters", is_flag=True, help="Skip chapter generation")
+@click.option("--timeout", type=int, default=7200, help="Job timeout in seconds (default 2h)")
+def polish(input_file, output, port, no_repeats, no_fillers, no_chapters, timeout):
+    """Run the full interview polish pipeline on an audio/video file.
+
+    Requires a running OpenCut backend (starts one from source with
+    `opencut-server`). Submits the job to /interview-polish, polls until
+    complete, then prints the result paths.
+
+    Designed for shell scripts, task schedulers, and CI — no Premiere
+    required. Works on raw podcast / interview recordings.
+    """
+    import json as _json
+    import time as _time
+    import urllib.error
+    import urllib.request
+
+    print_banner()
+
+    input_file = os.path.abspath(input_file)
+    output_dir = os.path.abspath(output) if output else ""
+
+    # Locate the running server. Explicit --port wins; otherwise scan.
+    def _probe(p):
+        try:
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{p}/health", timeout=0.5
+            ) as resp:
+                return _json.loads(resp.read().decode("utf-8"))
+        except Exception:
+            return None
+
+    backend_port = None
+    health = None
+    if port:
+        health = _probe(port)
+        if health:
+            backend_port = port
+    else:
+        for candidate in range(5679, 5690):
+            health = _probe(candidate)
+            if health:
+                backend_port = candidate
+                break
+
+    if not backend_port or not health:
+        console.print(
+            "\n[red bold]No OpenCut backend found.[/red bold] "
+            "Start one with [cyan]opencut-server[/cyan] and retry."
+        )
+        raise SystemExit(2)
+
+    csrf_token = health.get("csrf_token", "")
+    base = f"http://127.0.0.1:{backend_port}"
+    console.print(f"\n[bold]Polishing:[/bold] {input_file}")
+    console.print(f"[dim]Backend: {base} (v{health.get('version', '?')})[/dim]\n")
+
+    # Submit the job
+    payload = {
+        "filepath": input_file,
+        "output_dir": output_dir,
+        "detect_repeats": not no_repeats,
+        "remove_fillers": not no_fillers,
+        "generate_chapters": not no_chapters,
+        "diarize": False,
+    }
+    req = urllib.request.Request(
+        f"{base}/interview-polish",
+        data=_json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "X-OpenCut-Token": csrf_token},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            submit = _json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        try:
+            err = _json.loads(e.read().decode("utf-8"))
+            console.print(f"[red]Rejected: {err.get('error', e)}[/red]")
+        except Exception:
+            console.print(f"[red]Rejected: {e}[/red]")
+        raise SystemExit(1)
+
+    job_id = submit.get("job_id")
+    if not job_id:
+        console.print(f"[red]Unexpected submit response: {submit}[/red]")
+        raise SystemExit(1)
+
+    # Poll for completion
+    last_msg = ""
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Queued…", total=None)
+        deadline = _time.time() + timeout
+        while _time.time() < deadline:
+            try:
+                with urllib.request.urlopen(
+                    f"{base}/status/{job_id}", timeout=5
+                ) as r:
+                    job = _json.loads(r.read().decode("utf-8"))
+            except Exception:
+                _time.sleep(1.0)
+                continue
+            msg = job.get("message") or job.get("status", "")
+            if msg and msg != last_msg:
+                progress.update(task, description=msg)
+                last_msg = msg
+            status = job.get("status")
+            if status in ("complete", "error", "cancelled"):
+                break
+            _time.sleep(1.0)
+        else:
+            console.print("[red]Timed out waiting for job[/red]")
+            raise SystemExit(1)
+
+    if status != "complete":
+        console.print(
+            f"\n[red bold]Job {status}:[/red bold] {job.get('error', job.get('message', ''))}"
+        )
+        raise SystemExit(1)
+
+    result = job.get("result") or {}
+    console.print("\n[green bold]Polish complete.[/green bold]\n")
+
+    # Step summary
+    steps = result.get("steps") or []
+    if steps:
+        table = Table(title="Steps", show_header=True, header_style="bold")
+        table.add_column("Step", style="cyan")
+        table.add_column("Result")
+        table.add_column("Notes", style="dim")
+        for s in steps:
+            icon = "[green]OK[/green]" if s.get("ok") else (
+                "[yellow]SKIP[/yellow]" if s.get("reason") else "[red]FAIL[/red]"
+            )
+            notes = s.get("reason", "")
+            if s.get("ok"):
+                for k in ("removed_fillers", "removed_ranges", "kept_segments",
+                          "word_count", "count"):
+                    if k in s:
+                        notes = f"{k.replace('_', ' ')}: {s[k]}"
+                        break
+            table.add_row(s.get("label", s.get("key", "?")), icon, notes)
+        console.print(table)
+        console.print()
+
+    # Output files
+    for label, key in (
+        ("Premiere XML", "xml_path"),
+        ("Captions SRT", "srt_path"),
+        ("Chapters MD", "chapters_path"),
+    ):
+        path = result.get(key, "")
+        if path:
+            console.print(f"[bold]{label}:[/bold] {path}")
+
+    if "compression_ratio" in result:
+        pct = int(result["compression_ratio"] * 100)
+        console.print(f"\n[dim]Compressed to {pct}% of original "
+                      f"({result.get('speech_duration', 0):.1f}s / "
+                      f"{result.get('original_duration', 0):.1f}s)[/dim]\n")
+
+
+@cli.group("plugins")
+def plugins_group():
+    """Inspect installed OpenCut plugins."""
+    pass
+
+
+@plugins_group.command("doctor")
+@click.option("--json", "as_json", is_flag=True, help="Emit the raw report as JSON.")
+def plugins_doctor(as_json):
+    """Validate every installed plugin against this host's plugin API."""
+    import json as _json
+
+    from opencut.core.plugin_manifest import doctor
+
+    report = doctor()
+    if as_json:
+        click.echo(_json.dumps(report, indent=2))
+    else:
+        print_banner()
+        click.echo(
+            f"Plugin API {report['host_min_api_version']}-{report['host_api_version']}"
+            f"  manifest schema {report['manifest_schema_version']}"
+        )
+        click.echo(f"Scanned {report['plugins_dir']}")
+        if not report["total"]:
+            click.echo("No plugins installed.")
+        for plugin in report["plugins"]:
+            if plugin["compatible"] and plugin["valid"]:
+                click.echo(f"  OK          {plugin['name']} {plugin['version']}")
+                continue
+            state = "INCOMPATIBLE" if not plugin["compatible"] else "INVALID"
+            click.echo(f"  {state:<11} {plugin['name']} {plugin['version']}")
+            if plugin["reason"]:
+                click.echo(f"      why:  {plugin['reason']}")
+            for error in plugin["errors"][:5]:
+                click.echo(f"      error: {error}")
+            if plugin["remediation"]:
+                click.echo(f"      fix:  {plugin['remediation']}")
+        click.echo(
+            f"{report['healthy']} healthy, {report['incompatible']} incompatible, "
+            f"{report['invalid']} invalid"
+        )
+    # Non-zero exit so scripts can gate on plugin health.
+    if report["incompatible"] or report["invalid"]:
+        raise SystemExit(1)
+
+
+@cli.group("benchmark")
+def benchmark_group():
+    """Run the explicit, provenance-rich performance benchmark lane."""
+    pass
+
+
+@benchmark_group.command("list")
+@click.option("--json", "as_json", is_flag=True, help="Emit the registry as JSON.")
+def benchmark_list(as_json):
+    """List benchmark IDs, registered backends, and local adapter probes."""
+    from opencut.core.performance_benchmark_runner import list_backend_adapters
+    from opencut.core.performance_benchmarks import backend_matrix, list_benchmarks
+
+    payload = {
+        "benchmarks": [spec.as_dict() for spec in list_benchmarks()],
+        "backend_matrix": backend_matrix(),
+        "adapters": list_backend_adapters(),
+        "opt_in_environment": "OPENCUT_RUN_PERF_BENCHMARKS=1",
+    }
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, ensure_ascii=False))
+        return
+    for spec in list_benchmarks():
+        click.echo(f"{spec.benchmark_id}: {spec.title}")
+        click.echo(f"  backends: {', '.join(spec.backends)}")
+        click.echo(f"  metric: {spec.metric_name}; sample: {spec.sample_description}")
+    click.echo("\nAdapters: " + ", ".join(list_backend_adapters()))
+    click.echo("Opt in with OPENCUT_RUN_PERF_BENCHMARKS=1 before running.")
+
+
+@benchmark_group.command("run")
+@click.option("--benchmark", "benchmark_ids", multiple=True, help="Benchmark ID; repeatable.")
+@click.option("--backend", "backends", multiple=True, help="Backend name; repeatable.")
+@click.option("--seed", type=int, default=0, show_default=True)
+@click.option("--warmup", "warmup_runs", type=click.IntRange(min=0), default=1, show_default=True)
+@click.option("--repeats", type=click.IntRange(min=1), default=3, show_default=True)
+@click.option("--allow-network", is_flag=True, help="Allow an adapter that explicitly requires network.")
+@click.option("--output", type=click.Path(), default=None, help="Receipt path (default: ~/.opencut/performance/...).")
+@click.option("--json", "as_json", is_flag=True, help="Emit the receipt as JSON.")
+def benchmark_run(benchmark_ids, backends, seed, warmup_runs, repeats, allow_network, output, as_json):
+    """Run selected adapters after OPENCUT_RUN_PERF_BENCHMARKS=1 is set."""
+    from datetime import datetime, timezone
+
+    from opencut.core.performance_benchmark_runner import BenchmarkOptInRequired, run_benchmarks
+
+    output_path = Path(output).expanduser() if output else (
+        Path.home()
+        / ".opencut"
+        / "performance"
+        / f"benchmark-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.json"
+    )
+    try:
+        receipt = run_benchmarks(
+            benchmark_ids or None,
+            backends or None,
+            seed=seed,
+            warmup_runs=warmup_runs,
+            repeats=repeats,
+            allow_network=allow_network,
+            output_path=output_path,
+        )
+    except (BenchmarkOptInRequired, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    if as_json:
+        click.echo(json.dumps(receipt, indent=2, ensure_ascii=False))
+    else:
+        for result in receipt["results"]:
+            status = str(result["status"]).upper()
+            reason = result.get("skip_reason") or result.get("error") or ""
+            timing = result.get("timing") or {}
+            speed = timing.get("seconds_per_unit")
+            suffix = f" ({speed}s/unit)" if speed is not None else ""
+            click.echo(
+                f"[{status}] {result['benchmark_id']} / {result['backend']}"
+                f"{suffix}{': ' + reason if reason else ''}"
+            )
+    click.echo(f"receipt: {output_path}", err=True)
+
+
+@benchmark_group.command("compare")
+@click.argument("current", type=click.Path(exists=True, dir_okay=False))
+@click.argument("baseline", type=click.Path(exists=True, dir_okay=False))
+@click.option("--json", "as_json", is_flag=True, help="Emit the comparison as JSON.")
+def benchmark_compare(current, baseline, as_json):
+    """Compare CURRENT with BASELINE only when compatibility keys match."""
+    from opencut.core.performance_benchmark_runner import compare_receipts, load_receipt
+
+    try:
+        comparison = compare_receipts(load_receipt(Path(current)), load_receipt(Path(baseline)))
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    if as_json:
+        click.echo(json.dumps(comparison, indent=2, ensure_ascii=False))
+    else:
+        click.echo(f"{comparison['status'].upper()}: {comparison.get('reason', '')}".rstrip())
+        for item in comparison.get("comparisons", []):
+            click.echo(f"  {item.get('benchmark_id')} / {item.get('backend')}: {item.get('status')}")
+    if comparison["status"] == "regression":
+        raise click.exceptions.Exit(1)
+
+
+@cli.group()
+def config():
+    """Manage ~/.opencut configuration files."""
+    pass
+
+
+@config.command("export")
+@click.option("-o", "--output", type=click.Path(), default=None,
+              help="Output JSON file (default: stdout)")
+def config_export(output):
+    """Export all ~/.opencut settings to a single JSON backup."""
+    import glob
+
+    data_dir = os.path.join(os.path.expanduser("~"), ".opencut")
+    if not os.path.isdir(data_dir):
+        raise click.ClickException(f"Data directory not found: {data_dir}")
+
+    bundle = {}
+    for path in sorted(glob.glob(os.path.join(data_dir, "*.json"))):
+        name = os.path.basename(path)
+        try:
+            with open(path, encoding="utf-8") as f:
+                bundle[name] = json.load(f)
+        except (json.JSONDecodeError, OSError) as exc:
+            console.print(f"[yellow]Warning:[/yellow] skipping {name}: {exc}")
+
+    payload = json.dumps(bundle, indent=2, ensure_ascii=False)
+    if output:
+        Path(output).write_text(payload + "\n", encoding="utf-8")
+        console.print(f"[green]Exported {len(bundle)} config files to {output}[/green]")
+    else:
+        click.echo(payload)
+
+
+@config.command("import")
+@click.argument("backup_file", type=click.Path(exists=True))
+@click.option("--dry-run", is_flag=True, help="Show what would be written without writing")
+def config_import(backup_file, dry_run):
+    """Import settings from a JSON backup created by 'config export'."""
+    data_dir = os.path.join(os.path.expanduser("~"), ".opencut")
+    os.makedirs(data_dir, exist_ok=True)
+
+    with open(backup_file, encoding="utf-8") as f:
+        bundle = json.load(f)
+
+    if not isinstance(bundle, dict):
+        raise click.ClickException("Invalid backup: expected a JSON object")
+
+    for name, data in bundle.items():
+        if not name.endswith(".json"):
+            console.print(f"[yellow]Skipping non-JSON key:[/yellow] {name}")
+            continue
+        target = os.path.join(data_dir, name)
+        if dry_run:
+            console.print(f"  Would write: {target}")
+        else:
+            with open(target, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            console.print(f"  [green]Wrote:[/green] {target}")
+
+    action = "Would import" if dry_run else "Imported"
+    console.print(f"\n[bold]{action} {len(bundle)} config files[/bold]")
+
+
+@config.command("validate")
+def config_validate():
+    """Check ~/.opencut config files for JSON parse errors."""
+    import glob
+
+    data_dir = os.path.join(os.path.expanduser("~"), ".opencut")
+    if not os.path.isdir(data_dir):
+        raise click.ClickException(f"Data directory not found: {data_dir}")
+
+    errors = 0
+    checked = 0
+    for path in sorted(glob.glob(os.path.join(data_dir, "*.json"))):
+        name = os.path.basename(path)
+        checked += 1
+        try:
+            with open(path, encoding="utf-8") as f:
+                json.load(f)
+        except json.JSONDecodeError as exc:
+            console.print(f"  [red]INVALID[/red] {name}: {exc}")
+            errors += 1
+        except OSError as exc:
+            console.print(f"  [yellow]UNREADABLE[/yellow] {name}: {exc}")
+            errors += 1
+
+    if errors:
+        console.print(f"\n[red bold]{errors}/{checked} config files have issues[/red bold]")
+        raise SystemExit(1)
+    else:
+        console.print(f"\n[green bold]All {checked} config files are valid JSON[/green bold]")
+
+
+def main():
+    """Entry point."""
+    cli()
+
+
+if __name__ == "__main__":
+    main()

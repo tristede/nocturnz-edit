@@ -1,0 +1,92 @@
+{
+  "distribution": {
+    "channels": {
+      "github_windows_installer": {
+        "asset_pattern": "OpenCut-Setup-<version>.exe",
+        "available": true,
+        "current": true,
+        "install_command": null,
+        "published_version": "1.55.1",
+        "url": "https://github.com/SysAdminDoc/OpenCut/releases/tag/v1.55.1"
+      },
+      "homebrew": {
+        "available": false,
+        "install_command": null
+      },
+      "pypi": {
+        "available": false,
+        "install_command": null,
+        "registry": "https://pypi.org/project/opencut-ppro/"
+      },
+      "source_checkout": {
+        "available": true,
+        "current": true,
+        "install_command": "python -m pip install -e \".\""
+      },
+      "winget": {
+        "available": false,
+        "install_command": null
+      }
+    },
+    "verified_on": "2026-08-25"
+  },
+  "ffmpeg": {
+    "pinned_installer_archive_sha256": "8c32ed9800ff421bbcfda96beb0a66783a64a7cd98869b87ec1b494d3c855fcc",
+    "pinned_installer_archive_url": "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-2026-08-03-git-01a25f74cc-full_build.7z",
+    "pinned_installer_build": "2026-08-03-git-01a25f74cc-full_build-www.gyan.dev",
+    "pinned_installer_commit": "01a25f74cc446a683318bab13dfd98a467082ef7",
+    "pinned_source_sha256": "02f09346860e4b0549eb03003443c66dceb9f355c2db4f01746db33984f1e3cf",
+    "pinned_source_url": "https://github.com/FFmpeg/FFmpeg/archive/01a25f74cc446a683318bab13dfd98a467082ef7.tar.gz",
+    "release_floor": "8.1.3",
+    "snapshot_floor_date": "2026-07-06"
+  },
+  "project": {
+    "distribution_name": "opencut-ppro",
+    "name": "OpenCut",
+    "version": "1.55.1"
+  },
+  "routes": {
+    "blueprints": 107,
+    "shipped": 1564,
+    "source": "opencut/_generated/route_manifest.json",
+    "stubs": 29,
+    "total": 1593
+  },
+  "runtime": {
+    "platform_display": [
+      "Windows",
+      "macOS",
+      "Linux"
+    ],
+    "platforms": [
+      "win32",
+      "linux",
+      "darwin"
+    ],
+    "python_requires": ">=3.11,<3.15",
+    "python_versions": [
+      "3.11",
+      "3.12",
+      "3.13",
+      "3.14"
+    ]
+  },
+  "schema_version": 1,
+  "trust": {
+    "fresh_install_telemetry": false,
+    "guarded_dynamic_execution": [
+      "opencut/core/expression_engine.py",
+      "opencut/core/scripting_console.py"
+    ],
+    "local_only_environment_variable": "OPENCUT_LOCAL_ONLY",
+    "network_default": "local-by-default",
+    "optional_egress": [
+      "cloud AI providers",
+      "Edge-TTS",
+      "model, package, and update downloads",
+      "OAuth and social uploads",
+      "opt-in Aptabase telemetry"
+    ],
+    "restricted_checkpoint_loading": "opencut/core/model_safety.py"
+  }
+}

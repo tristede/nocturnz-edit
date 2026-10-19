@@ -1,4 +1,4 @@
-# Nocturnz Edit
+# Nocturnz/Edit
 
 Extension open source pour le montage dans Adobe Premiere Pro. Elle rejoint la suite Nocturnz comme outil autonome : identité commune, traitement des médias sur la machine et aucun compte cloud requis pour le fonctionnement de base.
 
@@ -34,12 +34,14 @@ Le service écoute uniquement `127.0.0.1:8765`. `/health` annonce les capacités
 
 1. Installer Adobe UXP Developer Tool.
 2. Ouvrir `plugin/manifest.json` dans l’outil et charger le plugin dans Premiere Pro 25.6 ou supérieur.
-3. Choisir **Plugins > Nocturnz > Montage**.
+3. Ouvrir le panneau **Nocturnz/Edit** depuis le menu Plugins.
 4. Ouvrir un module. Les lectures de séquence et l’inspection sont accessibles dans **Réglages**.
 
 La navigation peut s’ouvrir hors de Premiere; le choix de fichiers par UXP et l’intégration à la timeline nécessitent Premiere. Le manifeste demande uniquement l’accès aux fichiers choisis par le sélecteur natif.
 
 ## Développement
+
+Les sources de **six dépôts du brief** sont maintenant conservées dans [vendor](vendor/README.md), avec versions, licences et empreintes. Les 17 modules ont une correspondance vers les fichiers amont. Cette copie prépare leur reprise; les adaptations UXP et les dépendances ne sont pas encore branchées. `auto-zoom-premiere` reste une référence sans code copié, faute de licence identifiable.
 
 ```sh
 npm test
@@ -55,4 +57,4 @@ npm test
 
 ## Licence
 
-Le code original du projet est sous MIT. Voir [LICENSE](LICENSE). Les composants tiers, modèles et binaires éventuels gardent leurs propres licences, répertoriées avant intégration.
+Le code original du projet est sous MIT. Voir [LICENSE](LICENSE). Les sources de `vendor/`, dont des composants GPL, gardent leurs propres licences et notices. Voir [THIRD-PARTY.md](THIRD-PARTY.md).

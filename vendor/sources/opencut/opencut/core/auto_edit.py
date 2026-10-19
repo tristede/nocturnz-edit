@@ -1,0 +1,543 @@
+"""
+OpenCut Auto-Edit Module
+
+Motion-based editing using auto-editor. Detects static/boring segments
+by visual motion analysis and creates edit lists of segments to keep.
+
+Supports two auto-editor backends:
+  - Native Nim binary (v30+): install from GitHub releases, place on PATH
+  - Legacy pip package (v29.x, frozen): pip install auto-editor
+
+The Nim binary is preferred when available. Core CLI syntax
+(``auto-editor input.mp4 --export json``) is the same across both versions,
+though the native binary may introduce new flags over time.
+"""
+
+import html
+import json
+import logging
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from dataclasses import dataclass, field
+from typing import List, Optional
+from urllib.parse import quote
+
+from opencut.helpers import get_video_info
+
+logger = logging.getLogger("opencut")
+
+
+# ---------------------------------------------------------------------------
+# Data classes
+# ---------------------------------------------------------------------------
+@dataclass
+class EditSegment:
+    """A segment to keep or cut."""
+    start: float
+    end: float
+    action: str = "keep"  # "keep" or "cut"
+
+    @property
+    def duration(self):
+        return self.end - self.start
+
+
+@dataclass
+class AutoEditResult:
+    """Results from auto-editor analysis."""
+    segments: List[EditSegment] = field(default_factory=list)
+    total_duration: float = 0.0
+    kept_duration: float = 0.0
+    removed_duration: float = 0.0
+    reduction_percent: float = 0.0
+    xml_path: Optional[str] = None  # Path to generated Premiere XML
+
+
+# ---------------------------------------------------------------------------
+# Availability
+# ---------------------------------------------------------------------------
+INSTALL_HINT = (
+    "auto-editor was rewritten in Nim and left PyPI at 29.3.1 (2025-11-04); "
+    "every 2026 capability ships only in the native binary. Download it from "
+    "https://github.com/WyattBlue/auto-editor/releases and put it on PATH, "
+    "drop it in ~/.opencut/bin, or point OPENCUT_AUTO_EDITOR at it. "
+    'The frozen pip package (pip install "auto-editor>=29.3,<30") still works '
+    "but receives no fixes."
+)
+
+# Where a bundled binary may live, in resolution order after the env override.
+# Mirrors the ffmpeg convention: an explicitly provisioned copy beats PATH,
+# and PATH beats the frozen pip package.
+_BUNDLED_SUBDIRS = ("bin", "auto-editor")
+
+
+def _binary_names():
+    return ("auto-editor.exe", "auto-editor") if os.name == "nt" else ("auto-editor",)
+
+
+def _bundled_auto_editor():
+    """An auto-editor binary provisioned alongside OpenCut, if there is one."""
+    roots = [
+        os.path.join(os.path.expanduser("~"), ".opencut"),
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    ]
+    for root in roots:
+        for subdir in _BUNDLED_SUBDIRS:
+            for name in _binary_names():
+                candidate = os.path.join(root, subdir, name)
+                if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                    return candidate
+    return None
+
+
+def resolve_auto_editor_binary():
+    """Path to the native auto-editor binary, or None.
+
+    Order: ``OPENCUT_AUTO_EDITOR`` env override, a bundled copy, then PATH.
+    The frozen pip package is deliberately not considered here - it is the
+    last-resort fallback in :func:`_find_auto_editor`, never the preference.
+    """
+    override = os.environ.get("OPENCUT_AUTO_EDITOR", "").strip().strip('"')
+    if override:
+        if os.path.isfile(override):
+            return override
+        logger.warning(
+            "OPENCUT_AUTO_EDITOR points at %s, which is not a file; ignoring", override
+        )
+
+    bundled = _bundled_auto_editor()
+    if bundled:
+        return bundled
+
+    return shutil.which("auto-editor")
+
+
+def _find_auto_editor():
+    """
+    Find auto-editor. Prefers the native Nim binary (v30+) over the frozen pip
+    package (v29.x), which upstream stopped publishing on 2025-11-04.
+
+    Returns:
+        List of command tokens, e.g. ["C:/path/auto-editor.exe"] or
+        ["python", "-m", "auto_editor"].
+    """
+    native = resolve_auto_editor_binary()
+    if native:
+        return [native]
+    # Last resort: the frozen pip package (v29.x), which receives no fixes.
+    return [sys.executable, "-m", "auto_editor"]
+
+
+def check_auto_editor_version():
+    """
+    Check auto-editor availability and version.
+
+    Checks for the native Nim binary (v30+) first, then falls back to the
+    pip package (v29.x).
+
+    Returns:
+        Version string (e.g. "24w51a" for pip, "30.0" for Nim) or None if
+        not installed.
+    """
+    cmd = _find_auto_editor()
+    try:
+        result = subprocess.run(
+            cmd + ["--version"],
+            capture_output=True, text=True, timeout=10,
+            check=False,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    # If _find_auto_editor returned the native path but it failed,
+    # explicitly try the pip fallback as a last resort
+    if cmd[0] != sys.executable:
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "auto_editor", "--version"],
+                capture_output=True, text=True, timeout=10,
+                check=False,
+            )
+            if result.returncode == 0:
+                return result.stdout.strip()
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+
+    return None
+
+
+def detect_auto_editor_generation():
+    """Detect whether auto-editor is v30+ (Nim native) or v29.x (pip legacy).
+
+    Returns:
+        dict with keys: version (str|None), generation ("v30"|"v29"|None),
+        native (bool), path (str|None).
+    """
+    result = {"version": None, "generation": None, "native": False, "path": None}
+    native = resolve_auto_editor_binary()
+    if native:
+        result["path"] = native
+        result["native"] = True
+    version = check_auto_editor_version()
+    if version is None:
+        return result
+    result["version"] = version
+    try:
+        major = int(version.split(".")[0])
+        if major >= 30:
+            result["generation"] = "v30"
+            return result
+    except (ValueError, IndexError):
+        pass
+    result["generation"] = "v29"
+    return result
+
+
+def _probe_media_info(input_path):
+    """Get video duration and fps via consolidated get_video_info(). Returns (duration, fps)."""
+    info = get_video_info(input_path)
+    duration = info.get("duration", 0.0) or 0.0
+    fps = info.get("fps", 0.0) or 0.0
+    if fps <= 0:
+        fps = 30.0
+    return duration, fps
+
+
+# ---------------------------------------------------------------------------
+# JSON parsing
+# ---------------------------------------------------------------------------
+def _parse_auto_editor_json(json_path, total_duration):
+    """
+    Parse auto-editor's JSON export into EditSegments.
+
+    auto-editor JSON contains chunks/timeline with start, dur, speed, offset.
+    Segments with speed > 0 (and != 99999) are "keep"; speed == 0 or 99999 are "cut".
+
+    Args:
+        json_path: Path to auto-editor JSON output.
+        total_duration: Total source duration in seconds.
+
+    Returns:
+        List of EditSegment objects.
+    """
+    with open(json_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    segments = []
+
+    # auto-editor v2 JSON: {"timeline": {"v": [[ ... ]]}} or {"chunks": [...]}
+    # v1 format: list of [start, end, speed] or {"chunks": [[start, end, speed], ...]}
+    chunks = None
+
+    if isinstance(data, dict):
+        # v2 timeline format
+        timeline = data.get("timeline", {})
+        if isinstance(timeline, dict):
+            v_tracks = timeline.get("v", [])
+            if v_tracks and isinstance(v_tracks[0], list):
+                for clip in v_tracks[0]:
+                    tb = float(clip.get("tb", 30)) or 30.0  # guard against zero
+                    start = float(clip.get("offset", clip.get("start", 0))) / tb
+                    dur = float(clip.get("dur", 0)) / tb
+                    speed = float(clip.get("speed", 1.0))
+                    end = start + dur
+                    action = "cut" if speed == 0 or speed >= 99999 else "keep"
+                    segments.append(EditSegment(start=start, end=end, action=action))
+
+        # v1 chunks format
+        chunks = data.get("chunks", None)
+    elif isinstance(data, list):
+        chunks = data
+
+    if chunks is not None:
+        for chunk in chunks:
+            if isinstance(chunk, (list, tuple)) and len(chunk) >= 3:
+                start = float(chunk[0])
+                end = float(chunk[1])
+                speed = float(chunk[2])
+                action = "cut" if speed == 0 or speed >= 99999 else "keep"
+                segments.append(EditSegment(start=start, end=end, action=action))
+            elif isinstance(chunk, dict):
+                start = float(chunk.get("start", 0))
+                end = float(chunk.get("end", start))
+                speed = float(chunk.get("speed", 1.0))
+                action = "cut" if speed == 0 or speed >= 99999 else "keep"
+                segments.append(EditSegment(start=start, end=end, action=action))
+
+    # If parsing produced no segments, treat entire file as kept
+    if not segments and total_duration > 0:
+        segments.append(EditSegment(start=0.0, end=total_duration, action="keep"))
+
+    return segments
+
+
+# ---------------------------------------------------------------------------
+# Premiere XML export
+# ---------------------------------------------------------------------------
+def _export_premiere_xml(segments, input_path, output_path, fps=30):
+    """
+    Convert edit segments to Premiere Pro compatible FCP 7 XML.
+
+    Generates an XML import file that Premiere can open directly,
+    containing a sequence with clips at the keep-segment times.
+
+    Args:
+        segments: List of EditSegment (only "keep" segments are placed).
+        input_path: Path to the source media file.
+        output_path: Path to write the XML file.
+        fps: Frame rate for timeline (default 30).
+    """
+    keep_segments = [s for s in segments if s.action == "keep"]
+    filename = html.escape(os.path.basename(input_path))
+    filepath_url = quote(input_path.replace("\\", "/"), safe="/:")
+
+    # Use integer timebase (Premiere requires whole number)
+    timebase = max(1, round(fps))
+
+    # Build clip entries
+    clip_entries = []
+    timeline_pos = 0
+    for i, seg in enumerate(keep_segments):
+        start_frames = max(0, int(seg.start * timebase))
+        end_frames = max(start_frames, int(seg.end * timebase))
+        duration_frames = end_frames - start_frames
+
+        clip_entries.append(f"""
+                <clipitem id="clip-{i + 1}">
+                    <name>{filename} - Clip {i + 1}</name>
+                    <duration>{duration_frames}</duration>
+                    <rate><timebase>{timebase}</timebase><ntsc>TRUE</ntsc></rate>
+                    <start>{timeline_pos}</start>
+                    <end>{timeline_pos + duration_frames}</end>
+                    <in>{start_frames}</in>
+                    <out>{end_frames}</out>
+                    <file id="file-1"/>
+                </clipitem>""")
+
+        timeline_pos += duration_frames
+
+    total_frames = timeline_pos if timeline_pos > 0 else 1
+
+    xml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE xmeml>
+<xmeml version="4">
+    <sequence>
+        <name>OpenCut Auto-Edit</name>
+        <duration>{total_frames}</duration>
+        <rate>
+            <timebase>{timebase}</timebase>
+            <ntsc>TRUE</ntsc>
+        </rate>
+        <media>
+            <video>
+                <track>{"".join(clip_entries)}
+                </track>
+            </video>
+        </media>
+    </sequence>
+    <bin>
+        <children>
+            <clip id="master-clip-1">
+                <name>{filename}</name>
+                <file id="file-1">
+                    <name>{filename}</name>
+                    <pathurl>file:///{filepath_url}</pathurl>
+                    <rate><timebase>{timebase}</timebase><ntsc>TRUE</ntsc></rate>
+                </file>
+            </clip>
+        </children>
+    </bin>
+</xmeml>
+"""
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(xml_content)
+
+    logger.info("Exported Premiere XML: %s (%d clips)", output_path, len(keep_segments))
+
+
+# ---------------------------------------------------------------------------
+# Main auto-edit function
+# ---------------------------------------------------------------------------
+def auto_edit(
+    input_path,
+    method="motion",
+    threshold=0.02,
+    margin=0.2,
+    min_clip_length=0.5,
+    export_xml=True,
+    output_dir="",
+    on_progress=None,
+):
+    """
+    Run auto-editor on a video file to detect interesting segments.
+
+    Args:
+        input_path: Path to the source video file.
+        method: Detection method - "motion", "audio", or "both".
+        threshold: Motion detection threshold (lower = more sensitive).
+        margin: Padding around detected segments in seconds.
+        min_clip_length: Minimum segment duration to keep in seconds.
+        export_xml: Generate Premiere Pro compatible XML import file.
+        output_dir: Directory for output files. Uses temp dir if empty.
+        on_progress: Progress callback(pct, msg).
+
+    Returns:
+        AutoEditResult with detected segments and stats.
+    """
+    # Verify auto-editor is available
+    version = check_auto_editor_version()
+    if version is None:
+        raise RuntimeError(f"auto-editor not found. {INSTALL_HINT}")
+
+    if on_progress:
+        on_progress(5, f"auto-editor {version} found, preparing...")
+
+    if not os.path.isfile(input_path):
+        raise FileNotFoundError(f"Input file not found: {input_path}")
+
+    # Probe duration and fps for timeout scaling, stats, and XML export
+    total_duration, source_fps = _probe_media_info(input_path)
+
+    # Set up output directory
+    if output_dir and os.path.isdir(output_dir):
+        temp_dir = None
+        work_dir = output_dir
+    else:
+        temp_dir = tempfile.mkdtemp(prefix="opencut_autoedit_")
+        work_dir = temp_dir
+
+    json_output = os.path.join(work_dir, "auto_edit_result.json")
+
+    try:
+        result = _run_auto_edit(
+            input_path, method, threshold, margin, min_clip_length,
+            export_xml, work_dir, json_output, total_duration, source_fps,
+            on_progress,
+        )
+        # If XML was exported to temp_dir, copy it to a persistent location
+        # so the caller can access it after temp_dir is cleaned up
+        if temp_dir and result.xml_path and result.xml_path.startswith(temp_dir):
+            import shutil as _sh
+            persist_dir = os.path.join(tempfile.gettempdir(), "opencut_autoedit_output")
+            os.makedirs(persist_dir, exist_ok=True)
+            persist_path = os.path.join(persist_dir, os.path.basename(result.xml_path))
+            _sh.copy2(result.xml_path, persist_path)
+            result.xml_path = persist_path
+        return result
+    finally:
+        if temp_dir and os.path.isdir(temp_dir):
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def _run_auto_edit(input_path, method, threshold, margin, min_clip_length,
+                   export_xml, work_dir, json_output, total_duration, source_fps,
+                   on_progress):
+    """Inner auto-edit logic (extracted for temp dir cleanup on error)."""
+    if on_progress:
+        on_progress(10, f"Analyzing video ({method} detection)...")
+
+    # Build auto-editor command (native Nim binary v30+ or pip package v29.x)
+    base_cmd = _find_auto_editor()
+    cmd = base_cmd + [input_path]
+
+    # Coerce to float for safe interpolation into command args
+    threshold = float(threshold)
+    margin = float(margin)
+    min_clip_length = float(min_clip_length)
+
+    if method == "motion":
+        cmd += ["--edit", f"motion:threshold={threshold}"]
+    elif method == "audio":
+        cmd += ["--edit", "audio"]
+    elif method == "both":
+        cmd += ["--edit", f"motion:threshold={threshold}", "--edit", "audio"]
+    else:
+        cmd += ["--edit", f"motion:threshold={threshold}"]
+
+    cmd += [
+        "--margin", f"{margin}s",
+        "--min-clip-length", f"{min_clip_length}s",
+        "--export", "json",
+        "--output", json_output,
+    ]
+
+    logger.debug("Running auto-editor: %s", " ".join(cmd))
+
+    # Scale timeout: base 120s + 5x duration (long videos need time)
+    timeout = max(120, int(total_duration * 5) + 120) if total_duration > 0 else 1800
+
+    if on_progress:
+        on_progress(20, "Running auto-editor analysis (this may take a while)...")
+
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as err:
+        raise RuntimeError(
+            f"auto-editor timed out after {timeout}s processing '{os.path.basename(input_path)}'"
+        ) from err
+
+    if result.returncode != 0:
+        stderr = result.stderr.strip()[-500:] if result.stderr else "unknown error"
+        raise RuntimeError(f"auto-editor failed: {stderr}")
+
+    if on_progress:
+        on_progress(60, "Parsing analysis results...")
+
+    # Parse output
+    if not os.path.isfile(json_output):
+        raise RuntimeError(
+            f"auto-editor did not produce expected output at {json_output}"
+        )
+
+    segments = _parse_auto_editor_json(json_output, total_duration)
+
+    if on_progress:
+        on_progress(80, "Calculating edit statistics...")
+
+    # Calculate stats
+    keep_segments = [s for s in segments if s.action == "keep"]
+    cut_segments = [s for s in segments if s.action == "cut"]
+
+    kept_duration = sum(s.duration for s in keep_segments)
+    removed_duration = sum(s.duration for s in cut_segments)
+
+    # Use probed duration as ground truth if available
+    if total_duration <= 0:
+        total_duration = kept_duration + removed_duration
+
+    reduction = (removed_duration / total_duration * 100) if total_duration > 0 else 0.0
+
+    # Export Premiere XML if requested
+    xml_path = None
+    if export_xml and keep_segments:
+        if on_progress:
+            on_progress(90, "Generating Premiere Pro XML...")
+
+        xml_path = os.path.join(work_dir, "auto_edit_premiere.xml")
+        _export_premiere_xml(segments, input_path, xml_path, fps=source_fps)
+
+    if on_progress:
+        on_progress(100, f"Done: keeping {kept_duration:.1f}s of {total_duration:.1f}s ({reduction:.0f}% removed)")
+
+    logger.info(
+        "Auto-edit complete: %d segments, %.1fs kept, %.1fs removed (%.0f%%)",
+        len(keep_segments), kept_duration, removed_duration, reduction,
+    )
+
+    return AutoEditResult(
+        segments=segments,
+        total_duration=total_duration,
+        kept_duration=kept_duration,
+        removed_duration=removed_duration,
+        reduction_percent=round(reduction, 1),
+        xml_path=xml_path,
+    )

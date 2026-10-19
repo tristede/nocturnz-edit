@@ -1,0 +1,23 @@
+# Python
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+pythontests.py
+
+# PyInstaller
+build/
+*.spec
+
+# Logs and Debug files
+*.log
+*.debug
+
+# Media files
+*.mp3
+*.mp4
+
+ffmpeg*
+ffprobe*
+
+BINARY_CREATION/

@@ -1,0 +1,163 @@
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  min-width: 0;
+  background: #202020;
+  color: #e8e8e8;
+  font: 13px/1.4 -apple-system, "SF Pro Text", "Segoe UI", sans-serif;
+}
+
+.app-shell { max-width: 800px; margin: 0 auto; padding: 16px; }
+.topbar, .section-head, .progress-meta, .threshold-head, footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.topbar { padding-bottom: 14px; border-bottom: 1px solid #383838; }
+.nav-brand { font-size: 14px; font-weight: 650; letter-spacing: -0.02em; }
+.nav-tools button, .threshold-head button, #clearLog {
+  padding: 3px 0;
+  border: 0;
+  background: transparent;
+  color: #aaa;
+  font-size: 12px;
+}
+.nav-tools button:hover, .threshold-head button:hover, #clearLog:hover { color: #fff; }
+.hero { padding: 20px 0 16px; }
+.hero h1 { margin: 0; font-size: 21px; font-weight: 600; letter-spacing: -0.03em; }
+
+.card { padding: 16px 0; border-top: 1px solid #383838; }
+.card h2, summary { margin: 0 0 13px; font-size: 13px; font-weight: 600; color: #ededed; }
+.setup-card { border-top: 0; padding-top: 0; }
+.setup-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+label { display: flex; align-items: center; gap: 12px; margin: 0 0 9px; }
+label > span { flex: 0 0 128px; color: #c9c9c9; }
+.setup-grid label { display: block; margin: 0; }
+.setup-grid label > span { display: block; margin: 0 0 6px; }
+
+select, input[type="text"] {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding: 6px 9px;
+  border: 1px solid #494949;
+  border-radius: 4px;
+  outline: none;
+  background: #292929;
+  color: #f2f2f2;
+  font: inherit;
+}
+select:focus, input[type="text"]:focus, button:focus-visible, summary:focus-visible {
+  outline: 2px solid #78a99f;
+  outline-offset: 2px;
+}
+input::placeholder { color: #8f8f8f; }
+
+.mapping-layout { display: grid; grid-template-columns: 1fr; gap: 18px; }
+.mapping-header, .speaker-name-row, .tag-row {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+.mapping-header { padding: 0 0 7px; color: #999; font-size: 11px; }
+.speaker-name-row, .tag-row { min-height: 42px; margin: 0; border-top: 1px solid #333; padding: 5px 0; }
+.speaker-name-row > span, .tag-label { color: #d9d9d9; font-weight: 550; }
+.speaker-select { position: relative; min-width: 0; }
+.speaker-select-button {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  padding: 7px 28px 7px 10px;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.speaker-select-button:after {
+  content: "";
+  position: absolute;
+  top: 12px;
+  right: 11px;
+  width: 6px;
+  height: 6px;
+  border-right: 1px solid #aaa;
+  border-bottom: 1px solid #aaa;
+  transform: rotate(45deg);
+}
+.speaker-select-menu {
+  display: none;
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 3px);
+  left: 0;
+  right: 0;
+  padding: 4px;
+  border: 1px solid #555;
+  border-radius: 4px;
+  background: #292929;
+  box-shadow: 0 8px 20px rgba(0,0,0,.35);
+}
+.speaker-select.open .speaker-select-menu { display: block; }
+.speaker-select-menu label { margin: 0; padding: 6px; border-radius: 3px; cursor: pointer; }
+.speaker-select-menu label:hover, .speaker-select-menu label.checked { background: #3a4542; }
+.speaker-select-menu label > span { flex: none; }
+.speaker-select-menu input[type="checkbox"] { margin: 0; accent-color: #8fbfb3; }
+
+.advanced-card { padding: 0; }
+.advanced-card summary { position: relative; list-style: none; cursor: pointer; padding: 15px 20px 15px 0; margin: 0; }
+.advanced-card summary::-webkit-details-marker { display: none; }
+.advanced-card summary:after { content: "+"; position: absolute; right: 2px; color: #aaa; font-weight: 400; }
+.advanced-card[open] summary:after { content: "−"; }
+.advanced-body { padding: 4px 0 14px; }
+label.slider input[type="range"] { min-width: 0; flex: 1; accent-color: #8fbfb3; }
+label.slider output { flex: 0 0 55px; text-align: right; color: #bbb; font-size: 11px; font-variant-numeric: tabular-nums; }
+.threshold-head { margin: 16px 0 5px; color: #aaa; font-size: 12px; }
+#thresholdGrid { display: flex; flex-direction: column; gap: 2px; }
+
+button { border: 1px solid #505050; border-radius: 4px; background: #303030; color: #eee; padding: 7px 10px; font: inherit; cursor: pointer; }
+button:hover { background: #3b3b3b; border-color: #666; }
+button:active { background: #252525; }
+button:disabled { opacity: .5; cursor: not-allowed; }
+
+.progress-card {
+  display: none;
+  position: fixed;
+  z-index: 80;
+  top: 52px;
+  left: 16px;
+  width: calc(100vw - 32px);
+  max-width: 768px;
+  padding: 12px;
+  border: 1px solid #555;
+  border-radius: 4px;
+  background: #292929;
+  box-shadow: 0 8px 25px rgba(0,0,0,.35);
+}
+.progress-card.active { display: block; }
+.progress-meta { margin-bottom: 8px; color: #ddd; font-size: 12px; }
+#progressPct { font-variant-numeric: tabular-nums; }
+.progress-track { height: 4px; overflow: hidden; background: #444; }
+#progressFill { width: 0; height: 100%; background: #8fbfb3; transition: width 180ms ease; }
+
+.action-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 16px 0; border-top: 1px solid #383838; }
+.action { min-height: 38px; margin: 0; text-align: center; font-weight: 550; }
+.action.primary { border-color: #a2c8be; background: #a2c8be; color: #14221e; }
+.action.primary:hover { background: #b5d6cc; border-color: #b5d6cc; }
+.log-card.is-hidden { display: none; }
+.log-card pre { max-height: 220px; overflow-y: auto; margin: 0; padding: 10px; border: 1px solid #383838; border-radius: 4px; background: #1a1a1a; color: #bbb; font: 11px/1.4 "SF Mono", Menlo, monospace; white-space: pre-wrap; }
+.log-card pre .err { color: #f38686; }
+.log-card pre .ok { color: #a2d0a9; }
+.log-card pre .info { color: #a8bee3; }
+.log-card pre .warn { color: #e3c68d; }
+footer { padding-top: 12px; border-top: 1px solid #383838; color: #888; font-size: 11px; }
+
+@media (max-width: 450px) {
+  .setup-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .setup-grid label:last-child { grid-column: 1 / -1; }
+  .action-grid { grid-template-columns: 1fr; }
+  label.slider { flex-wrap: wrap; gap: 5px; }
+  label.slider > span { flex: 1 1 calc(100% - 65px); }
+  label.slider output { order: 1; }
+  label.slider input[type="range"] { order: 2; flex: 1 0 100%; margin: 0 0 8px; }
+}

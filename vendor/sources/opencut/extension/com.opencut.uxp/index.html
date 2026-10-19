@@ -1,0 +1,2134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title data-i18n="uxp.document_title">OpenCut UXP</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="uxp-command-center-tokens.css">
+  <link rel="stylesheet" href="uxp-command-center-layout.css">
+  <link rel="stylesheet" href="uxp-command-center.css">
+  <link rel="stylesheet" href="studio-workbench-v2.css">
+</head>
+<body>
+  <a class="oc-skip-link" href="#mainContent" data-i18n="common.skip_to_main">Skip to workspace</a>
+  <div id="app">
+
+    <!-- ===== HEADER ===== -->
+    <header class="oc-header">
+      <div class="oc-header-left">
+        <svg class="oc-logo-mark" width="16" height="16" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M4 2.5a3 3 0 00-1.76 5.43L7.33 11l-5.09 3.07A3 3 0 104.8 19.5a3 3 0 001.76-5.43L8.93 12.6 16.5 17V5L8.93 9.4 6.56 7.93A3 3 0 004 2.5z" fill="var(--accent)"/>
+        </svg>
+        <span class="oc-logo" translate="no">OpenCut</span>
+        <span class="oc-version" id="uxpHeaderVersion">v1.55.1</span>
+      </div>
+      <div class="oc-header-right">
+        <details class="oc-connection-details" id="connectionDetails">
+          <summary class="oc-connection" id="connectionStatus" title="Backend connection status" aria-label="Backend connection details" data-i18n-title="conn.backend_status" data-i18n-aria-label="uxp.status.connection_details">
+            <span class="oc-conn-dot" id="connDot" aria-label="Backend offline" data-i18n-aria-label="conn.dot_disconnected"></span>
+            <span class="oc-conn-label" id="connLabel" data-i18n="conn.offline">Offline</span>
+            <svg class="oc-connection-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4.646 6.146a.5.5 0 01.708 0L8 8.793l2.646-2.647a.5.5 0 01.708.708l-3 3a.5.5 0 01-.708 0l-3-3a.5.5 0 010-.708z"/></svg>
+          </summary>
+          <div class="oc-connection-detail-panel" id="statusBar" data-state="neutral">
+            <span id="statusText" role="status" aria-live="polite" data-i18n="uxp.status.ready">Ready</span>
+            <span id="statusRight" class="oc-status-right"></span>
+            <button type="button" class="oc-icon-btn" id="refreshBtn" title="Refresh connection" aria-label="Refresh connection" data-i18n-title="conn.refresh_connection" data-i18n-aria-label="conn.refresh_connection">
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M2.5 8a5.5 5.5 0 019.3-4h-2a.75.75 0 000 1.5h3.5a.75.75 0 00.75-.75V1.5a.75.75 0 00-1.5 0v1.7A7 7 0 101 8a.75.75 0 001.5 0z"/></svg>
+            </button>
+          </div>
+        </details>
+      </div>
+    </header>
+
+    <!-- ===== PROCESSING BANNER ===== -->
+    <div class="oc-processing-banner hidden" id="processingBanner" role="status" aria-live="polite">
+      <div class="oc-processing-left">
+        <div class="oc-spinner"></div>
+        <span class="oc-processing-msg" id="processingMsg" data-i18n="processing.processing">Processing…</span>
+      </div>
+      <div class="oc-processing-right">
+        <span class="oc-elapsed" id="processingElapsed">0s</span>
+        <button type="button" class="oc-cancel-btn" id="cancelBtn" title="Cancel active run" aria-label="Cancel active run" data-i18n="common.cancel" data-i18n-title="processing.cancel_active_run" data-i18n-aria-label="processing.cancel_active_run">Cancel</button>
+      </div>
+      <div class="oc-progress-track"><div class="oc-progress-fill" id="progressFill" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Processing progress" data-i18n-aria-label="processing.progress"></div></div>
+    </div>
+    <div class="oc-recovery-banner hidden" id="proxyRecoveryBanner" role="region" aria-label="Proxy batch recovery" data-i18n-aria-label="processing.proxy_recovery">
+      <span id="proxyRecoveryMessage" role="status" aria-live="polite" data-i18n="processing.proxy_resume_available">An interrupted proxy batch can resume from its last verified item.</span>
+      <div class="oc-recovery-actions">
+        <button type="button" class="oc-btn oc-btn-primary oc-btn-sm" id="resumeProxyBatchBtn" data-i18n="processing.resume_proxy_batch">Resume proxies</button>
+        <button type="button" class="oc-btn oc-btn-secondary oc-btn-sm" id="dismissProxyRecoveryBtn" data-i18n="processing.dismiss_recovery">Dismiss</button>
+      </div>
+    </div>
+
+    <!-- ===== TAB NAVIGATION ===== -->
+    <div class="oc-tab-nav-shell" id="tabNavShell">
+      <button type="button" class="oc-tab-scroll oc-tab-scroll-prev" id="tabScrollPrev" aria-label="Previous workspace" title="Previous workspace" data-i18n-aria-label="uxp.tabs.previous_workspace" data-i18n-title="uxp.tabs.previous_workspace" aria-controls="tabNav" hidden>
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M10.354 3.646a.5.5 0 010 .708L6.707 8l3.647 3.646a.5.5 0 01-.708.708l-4-4a.5.5 0 010-.708l4-4a.5.5 0 01.708 0z"/></svg>
+      </button>
+      <nav class="oc-tabs" role="tablist" aria-label="Feature tabs" id="tabNav" data-i18n-aria-label="nav.feature_tabs">
+      <button type="button" class="oc-tab active" data-tab="cut" role="tab" aria-selected="true" aria-controls="tab-cut" id="tabBtnCut" title="Cut" aria-label="Cut" data-i18n-title="uxp.tabs.cut" data-i18n-aria-label="uxp.tabs.cut">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><path d="M4 1.5a2.5 2.5 0 00-1.47 4.53L6.47 8 2.53 9.97A2.5 2.5 0 104 14.5a2.5 2.5 0 001.47-4.53L7.44 8.99 13.5 12V4L7.44 7.01 5.47 5.97A2.5 2.5 0 004 1.5z"/></svg>
+        <span data-i18n="uxp.tabs.cut">Cut</span>
+      </button>
+      <button type="button" class="oc-tab" data-tab="captions" role="tab" aria-selected="false" aria-controls="tab-captions" id="tabBtnCaptions" title="Captions" aria-label="Captions" data-i18n-title="uxp.tabs.captions" data-i18n-aria-label="uxp.tabs.captions">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><path d="M0 2a2 2 0 012-2h12a2 2 0 012 2v8a2 2 0 01-2 2H6.5L2 14.5V12H2a2 2 0 01-2-2V2zm4 3a.5.5 0 000 1h4a.5.5 0 000-1H4zm0 2.5a.5.5 0 000 1h8a.5.5 0 000-1H4z"/></svg>
+        <span data-i18n="uxp.tabs.captions">Captions</span>
+      </button>
+      <button type="button" class="oc-tab" data-tab="audio" role="tab" aria-selected="false" aria-controls="tab-audio" id="tabBtnAudio" title="Audio" aria-label="Audio" data-i18n-title="uxp.tabs.audio" data-i18n-aria-label="uxp.tabs.audio">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><path d="M6 1v14l-4-4H0V5h2l4-4zm7.07 1.93a.75.75 0 00-1.06 1.06 5.5 5.5 0 010 7.78.75.75 0 001.06 1.06 7 7 0 000-9.9zm-2.12 2.12a.75.75 0 00-1.06 1.06 2.5 2.5 0 010 3.54.75.75 0 001.06 1.06 4 4 0 000-5.66z"/></svg>
+        <span data-i18n="uxp.tabs.audio">Audio</span>
+      </button>
+      <button type="button" class="oc-tab" data-tab="video" role="tab" aria-selected="false" aria-controls="tab-video" id="tabBtnVideo" title="Video" aria-label="Video" data-i18n-title="uxp.tabs.video" data-i18n-aria-label="uxp.tabs.video">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><path d="M0 3a2 2 0 012-2h8a2 2 0 012 2v4l4-2v6l-4-2v4a2 2 0 01-2 2H2a2 2 0 01-2-2V3z"/></svg>
+        <span data-i18n="uxp.tabs.video">Video</span>
+      </button>
+      <button type="button" class="oc-tab" data-tab="timeline" role="tab" aria-selected="false" aria-controls="tab-timeline" id="tabBtnTimeline" title="Timeline" aria-label="Timeline" data-i18n-title="uxp.tabs.timeline" data-i18n-aria-label="uxp.tabs.timeline">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><path d="M1 2.5A1.5 1.5 0 012.5 1h3A1.5 1.5 0 017 2.5v3A1.5 1.5 0 015.5 7h-3A1.5 1.5 0 011 5.5v-3zm8 0A1.5 1.5 0 0110.5 1h3A1.5 1.5 0 0115 2.5v3A1.5 1.5 0 0113.5 7h-3A1.5 1.5 0 019 5.5v-3zm-8 8A1.5 1.5 0 012.5 9h3A1.5 1.5 0 017 10.5v3A1.5 1.5 0 015.5 15h-3A1.5 1.5 0 011 13.5v-3zm8 0A1.5 1.5 0 0110.5 9h3A1.5 1.5 0 0115 10.5v3A1.5 1.5 0 0113.5 15h-3A1.5 1.5 0 019 13.5v-3z"/></svg>
+        <span data-i18n="uxp.tabs.timeline">Timeline</span>
+      </button>
+      <button type="button" class="oc-tab" data-tab="search" role="tab" aria-selected="false" aria-controls="tab-search" id="tabBtnSearch" title="Search" aria-label="Search" data-i18n-title="uxp.tabs.search" data-i18n-aria-label="uxp.tabs.search">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><path d="M11.742 10.344a6.5 6.5 0 10-1.397 1.398h-.001c.03.04.062.078.098.115l3.85 3.85a1 1 0 001.415-1.414l-3.85-3.85a1.007 1.007 0 00-.115-.099zm-5.242 1.156a5.5 5.5 0 110-11 5.5 5.5 0 010 11z"/></svg>
+        <span data-i18n="uxp.tabs.search">Search</span>
+      </button>
+      <button type="button" class="oc-tab" data-tab="deliverables" role="tab" aria-selected="false" aria-controls="tab-deliverables" id="tabBtnDeliverables" title="Deliverables" aria-label="Deliverables" data-i18n-title="uxp.tabs.deliverables" data-i18n-aria-label="uxp.tabs.deliverables">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><path d="M9.293.879A1 1 0 0110 1.586V4h2.5A1.5 1.5 0 0114 5.5v9a1.5 1.5 0 01-1.5 1.5h-9A1.5 1.5 0 012 14.5v-13A1.5 1.5 0 013.5 0H9a1 1 0 01.293.293L9.293.879zM9 1.586L3.5 1a.5.5 0 00-.5.5v13a.5.5 0 00.5.5h9a.5.5 0 00.5-.5v-9H10a1 1 0 01-1-1V1.586zM5 7.5a.5.5 0 01.5-.5h5a.5.5 0 010 1h-5a.5.5 0 01-.5-.5zm0 2.5a.5.5 0 01.5-.5h5a.5.5 0 010 1h-5A.5.5 0 015 10zm0 2.5a.5.5 0 01.5-.5h3a.5.5 0 010 1h-3a.5.5 0 01-.5-.5z"/></svg>
+        <span data-i18n="uxp.tabs.deliverables">Deliverables</span>
+      </button>
+      <button type="button" class="oc-tab" data-tab="agent" role="tab" aria-selected="false" aria-controls="tab-agent" id="tabBtnAgent" title="Agent" aria-label="Agent" data-i18n-title="uxp.tabs.agent" data-i18n-aria-label="uxp.tabs.agent">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><path d="M8 16A8 8 0 108 0a8 8 0 000 16zM6 5.5a.5.5 0 011 0v3a.5.5 0 01-1 0v-3zm3 0a.5.5 0 011 0v3a.5.5 0 01-1 0v-3zM5.5 11a2.5 2.5 0 005 0 .5.5 0 011 0 3.5 3.5 0 11-7 0 .5.5 0 011 0z"/></svg>
+        <span data-i18n="uxp.tabs.agent">Agent</span>
+      </button>
+      <button type="button" class="oc-tab" data-tab="settings" role="tab" aria-selected="false" aria-controls="tab-settings" id="tabBtnSettings" title="Settings" aria-label="Settings" data-i18n-title="uxp.tabs.settings" data-i18n-aria-label="uxp.tabs.settings">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><path d="M7.068.727c.243-.97 1.62-.97 1.864 0l.071.286a.96.96 0 001.622.434l.205-.211c.695-.719 1.888-.03 1.613.931l-.084.303a.96.96 0 001.187 1.187l.303-.084c.961-.275 1.65.918.931 1.613l-.211.205a.96.96 0 00.434 1.622l.286.071c.97.243.97 1.62 0 1.864l-.286.071a.96.96 0 00-.434 1.622l.211.205c.719.695.03 1.888-.931 1.613l-.303-.084a.96.96 0 00-1.187 1.187l.084.303c.275.961-.918 1.65-1.613.931l-.205-.211a.96.96 0 00-1.622.434l-.071.286c-.243.97-1.62.97-1.864 0l-.071-.286a.96.96 0 00-1.622-.434l-.205.211c-.695.719-1.888.03-1.613-.931l.084-.303a.96.96 0 00-1.187-1.187l-.303.084c-.961.275-1.65-.918-.931-1.613l.211-.205a.96.96 0 00-.434-1.622l-.286-.071c-.97-.243-.97-1.62 0-1.864l.286-.071A.96.96 0 001.39 4.22l-.211-.205c-.719-.695-.03-1.888.931-1.613l.303.084a.96.96 0 001.187-1.187l-.084-.303C3.241.035 4.434-.654 5.13.065l.205.211A.96.96 0 006.997.71l.071-.286zM8 11a3 3 0 100-6 3 3 0 000 6z"/></svg>
+        <span data-i18n="uxp.tabs.settings">Settings</span>
+      </button>
+      </nav>
+      <button type="button" class="oc-tab-scroll oc-tab-scroll-next" id="tabScrollNext" aria-label="Next workspace" title="Next workspace" data-i18n-aria-label="uxp.tabs.next_workspace" data-i18n-title="uxp.tabs.next_workspace" aria-controls="tabNav" hidden>
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M5.646 3.646a.5.5 0 000 .708L9.293 8l-3.647 3.646a.5.5 0 00.708.708l4-4a.5.5 0 000-.708l-4-4a.5.5 0 00-.708 0z"/></svg>
+      </button>
+    </div>
+
+    <!-- ===== MAIN CONTENT ===== -->
+    <main class="oc-content" id="mainContent">
+      <section class="oc-workspace-overview" aria-labelledby="workspaceOverviewTitle" aria-label="Workspace overview" data-i18n-aria-label="uxp.workspace.overview_region">
+        <div class="oc-workspace-copy">
+          <div class="oc-workspace-kicker" data-i18n="uxp.workspace.studio">OpenCut Studio</div>
+          <h1 class="oc-workspace-title" id="workspaceOverviewTitle" data-i18n="uxp.workspace.cut_title">Cut &amp; Clean</h1>
+          <p class="oc-workspace-subtitle" id="workspaceOverviewSubtitle" data-i18n="uxp.workspace.cut_subtitle">Reviewable cuts, fillers, and pacing.</p>
+          <div class="oc-workspace-actions" role="group" aria-label="Workspace actions" data-i18n-aria-label="uxp.workspace.shortcuts">
+            <button type="button" class="oc-btn oc-btn-primary" id="workspaceChooseClipBtn" data-offline-enabled="true" data-i18n="uxp.workspace.choose_media">Choose Media</button>
+            <button type="button" class="oc-btn oc-btn-secondary" id="workspaceRefreshBtn" data-workspace-command="refresh-backend" data-i18n="common.refresh">Refresh</button>
+            <button type="button" class="oc-btn oc-btn-secondary" id="workspaceSettingsBtn" data-workspace-command="open-settings" data-i18n="uxp.tabs.settings">Settings</button>
+          </div>
+        </div>
+        <div class="oc-workspace-meta" role="list" aria-label="Current workspace context" data-i18n-aria-label="uxp.workspace.current_context">
+          <div class="oc-workspace-meta-item" role="listitem">
+            <span class="oc-workspace-meta-label" data-i18n="uxp.workspace.label_source">Active Shot</span>
+            <span class="oc-workspace-meta-value" id="workspaceSourceValue" aria-live="polite" data-i18n="uxp.workspace.no_source_selected">No source selected</span>
+          </div>
+          <div class="oc-workspace-meta-item" role="listitem">
+            <span class="oc-workspace-meta-label" data-i18n="uxp.workspace.label_library">Media Library</span>
+            <span class="oc-workspace-meta-value" id="workspaceLibraryValue" aria-live="polite" data-i18n="uxp.workspace.library_zero">0 clips</span>
+          </div>
+        </div>
+        <div class="oc-workspace-guide" id="workspaceGuide" aria-live="polite">
+          <div class="oc-workspace-guide-copy">
+            <span class="oc-workspace-guide-kicker" id="workspaceGuideKicker" data-i18n="uxp.guide.choose_media_kicker">Choose media</span>
+            <h2 class="oc-workspace-guide-title" id="workspaceGuideTitle" data-i18n="uxp.guide.choose_media_title">Choose one active shot to unlock this workspace.</h2>
+            <p class="oc-workspace-guide-text" id="workspaceGuideText" data-i18n="uxp.guide.choose_media_text">OpenCut keeps the current clip in sync across Cut, Captions, Audio, and Video so you can move through the edit without repeated setup.</p>
+          </div>
+          <button type="button" class="oc-btn oc-btn-secondary oc-btn-sm" id="workspaceGuideAction" data-action="choose-clip" data-i18n="uxp.workspace.choose_media">Choose Media</button>
+        </div>
+      </section>
+
+      <!-- ==================== CUT & CLEAN TAB ==================== -->
+      <div class="oc-tab-panel active" id="tab-cut" role="tabpanel" aria-labelledby="tabBtnCut">
+
+        <div class="oc-section-title" data-i18n="uxp.cut.clip_input">Clip Input</div>
+        <div class="oc-card">
+          <div class="oc-field-row">
+            <label class="oc-label" for="clipPathCut" data-i18n="uxp.cut.clip_path">Clip Path</label>
+            <div class="oc-input-group">
+              <input type="text" class="oc-input" id="clipPathCut" placeholder="Paste a clip path or browse media…" data-i18n-placeholder="uxp.cut.clip_path_placeholder">
+              <button type="button" class="oc-btn oc-btn-secondary" id="browseClipCut" data-i18n="common.browse">Browse</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.cut.silence_removal">Silence Removal</div>
+        <div class="oc-card" id="silenceCard">
+          <div class="oc-card-header collapsible" data-target="silenceBody">
+            <span data-i18n="uxp.cut.silence_detection">Silence Detection</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708.708l-6 6a.5.5 0 01-.708 0l-6-6a.5.5 0 010-.708z"/></svg>
+          </div>
+          <div class="oc-card-body" id="silenceBody">
+            <div class="oc-slider-row">
+              <label class="oc-label" for="silenceThreshold" data-i18n="uxp.cut.threshold_db">Threshold (dB)</label>
+              <input type="range" class="oc-slider" id="silenceThreshold" min="-60" max="-10" value="-35" step="1">
+              <span class="oc-slider-val" id="silenceThresholdVal">-35 dB</span>
+            </div>
+            <div class="oc-slider-row">
+              <label class="oc-label" for="minSilence" data-i18n="uxp.cut.min_silence_s">Min Silence (s)</label>
+              <input type="range" class="oc-slider" id="minSilence" min="0.1" max="3.0" value="0.5" step="0.05">
+              <span class="oc-slider-val" id="minSilenceVal">0.50 s</span>
+            </div>
+            <div class="oc-slider-row">
+              <label class="oc-label" for="silencePadding" data-i18n="uxp.cut.padding_ms">Padding (ms)</label>
+              <input type="range" class="oc-slider" id="silencePadding" min="0" max="500" value="80" step="10">
+              <span class="oc-slider-val" id="silencePaddingVal">80 ms</span>
+            </div>
+            <div class="oc-field-row">
+              <label class="oc-label" for="silenceDetectMethod" data-i18n="uxp.cut.detection">Detection</label>
+              <select class="oc-select" id="silenceDetectMethod" aria-label="Silence detection method" data-i18n-aria-label="uxp.cut.silence_detection_method">
+                <option value="auto" selected data-i18n="uxp.cut.detect_auto">Auto (AI + fallback)</option>
+                <option value="vad" data-i18n="uxp.cut.detect_vad">Silero VAD (neural)</option>
+                <option value="energy" data-i18n="uxp.cut.detect_energy">Energy threshold</option>
+              </select>
+            </div>
+            <div class="oc-field-row">
+              <label class="oc-label" for="silenceMode" data-i18n="uxp.cut.output_mode">Output Mode</label>
+              <select class="oc-select" id="silenceMode">
+                <option value="remove" data-i18n="uxp.cut.remove_silences">Remove Silences</option>
+                <option value="markers" data-i18n="uxp.cut.markers_only">Generate Markers Only</option>
+                <option value="chapter" data-i18n="uxp.cut.chapter_cuts">Chapter Cuts</option>
+              </select>
+            </div>
+            <button type="button" class="oc-btn oc-btn-primary oc-btn-full" id="runSilenceBtn" data-i18n="uxp.cut.remove_silence">Remove Silence</button>
+          </div>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.cut.filler_word_detection">Filler Word Detection</div>
+        <div class="oc-card" id="fillerCard">
+          <div class="oc-card-header collapsible" data-target="fillerBody">
+            <span data-i18n="uxp.cut.filler_words">Filler Words</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708.708l-6 6a.5.5 0 01-.708 0l-6-6a.5.5 0 010-.708z"/></svg>
+          </div>
+          <div class="oc-card-body" id="fillerBody">
+            <div class="oc-field-row">
+              <label class="oc-label" for="fillerBackend" data-i18n="uxp.cut.filler_backend">Backend</label>
+              <select class="oc-select" id="fillerBackend" aria-label="Filler detection backend" data-i18n-aria-label="uxp.cut.filler_detection_backend">
+                <option value="whisper" selected data-i18n="uxp.cut.backend_whisper">Whisper (fast)</option>
+                <option value="crisper" data-i18n="uxp.cut.backend_crisper">CrisperWhisper (accurate)</option>
+              </select>
+            </div>
+            <div class="oc-field-row">
+              <label class="oc-label" for="fillerWords" data-i18n="uxp.cut.words_to_remove">Words to remove</label>
+              <input type="text" class="oc-input" id="fillerWords" value="um, uh, like, you know, so, actually">
+            </div>
+            <div class="oc-slider-row">
+              <label class="oc-label" for="fillerPadding" data-i18n="uxp.cut.clip_padding_ms">Clip Padding (ms)</label>
+              <input type="range" class="oc-slider" id="fillerPadding" min="0" max="300" value="50" step="10">
+              <span class="oc-slider-val" id="fillerPaddingVal">50 ms</span>
+            </div>
+            <button type="button" class="oc-btn oc-btn-primary oc-btn-full" id="runFillerBtn" data-i18n="uxp.cut.detect_remove_fillers">Remove Filler Words</button>
+          </div>
+        </div>
+
+        <div class="oc-result-area hidden" id="cutResultArea" tabindex="-1" aria-live="polite">
+          <div class="oc-result-header-row">
+            <div class="oc-result-header" data-i18n="uxp.cut.latest_cut_pass">Latest Cut Pass</div>
+            <div class="oc-result-summary" id="cutResultSummary" data-i18n="uxp.cut.ready_for_timeline_review">Ready for timeline review</div>
+          </div>
+          <div class="oc-result-insight-grid oc-result-insight-grid--compact" aria-label="Cut pass details" data-i18n-aria-label="uxp.cut.pass_details">
+            <div class="oc-result-insight">
+              <span class="oc-result-insight-label" data-i18n="uxp.cut.source">Source</span>
+              <span class="oc-result-insight-value" id="cutResultSourceValue" data-i18n="uxp.cut.awaiting_output">Awaiting output</span>
+            </div>
+            <div class="oc-result-insight">
+              <span class="oc-result-insight-label" data-i18n="uxp.cut.removed">Removed</span>
+              <span class="oc-result-insight-value" id="cutResultRemovedValue">0 s</span>
+            </div>
+            <div class="oc-result-insight">
+              <span class="oc-result-insight-label" data-i18n="uxp.cut.next">Next</span>
+              <span class="oc-result-insight-value" id="cutResultNextValue" data-i18n="uxp.cut.apply_latest_cuts">Apply latest cuts</span>
+            </div>
+          </div>
+          <div class="oc-result-body" id="cutResultBody"></div>
+          <button type="button" class="oc-btn oc-btn-secondary oc-btn-sm" id="applyCutResultBtn" data-i18n="uxp.cut.apply_cuts_to_timeline">Apply Cuts to Timeline</button>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.cut.full_pipeline">Full Cleanup Pipeline</div>
+        <div class="oc-card">
+          <div class="oc-card-header collapsible" data-target="fullPipelineBody">
+            <span data-i18n="uxp.cut.full_pipeline_title">One-click cleanup</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708.708l-6-6a.5.5 0 010-.708z"/></svg>
+          </div>
+          <div class="oc-card-body" id="fullPipelineBody">
+            <p class="oc-caption-intro" data-i18n="uxp.cut.full_pipeline_hint">Run a reviewable silence/filler cleanup pass, optional zoom, and captions as one backend job.</p>
+            <div class="oc-field-row">
+              <label class="oc-label" for="fullPresetUxp" data-i18n="uxp.cut.full_preset">Pipeline preset</label>
+              <select class="oc-select" id="fullPresetUxp">
+                <option value="youtube" selected data-i18n="uxp.cut.full_preset_youtube">YouTube</option>
+                <option value="default" data-i18n="uxp.cut.full_preset_default">Default</option>
+                <option value="aggressive" data-i18n="uxp.cut.full_preset_aggressive">Aggressive</option>
+                <option value="conservative" data-i18n="uxp.cut.full_preset_conservative">Conservative</option>
+                <option value="podcast" data-i18n="uxp.cut.full_preset_podcast">Podcast</option>
+              </select>
+            </div>
+            <div class="oc-checkbox-row">
+              <label class="oc-checkbox-label"><input type="checkbox" id="cleanupDenoiseUxp" checked> <span data-i18n="uxp.cut.cleanup_denoise">Denoise</span></label>
+              <label class="oc-checkbox-label"><input type="checkbox" id="cleanupLoudnessUxp" checked> <span data-i18n="uxp.cut.cleanup_loudness">Loudness</span></label>
+              <label class="oc-checkbox-label"><input type="checkbox" id="fullCaptionsUxp" checked> <span data-i18n="uxp.cut.captions_srt">Captions (SRT)</span></label>
+            </div>
+            <button type="button" class="oc-btn oc-btn-primary oc-btn-full" id="runFullPipelineBtn" data-i18n="cleanup_chain.preview">Preview Magic Cleanup</button>
+            <div class="oc-result-area hidden" id="cleanupPreviewAreaUxp" tabindex="-1" aria-live="polite">
+              <div class="oc-result-header-row">
+                <div class="oc-result-header" data-i18n="cleanup_chain.review_title">Magic Cleanup Review</div>
+                <div class="oc-result-summary" id="cleanupPreviewSummaryUxp" data-i18n="cleanup_chain.review_hint">Review every proposed cleanup step before OpenCut writes an artifact or changes Premiere.</div>
+              </div>
+              <div class="oc-result-body" id="cleanupPreviewBodyUxp"></div>
+              <button type="button" class="oc-btn oc-btn-primary oc-btn-sm hidden" id="applyCleanupChainUxpBtn" data-i18n="cleanup_chain.apply">Apply Reviewed Cleanup</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== CAPTIONS TAB ==================== -->
+      <div class="oc-tab-panel" id="tab-captions" role="tabpanel" aria-labelledby="tabBtnCaptions">
+
+        <div class="oc-section-title" data-i18n="uxp.captions.transcription">Transcription</div>
+        <div class="oc-inline-summary-grid oc-inline-summary-grid--captions" aria-label="Captions workflow readiness" data-i18n-aria-label="uxp.captions.workflow_readiness">
+          <div class="oc-inline-stat">
+            <span class="oc-label" data-i18n="uxp.captions.session">Session</span>
+            <span class="oc-status-pill" id="captionsSessionPill" data-state="empty" data-i18n="uxp.captions.needs_source">Needs source</span>
+          </div>
+          <div class="oc-inline-stat">
+            <span class="oc-label" data-i18n="uxp.captions.source">Source</span>
+            <span class="oc-inline-value" id="captionsSourceValue" data-i18n="uxp.captions.choose_clip_to_start">Choose a clip to start</span>
+          </div>
+          <div class="oc-inline-stat">
+            <span class="oc-label" data-i18n="uxp.captions.latest_output">Latest Output</span>
+            <span class="oc-inline-value" id="captionsOutputValue" data-i18n="uxp.captions.no_transcript_yet">No transcript yet</span>
+          </div>
+        </div>
+        <div class="oc-status-line" id="captionsStatusLine" role="status" aria-live="polite" data-i18n="uxp.captions.choose_clip_status">Choose a clip, then transcribe to unlock editable, exportable chapters, repeat review, and subtitles.</div>
+        <div class="oc-card">
+          <div class="oc-card-header collapsible" data-target="transcribeBody">
+            <span data-i18n="uxp.captions.transcribe">Transcribe</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708.708l-6 6a.5.5 0 01-.708 0l-6-6a.5.5 0 010-.708z"/></svg>
+          </div>
+          <div class="oc-card-body" id="transcribeBody">
+            <p class="oc-caption-intro" data-i18n="uxp.captions.transcribe_intro">Create one transcript, then reuse it for exportable chapters, cleanup, and subtitles.</p>
+            <div class="oc-field-row">
+              <label class="oc-label" for="clipPathCaptions" data-i18n="uxp.cut.clip_path">Clip Path</label>
+              <div class="oc-input-group">
+                <input type="text" class="oc-input" id="clipPathCaptions" placeholder="Select clip…" data-i18n-placeholder="uxp.captions.select_clip_placeholder">
+                <button type="button" class="oc-btn oc-btn-secondary" id="browseClipCaptions" data-i18n="common.browse">Browse</button>
+              </div>
+            </div>
+            <div class="oc-field-row">
+              <label class="oc-label" for="whisperModel" data-i18n="uxp.captions.model">Model</label>
+              <select class="oc-select" id="whisperModel">
+                <option value="tiny" data-i18n="uxp.captions.model_tiny">Tiny (fastest)</option>
+                <option value="base" data-i18n="uxp.captions.model_base">Base (balanced)</option>
+                <option value="small" data-i18n="uxp.captions.model_small">Small (good)</option>
+                <option value="medium" data-i18n="uxp.captions.model_medium">Medium (great)</option>
+                <option value="turbo" selected data-i18n="uxp.captions.model_turbo">Turbo (fast and accurate)</option>
+                <option value="distil-large-v3.5" data-i18n="uxp.captions.model_distil_large_v35">Distil v3.5 (fast, great quality)</option>
+                <option value="distil-large-v3" data-i18n="uxp.captions.model_distil_large_v3">Distil v3 (fast, good quality)</option>
+                <option value="large-v2" data-i18n="uxp.captions.model_large_v2">Large v2</option>
+                <option value="large-v3" data-i18n="uxp.captions.model_large_v3">Large v3 (best accuracy)</option>
+              </select>
+            </div>
+            <div class="oc-field-row">
+              <label class="oc-label" for="transcribeLang" data-i18n="uxp.captions.language">Language</label>
+              <select class="oc-select" id="transcribeLang">
+                <option value="auto" selected data-i18n="uxp.captions.language_auto">Auto-detect</option>
+                <option value="en" data-i18n="uxp.captions.language_en">English</option>
+                <option value="es" data-i18n="uxp.captions.language_es">Spanish</option>
+                <option value="fr" data-i18n="uxp.captions.language_fr">French</option>
+                <option value="de" data-i18n="uxp.captions.language_de">German</option>
+                <option value="ja" data-i18n="uxp.captions.language_ja">Japanese</option>
+                <option value="zh" data-i18n="uxp.captions.language_zh">Chinese</option>
+                <option value="pt" data-i18n="uxp.captions.language_pt">Portuguese</option>
+                <option value="ru" data-i18n="uxp.captions.language_ru">Russian</option>
+              </select>
+            </div>
+            <div class="oc-field-row">
+              <label class="oc-label" for="captionStyle" data-i18n="uxp.captions.caption_style">Caption Style</label>
+              <select class="oc-select" id="captionStyle" data-catalog-source="fallback">
+                <option value="minimal_clean" data-catalog-fallback="true" data-i18n="uxp.captions.style_minimal_clean">Minimal Clean</option>
+              </select>
+            </div>
+            <div class="oc-checkbox-row">
+              <label class="oc-checkbox-label">
+                <input type="checkbox" id="enableDiarization"> <span data-i18n="uxp.captions.speaker_diarization">Speaker Diarization</span>
+              </label>
+              <label class="oc-checkbox-label">
+                <input type="checkbox" id="enableWordLevel" checked> <span data-i18n="uxp.captions.word_level_timestamps">Word-Level Timestamps</span>
+              </label>
+            </div>
+            <p class="oc-hint oc-caption-plan-note" id="captionsPlanNote" data-i18n="uxp.captions.plan_note_default">Word timing is on. Speaker splits are off.</p>
+            <button type="button" class="oc-btn oc-btn-primary oc-btn-full" id="runTranscribeBtn" data-i18n="uxp.captions.transcribe">Transcribe</button>
+            <div class="oc-btn-row">
+              <button type="button" class="oc-btn oc-btn-secondary oc-btn-sm" id="installWhisperBtn" data-i18n="uxp.captions.install_whisper">Install faster-whisper</button>
+              <span class="oc-status-line" id="whisperInstallStatus" role="status" data-i18n="uxp.captions.whisper_install_ready">Not installed. faster-whisper installs on first use.</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="oc-card">
+          <div class="oc-card-header collapsible" data-target="transcriptCorrectionBody">
+            <span data-i18n="uxp.captions.bulk_correction">Bulk transcript correction</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708.708l-6-6a.5.5 0 010-.708z"/></svg>
+          </div>
+          <div class="oc-card-body" id="transcriptCorrectionBody">
+            <p class="oc-caption-intro" data-i18n="uxp.captions.bulk_correction_intro">Preview a literal find/replace across the active transcript, then apply it or save the term to this project glossary.</p>
+            <div class="oc-field-row">
+              <label class="oc-label" for="uxpTranscriptFindInput" data-i18n="uxp.captions.bulk_find">Find</label>
+              <input type="text" class="oc-input" id="uxpTranscriptFindInput" placeholder="Find…" data-i18n-placeholder="uxp.captions.bulk_find_placeholder" autocomplete="off" spellcheck="false">
+            </div>
+            <div class="oc-field-row">
+              <label class="oc-label" for="uxpTranscriptReplaceInput" data-i18n="uxp.captions.bulk_replace">Replace</label>
+              <input type="text" class="oc-input" id="uxpTranscriptReplaceInput" placeholder="Replace with…" data-i18n-placeholder="uxp.captions.bulk_replace_placeholder" autocomplete="off" spellcheck="false">
+            </div>
+            <div class="oc-checkbox-row">
+              <label class="oc-checkbox-label"><input type="checkbox" id="uxpTranscriptCaseSensitive"> <span data-i18n="uxp.captions.bulk_case_sensitive">Match case</span></label>
+              <label class="oc-checkbox-label"><input type="checkbox" id="uxpTranscriptWholeWord" checked> <span data-i18n="uxp.captions.bulk_whole_word">Whole word</span></label>
+              <label class="oc-checkbox-label"><input type="checkbox" id="uxpTranscriptSaveGlossary"> <span data-i18n="uxp.captions.bulk_save_glossary">Save to project glossary</span></label>
+            </div>
+            <div class="oc-btn-row">
+              <button type="button" class="oc-btn oc-btn-secondary oc-btn-sm" id="uxpTranscriptPreviewBtn" data-i18n="uxp.captions.bulk_preview">Preview replacement</button>
+              <button type="button" class="oc-btn oc-btn-primary oc-btn-sm" id="uxpTranscriptApplyBtn" data-i18n="uxp.captions.bulk_apply">Apply replacement</button>
+              <button type="button" class="oc-btn oc-btn-secondary oc-btn-sm" id="uxpTranscriptUndoBtn" disabled data-i18n="uxp.captions.bulk_undo">Undo last correction</button>
+            </div>
+            <div class="oc-status-line" id="uxpTranscriptCorrectionPreview" role="status" aria-live="polite"></div>
+            <div class="oc-status-line" id="uxpTranscriptCorrectionStatus" role="status" aria-live="polite" data-i18n="uxp.captions.bulk_idle">Run transcription before previewing a correction.</div>
+          </div>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.captions.translation">Translation</div>
+        <div class="oc-card">
+          <div class="oc-card-header collapsible" data-target="translationBody">
+            <span data-i18n="uxp.captions.translate_captions">Translate Captions</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M2 5l6 6 6-6"/></svg>
+          </div>
+          <div class="oc-card-body" id="translationBody">
+            <p class="oc-caption-intro" data-i18n="uxp.captions.translation_intro">Translate the latest transcript locally with the explicit non-commercial model opt-in.</p>
+            <div class="oc-field-row">
+              <label class="oc-label" for="translateSourceLang" data-i18n="uxp.captions.source_language">Source language</label>
+              <select class="oc-select" id="translateSourceLang">
+                <option value="en" selected data-i18n="uxp.captions.language_en">English</option>
+                <option value="es" data-i18n="uxp.captions.language_es">Spanish</option>
+                <option value="fr" data-i18n="uxp.captions.language_fr">French</option>
+                <option value="de" data-i18n="uxp.captions.language_de">German</option>
+                <option value="ja" data-i18n="uxp.captions.language_ja">Japanese</option>
+                <option value="zh" data-i18n="uxp.captions.language_zh">Chinese</option>
+              </select>
+            </div>
+            <div class="oc-field-row">
+              <label class="oc-label" for="translateTargetLang" data-i18n="uxp.captions.target_language">Target language</label>
+              <select class="oc-select" id="translateTargetLang">
+                <option value="es" selected data-i18n="uxp.captions.language_es">Spanish</option>
+                <option value="en" data-i18n="uxp.captions.language_en">English</option>
+                <option value="fr" data-i18n="uxp.captions.language_fr">French</option>
+                <option value="de" data-i18n="uxp.captions.language_de">German</option>
+                <option value="ja" data-i18n="uxp.captions.language_ja">Japanese</option>
+                <option value="zh" data-i18n="uxp.captions.language_zh">Chinese</option>
+              </select>
+            </div>
+            <div class="oc-checkbox-row">
+              <label class="oc-checkbox-label"><input type="checkbox" id="translateOutputSrt" checked> <span data-i18n="uxp.captions.output_srt">Also create an SRT file</span></label>
+              <label class="oc-checkbox-label"><input type="checkbox" id="translateRestrictedOptIn"> <span data-i18n="uxp.captions.accept_restricted_license">I accept the non-commercial NLLB model license</span></label>
+            </div>
+            <div class="oc-btn-row">
+              <button type="button" class="oc-btn oc-btn-primary oc-btn-sm" id="runTranslateBtn" data-i18n="uxp.captions.translate">Translate</button>
+              <button type="button" class="oc-btn oc-btn-secondary oc-btn-sm" id="installTranslationBtn" data-i18n="uxp.captions.install_translation">Install NLLB</button>
+            </div>
+            <div class="oc-status-line" id="translationInstallStatus" role="status" data-i18n="uxp.captions.translation_install_ready">Not installed. Translation models install on first use.</div>
+          </div>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.captions.animated_captions">Animated Captions</div>
+        <div class="oc-card">
+          <div class="oc-card-header collapsible" data-target="animatedCaptionsBody">
+            <span data-i18n="uxp.captions.render_animated">Render Animated Captions</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M2 5l6 6 6-6"/></svg>
+          </div>
+          <div class="oc-card-body" id="animatedCaptionsBody">
+            <p class="oc-caption-intro" data-i18n="uxp.captions.animated_intro">Use word-level transcript timing to render an animated caption video.</p>
+            <div class="oc-field-row">
+              <label class="oc-label" for="animCapPreset" data-i18n="uxp.captions.animation">Animation</label>
+              <select class="oc-select" id="animCapPreset">
+                <option value="pop" selected data-i18n="uxp.captions.animation_pop">Pop</option>
+                <option value="fade" data-i18n="uxp.captions.animation_fade">Fade</option>
+                <option value="slide_up" data-i18n="uxp.captions.animation_slide_up">Slide Up</option>
+                <option value="typewriter" data-i18n="uxp.captions.animation_typewriter">Typewriter</option>
+                <option value="bounce" data-i18n="uxp.captions.animation_bounce">Bounce</option>
+                <option value="glow" data-i18n="uxp.captions.animation_glow">Glow</option>
+                <option value="highlight_box" data-i18n="uxp.captions.animation_highlight_box">Highlight Box</option>
+              </select>
+            </div>
+            <div class="oc-slider-row"><label class="oc-label" for="animCapFontSize" data-i18n="uxp.captions.font_size">Font size</label><input type="range" class="oc-slider" id="animCapFontSize" min="28" max="96" value="56" step="2"><span class="oc-slider-val" id="animCapFontSizeVal">56</span></div>
+            <div class="oc-slider-row"><label class="oc-label" for="animCapWpl" data-i18n="uxp.captions.words_per_line">Words per line</label><input type="range" class="oc-slider" id="animCapWpl" min="2" max="10" value="6" step="1"><span class="oc-slider-val" id="animCapWplVal">6</span></div>
+            <button type="button" class="oc-btn oc-btn-primary oc-btn-full" id="runAnimatedCaptionsBtn" data-i18n="uxp.captions.render_animated">Render Animated Captions</button>
+          </div>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.captions.chapter_generation">Chapter Generation</div>
+        <div class="oc-card">
+          <div class="oc-card-header collapsible" data-target="chaptersBody">
+            <span data-i18n="uxp.captions.ai_chapters">AI Chapters</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708.708l-6 6a.5.5 0 01-.708 0l-6-6a.5.5 0 010-.708z"/></svg>
+          </div>
+          <div class="oc-card-body" id="chaptersBody">
+            <p class="oc-caption-intro" data-i18n="uxp.captions.chapters_intro">Draft platform-ready chapter markers from the current transcript flow, then copy the list into publishing or review notes.</p>
+            <div class="oc-field-row">
+              <label class="oc-label" for="llmProvider" data-i18n="uxp.captions.llm_provider">LLM Provider</label>
+              <select class="oc-select" id="llmProvider">
+                <option value="ollama" data-i18n="uxp.captions.provider_ollama">Ollama (local)</option>
+                <option value="openai" data-i18n="uxp.captions.provider_openai">OpenAI</option>
+                <option value="anthropic" data-i18n="uxp.captions.provider_anthropic">Anthropic</option>
+              </select>
+            </div>
+            <div class="oc-field-row">
+              <label class="oc-label" for="llmModel" data-i18n="uxp.captions.model">Model</label>
+              <input type="text" class="oc-input" id="llmModel" value="llama3.2" placeholder="e.g. llama3.2, gpt-4o-mini" data-i18n-placeholder="uxp.captions.llm_model_placeholder">
+            </div>
+            <button type="button" class="oc-btn oc-btn-primary oc-btn-full" id="runChaptersBtn" data-i18n="uxp.captions.generate_chapters">Generate Chapters</button>
+          </div>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.captions.repeat_detection">Repeat Detection</div>
+        <div class="oc-card">
+          <div class="oc-card-header collapsible" data-target="repeatBody">
+            <span data-i18n="uxp.captions.repeat_removal">Repeat Removal</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708.708l-6 6a.5.5 0 01-.708 0l-6-6a.5.5 0 010-.708z"/></svg>
+          </div>
+          <div class="oc-card-body" id="repeatBody">
+            <p class="oc-caption-intro" data-i18n="uxp.captions.repeat_intro">Flag duplicated lines and alternate takes before you commit to the next cleanup pass.</p>
+            <div class="oc-slider-row">
+              <label class="oc-label" for="repeatSimilarity" data-i18n="uxp.captions.similarity_threshold">Similarity Threshold</label>
+              <input type="range" class="oc-slider" id="repeatSimilarity" min="0.5" max="1.0" value="0.85" step="0.01">
+              <span class="oc-slider-val" id="repeatSimilarityVal">0.85</span>
+            </div>
+            <div class="oc-checkbox-row">
+              <label class="oc-checkbox-label">
+                <input type="checkbox" id="keepBestRepeat" checked> <span data-i18n="uxp.captions.keep_best_take">Keep Best Take</span>
+              </label>
+            </div>
+            <button type="button" class="oc-btn oc-btn-primary oc-btn-full" id="runRepeatBtn" data-i18n="uxp.captions.detect_repeats">Detect Repeats</button>
+          </div>
+        </div>
+
+        <div class="oc-result-area hidden" id="captionsResultArea" tabindex="-1" aria-live="polite">
+          <div class="oc-result-header-row">
+            <div class="oc-result-header" data-i18n="uxp.captions.transcript">Transcript</div>
+            <div class="oc-result-summary" id="captionsResultSummary" data-i18n="uxp.captions.ready_to_review">Ready to review</div>
+          </div>
+          <div class="oc-result-meta-row">
+            <span class="oc-status-pill" id="captionsResultPill" data-state="empty" data-i18n="uxp.cut.awaiting_output">Awaiting output</span>
+            <span class="oc-result-meta" id="captionsResultMeta" data-i18n="uxp.captions.result_meta_empty">Transcripts, chapter lists, and repeat notes will land here for one calm review pass.</span>
+          </div>
+          <div class="oc-result-insight-grid" aria-label="Captions result details" data-i18n-aria-label="uxp.captions.result_details">
+            <div class="oc-result-insight">
+              <span class="oc-result-insight-label" data-i18n="uxp.captions.type">Type</span>
+              <span class="oc-result-insight-value" id="captionsResultTypeValue" data-i18n="uxp.cut.awaiting_output">Awaiting output</span>
+            </div>
+            <div class="oc-result-insight">
+              <span class="oc-result-insight-label" data-i18n="uxp.captions.length">Length</span>
+              <span class="oc-result-insight-value" id="captionsResultLengthValue" data-i18n="uxp.captions.zero_lines">0 lines</span>
+            </div>
+            <div class="oc-result-insight">
+              <span class="oc-result-insight-label" data-i18n="uxp.cut.next">Next</span>
+              <span class="oc-result-insight-value" id="captionsResultNextValue" data-i18n="uxp.captions.transcribe_clip">Transcribe a clip</span>
+            </div>
+          </div>
+          <textarea class="oc-textarea" id="captionsResultBody" rows="8" readonly placeholder="Transcript, chapter list, or repeat review will appear here…" data-i18n-placeholder="uxp.captions.result_placeholder"></textarea>
+          <div class="oc-btn-row">
+            <button type="button" class="oc-btn oc-btn-secondary oc-btn-sm" id="copySrtBtn" disabled data-i18n="uxp.captions.copy_output">Copy Output</button>
+            <button type="button" class="oc-btn oc-btn-secondary oc-btn-sm" id="importSrtBtn" disabled data-i18n="uxp.captions.open_srt_prep">Open SRT Prep</button>
+          </div>
+        </div>
+
+        <!-- F236 FCC caption display settings (effective 2026-08-17). -->
+        <div class="oc-section-title" data-i18n="uxp.fcc.caption_display_settings">Caption Display Settings (FCC)</div>
+        <div class="oc-card" id="captionDisplaySettingsCard">
+          <p class="oc-hint" id="fccComplianceNotice">
+            <span id="fccComplianceNoticeText">Per FCC 47 CFR section 79.103 (effective 2026-08-17), users must be able to readily access caption display controls. Pick a preset or override individual tokens.</span>
+            <a href="https://www.ecfr.gov/current/title-47/section-79.103" target="_blank" rel="noopener" data-i18n="uxp.fcc.source_link">FCC source</a>
+          </p>
+          <div class="oc-field-row">
+            <label class="oc-label" for="capDispFont" data-i18n="uxp.fcc.font">Font</label>
+            <select class="oc-input" id="capDispFont"></select>
+          </div>
+          <div class="oc-field-row">
+            <label class="oc-label" for="capDispSize" data-i18n="uxp.fcc.size">Size</label>
+            <select class="oc-input" id="capDispSize"></select>
+          </div>
+          <div class="oc-field-row">
+            <label class="oc-label" for="capDispTextColor" data-i18n="uxp.fcc.text_color">Text Color</label>
+            <select class="oc-input" id="capDispTextColor"></select>
+          </div>
+          <div class="oc-field-row">
+            <label class="oc-label" for="capDispTextOpacity" data-i18n="uxp.fcc.text_opacity">Text Opacity</label>
+            <select class="oc-input" id="capDispTextOpacity"></select>
+          </div>
+          <div class="oc-field-row">
+            <label class="oc-label" for="capDispBgColor" data-i18n="uxp.fcc.background_color">Background Color</label>
+            <select class="oc-input" id="capDispBgColor"></select>
+          </div>
+          <div class="oc-field-row">
+            <label class="oc-label" for="capDispBgOpacity" data-i18n="uxp.fcc.background_opacity">Background Opacity</label>
+            <select class="oc-input" id="capDispBgOpacity"></select>
+          </div>
+          <div class="oc-field-row">
+            <label class="oc-label" for="capDispEdge" data-i18n="uxp.fcc.edge_style">Edge Style</label>
+            <select class="oc-input" id="capDispEdge"></select>
+          </div>
+          <div class="oc-btn-row">
+            <button type="button" class="oc-btn oc-btn-primary" id="capDispPreviewBtn" data-i18n="uxp.fcc.preview">Preview</button>
+            <button type="button" class="oc-btn oc-btn-secondary" id="capDispResetBtn" data-i18n="uxp.fcc.reset_defaults">Reset Defaults</button>
+          </div>
+          <div class="oc-status-line" id="capDispStatus" role="status" aria-live="polite" data-i18n="uxp.fcc.loading_tokens">Loading tokens…</div>
+          <!-- Live preview rendered via the /captions/display-settings/preview payload. -->
+          <div class="oc-card oc-card--nested" id="capDispPreviewBox" hidden>
+            <div class="oc-card-header"><span data-i18n="uxp.fcc.live_preview">Live Preview</span></div>
+            <div class="oc-caption-preview-area" id="capDispPreviewArea">
+              <span class="oc-caption-preview-sample" id="capDispPreviewSample" data-i18n="uxp.fcc.caption_preview_sample">Caption preview</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== AUDIO TAB ==================== -->
+      <div class="oc-tab-panel" id="tab-audio" role="tabpanel" aria-labelledby="tabBtnAudio">
+
+        <div class="oc-field-row oc-mb-sm">
+          <label class="oc-label" for="clipPathAudio" data-i18n="uxp.audio.clip_path">Clip Path</label>
+          <div class="oc-input-group">
+            <input type="text" class="oc-input" id="clipPathAudio" placeholder="Select clip…" data-i18n-placeholder="uxp.audio.select_clip_placeholder">
+            <button type="button" class="oc-btn oc-btn-secondary" id="browseClipAudio" data-i18n="common.browse">Browse</button>
+          </div>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.audio.denoise">Denoise</div>
+        <div class="oc-card">
+          <div class="oc-card-header collapsible" data-target="denoiseBody">
+            <span data-i18n="uxp.audio.ai_noise_reduction">AI Noise Reduction</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708.708l-6 6a.5.5 0 01-.708 0l-6-6a.5.5 0 010-.708z"/></svg>
+          </div>
+          <div class="oc-card-body" id="denoiseBody">
+            <div class="oc-field-row">
+              <label class="oc-label" for="denoiseMethod" data-i18n="uxp.audio.method">Method</label>
+              <!-- Backend /audio/denoise allowlist is afftdn|highpass|gate.
+                   Older options were silently coerced to afftdn, so they did
+                   identical work. -->
+              <select class="oc-select" id="denoiseMethod">
+                <option value="afftdn" data-i18n="uxp.audio.denoise_afftdn">FFT denoise (recommended)</option>
+                <option value="highpass" data-i18n="uxp.audio.denoise_highpass">Highpass + lowpass band-limit</option>
+                <option value="gate" data-i18n="uxp.audio.denoise_gate">Noise gate</option>
+              </select>
+            </div>
+            <div class="oc-slider-row">
+              <label class="oc-label" for="denoiseStrength" data-i18n="uxp.audio.strength">Strength</label>
+              <input type="range" class="oc-slider" id="denoiseStrength" min="0" max="100" value="75" step="1">
+              <span class="oc-slider-val" id="denoiseStrengthVal">75%</span>
+            </div>
+            <button type="button" class="oc-btn oc-btn-primary oc-btn-full" id="runDenoiseBtn" data-i18n="uxp.audio.apply_denoise">Apply Denoise</button>
+          </div>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.audio.stem_separation">Stem Separation</div>
+        <div class="oc-card">
+          <div class="oc-card-header collapsible" data-target="stemSeparationBody">
+            <span data-i18n="uxp.audio.ai_stem_separation">AI Stem Separation</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708 0l-6 6a.5.5 0 01-.708 0l-6-6a.5.5 0 010-.708z"/></svg>
+          </div>
+          <div class="oc-card-body" id="stemSeparationBody">
+            <p class="oc-caption-intro" data-i18n="uxp.audio.stem_separation_hint">Split the selected clip into vocals, drums, bass, and other stems with the maintained audio-separator backend.</p>
+            <div class="oc-field-row">
+              <label class="oc-label" for="stemModel" data-i18n="uxp.audio.model">Model</label>
+              <select class="oc-select" id="stemModel">
+                <option value="mel_band_roformer" selected data-i18n="uxp.audio.model_mel_band_roformer">Mel-Band RoFormer</option>
+                <option value="bs_roformer" data-i18n="uxp.audio.model_bs_roformer">BS-RoFormer</option>
+                <option value="mdx23c" data-i18n="uxp.audio.model_mdx23c">MDX23C</option>
+                <option value="htdemucs" data-i18n="uxp.audio.model_htdemucs">HTDemucs</option>
+              </select>
+            </div>
+            <div class="oc-checkbox-row">
+              <label class="oc-checkbox-label"><input type="checkbox" id="stemVocals" checked> <span data-i18n="uxp.audio.vocals">Vocals</span></label>
+              <label class="oc-checkbox-label"><input type="checkbox" id="stemDrums" checked> <span data-i18n="uxp.audio.drums">Drums</span></label>
+              <label class="oc-checkbox-label"><input type="checkbox" id="stemBass"> <span data-i18n="uxp.audio.bass">Bass</span></label>
+              <label class="oc-checkbox-label"><input type="checkbox" id="stemOther"> <span data-i18n="uxp.audio.other">Other</span></label>
+            </div>
+            <div class="oc-field-row">
+              <label class="oc-label" for="stemFormat" data-i18n="uxp.audio.format">Format</label>
+              <select class="oc-select" id="stemFormat"><option value="wav" selected>WAV</option><option value="flac">FLAC</option><option value="mp3">MP3</option></select>
+            </div>
+            <label class="oc-checkbox-row"><input type="checkbox" id="stemAutoImport" checked> <span data-i18n="uxp.audio.auto_import_stems">Import stems into the project</span></label>
+            <button type="button" class="oc-btn oc-btn-primary oc-btn-full" id="runStemSeparationBtn" data-i18n="uxp.audio.separate_stems">Separate Stems</button>
+          </div>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.audio.speech_enhancement">Speech Enhancement</div>
+        <div class="oc-card">
+          <div class="oc-card-header collapsible" data-target="audioEnhanceBody">
+            <span data-i18n="uxp.audio.enhance_speech">Enhance Speech</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708 0l-6 6a.5.5 0 01-.708 0l-6-6a.5.5 0 010-.708z"/></svg>
+          </div>
+          <div class="oc-card-body" id="audioEnhanceBody">
+            <p class="oc-caption-intro" data-i18n="uxp.audio.speech_enhancement_hint">Clean and restore spoken audio with ClearerVoice, or use Resemble when it is installed.</p>
+            <div class="oc-field-row"><label class="oc-label" for="enhanceBackendUxp" data-i18n="uxp.audio.backend">Backend</label><select class="oc-select" id="enhanceBackendUxp"><option value="clearvoice" selected data-i18n="uxp.audio.backend_clearvoice">ClearerVoice</option><option value="resemble" data-i18n="uxp.audio.backend_resemble">Resemble</option></select></div>
+            <div class="oc-field-row"><label class="oc-label" for="enhanceModelUxp" data-i18n="uxp.audio.model">Model</label><select class="oc-select" id="enhanceModelUxp"><option value="MossFormer2_SE_48K" selected>MossFormer2 SE 48K</option><option value="FRCRN_SE_16K">FRCRN SE 16K</option><option value="MossFormerGAN_SE_16K">MossFormerGAN SE 16K</option></select></div>
+            <div class="oc-checkbox-row"><label class="oc-checkbox-label"><input type="checkbox" id="enhanceDenoiseUxp" checked> <span data-i18n="uxp.audio.denoise">Denoise</span></label><label class="oc-checkbox-label"><input type="checkbox" id="enhanceUpscaleUxp" checked> <span data-i18n="uxp.audio.enhance">Enhancement model</span></label></div>
+            <button type="button" class="oc-btn oc-btn-primary oc-btn-full" id="runAudioEnhanceBtn" data-i18n="uxp.audio.run_enhancement">Enhance Audio</button>
+          </div>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.audio.normalize">Normalize</div>
+        <div class="oc-card">
+          <div class="oc-card-header collapsible" data-target="normalizeBody">
+            <span data-i18n="uxp.audio.loudness_normalization">Loudness Normalization</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708.708l-6 6a.5.5 0 01-.708 0l-6-6a.5.5 0 010-.708z"/></svg>
+          </div>
+          <div class="oc-card-body" id="normalizeBody">
+            <div class="oc-slider-row">
+              <label class="oc-label" for="targetLufs" data-i18n="uxp.audio.target_lufs">Target LUFS</label>
+              <input type="range" class="oc-slider" id="targetLufs" min="-23" max="-9" value="-14" step="0.5">
+              <span class="oc-slider-val" id="targetLufsVal">-14 LUFS</span>
+            </div>
+            <div class="oc-checkbox-row">
+              <label class="oc-checkbox-label">
+                <input type="checkbox" id="normalizeTruePeak" checked> <span data-i18n="uxp.audio.limit_true_peak">Limit True Peak (-1 dBTP)</span>
+              </label>
+            </div>
+            <button type="button" class="oc-btn oc-btn-primary oc-btn-full" id="runNormalizeBtn" data-i18n="uxp.audio.normalize">Normalize</button>
+          </div>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.audio.loudness_match">Loudness Match</div>
+        <div class="oc-card">
+          <div class="oc-card-header collapsible" data-target="loudnessBody">
+            <span data-i18n="uxp.audio.match_to_reference">Match to Reference</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708.708l-6 6a.5.5 0 01-.708 0l-6-6a.5.5 0 010-.708z"/></svg>
+          </div>
+          <div class="oc-card-body" id="loudnessBody">
+            <div class="oc-field-row">
+              <label class="oc-label" for="refClipLoudness" data-i18n="uxp.audio.reference_clip">Reference Clip</label>
+              <div class="oc-input-group">
+                <input type="text" class="oc-input" id="refClipLoudness" placeholder="Reference audio file…" data-i18n-placeholder="uxp.audio.reference_audio_placeholder">
+                <button type="button" class="oc-btn oc-btn-secondary" id="browseRefLoudness" data-i18n="common.browse">Browse</button>
+              </div>
+            </div>
+            <button type="button" class="oc-btn oc-btn-primary oc-btn-full" id="runLoudnessBtn" data-i18n="uxp.audio.match_loudness">Match Loudness</button>
+          </div>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.audio.beat_markers">Beat Markers</div>
+        <div class="oc-card">
+          <div class="oc-card-header collapsible" data-target="beatBody">
+            <span data-i18n="uxp.audio.beat_detection">Beat Detection</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708.708l-6 6a.5.5 0 01-.708 0l-6-6a.5.5 0 010-.708z"/></svg>
+          </div>
+          <div class="oc-card-body" id="beatBody">
+            <div class="oc-field-row">
+              <label class="oc-label" for="beatTrackPath" data-i18n="uxp.audio.audio_track">Audio Track</label>
+              <div class="oc-input-group">
+                <input type="text" class="oc-input" id="beatTrackPath" placeholder="Music file…" data-i18n-placeholder="uxp.audio.music_file_placeholder">
+                <button type="button" class="oc-btn oc-btn-secondary" id="browseBeatTrack" data-i18n="common.browse">Browse</button>
+              </div>
+            </div>
+            <div class="oc-slider-row">
+              <label class="oc-label" for="beatSensitivity" data-i18n="uxp.audio.sensitivity">Sensitivity</label>
+              <input type="range" class="oc-slider" id="beatSensitivity" min="0" max="100" value="60" step="1">
+              <span class="oc-slider-val" id="beatSensitivityVal">60%</span>
+            </div>
+            <button type="button" class="oc-btn oc-btn-primary oc-btn-full" id="runBeatMarkersBtn" data-i18n="uxp.audio.detect_beats_add_markers">Detect Beats &amp; Add Markers</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== VIDEO TAB ==================== -->
+      <div class="oc-tab-panel" id="tab-video" role="tabpanel" aria-labelledby="tabBtnVideo">
+
+        <div class="oc-field-row oc-mb-sm">
+          <label class="oc-label" for="clipPathVideo" data-i18n="uxp.video.clip_path">Clip Path</label>
+          <div class="oc-input-group">
+            <input type="text" class="oc-input" id="clipPathVideo" placeholder="Select clip…" data-i18n-placeholder="uxp.video.select_clip_placeholder">
+            <button type="button" class="oc-btn oc-btn-secondary" id="browseClipVideo" data-i18n="common.browse">Browse</button>
+          </div>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.video.color_match">Color Match</div>
+        <div class="oc-card">
+          <div class="oc-card-header collapsible" data-target="colorMatchBody">
+            <span data-i18n="uxp.video.color_grading_match">Color Grading Match</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708.708l-6 6a.5.5 0 01-.708 0l-6-6a.5.5 0 010-.708z"/></svg>
+          </div>
+          <div class="oc-card-body" id="colorMatchBody">
+            <div class="oc-field-row">
+              <label class="oc-label" for="colorRefPath" data-i18n="uxp.video.reference_clip">Reference Clip</label>
+              <div class="oc-input-group">
+                <input type="text" class="oc-input" id="colorRefPath" placeholder="Reference video file…" data-i18n-placeholder="uxp.video.reference_video_placeholder">
+                <button type="button" class="oc-btn oc-btn-secondary" id="browseColorRef" data-i18n="common.browse">Browse</button>
+              </div>
+            </div>
+            <div class="oc-slider-row">
+              <label class="oc-label" for="colorMatchStrength" data-i18n="uxp.video.match_strength">Match Strength</label>
+              <input type="range" class="oc-slider" id="colorMatchStrength" min="0" max="100" value="80" step="1">
+              <span class="oc-slider-val" id="colorMatchStrengthVal">80%</span>
+            </div>
+            <button type="button" class="oc-btn oc-btn-primary oc-btn-full" id="runColorMatchBtn" data-i18n="uxp.video.match_color">Match Color</button>
+          </div>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.video.auto_zoom">Auto Zoom</div>
+        <div class="oc-card">
+          <div class="oc-card-header collapsible" data-target="autoZoomBody">
+            <span data-i18n="uxp.video.ai_auto_reframe_zoom">AI Auto-Reframe / Zoom</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708.708l-6 6a.5.5 0 01-.708 0l-6-6a.5.5 0 010-.708z"/></svg>
+          </div>
+          <div class="oc-card-body" id="autoZoomBody">
+            <div class="oc-slider-row">
+              <label class="oc-label" for="zoomFactor" data-i18n="uxp.video.max_zoom">Max Zoom</label>
+              <input type="range" class="oc-slider" id="zoomFactor" min="1.0" max="2.5" value="1.4" step="0.05">
+              <span class="oc-slider-val" id="zoomFactorVal">1.40x</span>
+            </div>
+            <button type="button" class="oc-btn oc-btn-primary oc-btn-full" id="runAutoZoomBtn" data-i18n="uxp.video.apply_auto_zoom">Apply Auto Zoom</button>
+          </div>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.video.multicam_switch">Multicam Switch</div>
+        <div class="oc-card">
+          <div class="oc-card-header collapsible" data-target="multicamBody">
+            <span data-i18n="uxp.video.multicam_cut_detection">Multicam Cut Detection</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708.708l-6 6a.5.5 0 01-.708 0l-6-6a.5.5 0 010-.708z"/></svg>
+          </div>
+          <div class="oc-card-body" id="multicamBody">
+            <div class="oc-field-row">
+              <label class="oc-label" for="cam2Path" data-i18n="uxp.video.camera_2">Camera 2</label>
+              <div class="oc-input-group">
+                <input type="text" class="oc-input" id="cam2Path" placeholder="Second camera file…" data-i18n-placeholder="uxp.video.second_camera_placeholder">
+                <button type="button" class="oc-btn oc-btn-secondary" id="browseCam2" data-i18n="common.browse">Browse</button>
+              </div>
+            </div>
+            <div class="oc-field-row">
+              <label class="oc-label" for="multicamStrategy" data-i18n="uxp.video.cut_strategy">Cut Strategy</label>
+              <select class="oc-select" id="multicamStrategy">
+                <option value="speaker" selected data-i18n="uxp.video.strategy_speaker">Speaker Boundaries (pyannote)</option>
+                <option value="activity" data-i18n="uxp.video.strategy_activity">Activity-Based</option>
+                <option value="scene" data-i18n="uxp.video.strategy_scene">Scene Detection</option>
+                <option value="audio" data-i18n="uxp.video.strategy_audio">Audio Energy</option>
+              </select>
+            </div>
+            <button type="button" class="oc-btn oc-btn-primary oc-btn-full" id="runMulticamBtn" data-i18n="uxp.video.generate_multicam_cuts">Generate Multicam Cuts</button>
+          </div>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.video.multimodal_diarization">Multimodal Diarization</div>
+        <div class="oc-card">
+          <div class="oc-card-header collapsible" data-target="mmDiarizeBody">
+            <span data-i18n="uxp.video.audio_face_speaker_mapping">Audio + Face Speaker Mapping</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708.708l-6 6a.5.5 0 01-.708 0l-6-6a.5.5 0 010-.708z"/></svg>
+          </div>
+          <div class="oc-card-body" id="mmDiarizeBody">
+            <div class="oc-field-row">
+              <label class="oc-label" for="mmDiarizeNumSpeakersUxp" data-i18n="uxp.video.speakers">Speakers</label>
+              <select id="mmDiarizeNumSpeakersUxp" class="oc-select" aria-label="Number of speakers" data-i18n-aria-label="uxp.video.number_of_speakers">
+                <option value="" selected data-i18n="uxp.video.auto">Auto</option>
+                <option value="2">2</option>
+                <option value="3">3</option>
+                <option value="4">4</option>
+                <option value="5">5</option>
+              </select>
+            </div>
+            <button type="button" class="oc-btn oc-btn-primary oc-btn-full" id="runMmDiarizeBtnUxp" data-i18n="uxp.video.run_multimodal_diarize">Run Multimodal Diarize</button>
+          </div>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.video.ai_broll_generation">AI B-Roll Generation</div>
+        <div class="oc-card">
+          <div class="oc-card-header collapsible" data-target="brollGenBody">
+            <span data-i18n="uxp.video.generate_broll_from_text">Generate B-Roll from Text</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708.708l-6 6a.5.5 0 01-.708 0l-6-6a.5.5 0 010-.708z"/></svg>
+          </div>
+          <div class="oc-card-body" id="brollGenBody">
+            <div class="oc-field-row">
+              <label class="oc-label" for="brollGenPromptUxp" data-i18n="uxp.video.description">Description</label>
+              <textarea id="brollGenPromptUxp" class="oc-textarea" rows="2" placeholder="e.g. aerial cityscape at sunset" aria-label="B-roll description" data-i18n-placeholder="uxp.video.broll_description_placeholder" data-i18n-aria-label="uxp.video.broll_description"></textarea>
+            </div>
+            <div class="oc-field-row">
+              <label class="oc-label" for="brollGenBackendUxp" data-i18n="uxp.video.backend">Backend</label>
+              <select id="brollGenBackendUxp" class="oc-select" aria-label="Video generation backend" data-i18n-aria-label="uxp.video.generation_backend">
+                <option value="auto" selected data-i18n="uxp.video.auto">Auto</option>
+                <option value="cogvideox">CogVideoX</option>
+                <option value="wan">Wan 2.2</option>
+                <option value="hunyuan">HunyuanVideo</option>
+                <option value="svd">SVD</option>
+              </select>
+            </div>
+            <div class="oc-field-row">
+              <label class="oc-label" for="brollGenSeedUxp" data-i18n="uxp.video.seed">Seed</label>
+              <input type="number" id="brollGenSeedUxp" class="oc-input" placeholder="Random" min="0" aria-label="Random seed" data-i18n-placeholder="uxp.video.random_placeholder" data-i18n-aria-label="uxp.video.random_seed">
+            </div>
+            <button type="button" class="oc-btn oc-btn-primary oc-btn-full" id="runBrollGenBtnUxp" data-i18n="uxp.video.generate_broll">Generate B-Roll</button>
+          </div>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.video.depth_effects">Depth Effects</div>
+        <div class="oc-card">
+          <div class="oc-card-header collapsible" data-target="depthBody">
+            <span data-i18n="uxp.video.depth_map_bokeh_parallax">Depth Map / Bokeh / Parallax</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708.708l-6 6a.5.5 0 01-.708 0l-6-6a.5.5 0 010-.708z"/></svg>
+          </div>
+          <div class="oc-card-body" id="depthBody">
+            <div class="oc-field-row">
+              <label class="oc-label" for="depthEffectUxp" data-i18n="uxp.video.effect">Effect</label>
+              <select id="depthEffectUxp" class="oc-select">
+                <option value="depth_map" selected data-i18n="uxp.video.depth_map">Depth Map</option>
+                <option value="bokeh" data-i18n="uxp.video.bokeh_depth_of_field">Bokeh (Depth-of-Field)</option>
+                <option value="parallax" data-i18n="uxp.video.parallax_zoom">Parallax Zoom</option>
+              </select>
+            </div>
+            <div class="oc-field-row">
+              <label class="oc-label" for="depthModelSizeUxp" data-i18n="uxp.video.model">Model</label>
+              <select id="depthModelSizeUxp" class="oc-select">
+                <option value="small" selected data-i18n="uxp.video.model_small_fast">Small (fast)</option>
+                <option value="base" data-i18n="uxp.video.model_base">Base</option>
+                <option value="large" data-i18n="uxp.video.model_large_best">Large (best)</option>
+              </select>
+            </div>
+            <button type="button" class="oc-btn oc-btn-primary oc-btn-full" id="runDepthBtnUxp" data-i18n="uxp.video.apply_depth_effect">Apply Depth Effect</button>
+            <div class="oc-hint oc-hidden" id="depthHintUxp"><span data-i18n="uxp.video.depth_not_installed">Depth Anything V2 not installed.</span> <button type="button" class="oc-btn oc-btn-sm" id="installDepthBtnUxp" data-i18n="uxp.video.install">Install</button></div>
+          </div>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.video.emotion_highlights">Emotion Highlights</div>
+        <div class="oc-card">
+          <div class="oc-card-header collapsible" data-target="emotionBody">
+            <span data-i18n="uxp.video.emotion_based_highlight_detection">Emotion-Based Highlight Detection</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708.708l-6 6a.5.5 0 01-.708 0l-6-6a.5.5 0 010-.708z"/></svg>
+          </div>
+          <div class="oc-card-body" id="emotionBody">
+            <p class="oc-hint" data-i18n="uxp.video.emotion_hint">Detect emotional peaks in video (happy, surprise, etc.) for automatic highlight extraction.</p>
+            <button type="button" class="oc-btn oc-btn-primary oc-btn-full" id="runEmotionBtnUxp" data-i18n="uxp.video.detect_emotion_peaks">Detect Emotion Peaks</button>
+          </div>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.video.broll_analysis">B-Roll Analysis</div>
+        <div class="oc-card">
+          <div class="oc-card-header collapsible" data-target="brollPlanBody">
+            <span data-i18n="uxp.video.find_broll_insertion_points">Find B-Roll Insertion Points</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708.708l-6 6a.5.5 0 01-.708 0l-6-6a.5.5 0 010-.708z"/></svg>
+          </div>
+          <div class="oc-card-body" id="brollPlanBody">
+            <p class="oc-hint" data-i18n="uxp.video.broll_analysis_hint">Analyze transcript to find natural B-roll insertion windows and keywords.</p>
+            <button type="button" class="oc-btn oc-btn-primary oc-btn-full" id="runBrollPlanBtnUxp" data-i18n="uxp.video.analyze_broll_points">Analyze B-Roll Points</button>
+          </div>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.video.chat_editor">Chat Editor</div>
+        <div class="oc-card">
+          <div class="oc-card-header collapsible" data-target="chatEditorBody">
+            <span data-i18n="uxp.video.editing_assistant">AI Editing Assistant</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708.708l-6 6a.5.5 0 01-.708 0l-6-6a.5.5 0 010-.708z"/></svg>
+          </div>
+          <div class="oc-card-body" id="chatEditorBody">
+            <div class="oc-chat-area oc-chat-history" id="chatHistory">
+              <p class="oc-hint" data-i18n="uxp.video.chat_hint">Chat with OpenCut's AI to edit your video using natural language.</p>
+            </div>
+            <div class="oc-field-row">
+              <input type="text" id="chatInputUxp" class="oc-input" placeholder='e.g. "Remove all silences and normalize audio"' aria-label="Chat message" data-i18n-placeholder="uxp.video.chat_placeholder" data-i18n-aria-label="uxp.video.chat_message">
+              <button type="button" class="oc-btn oc-btn-primary" id="chatSendBtnUxp" data-i18n="uxp.video.send">Send</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.video.ai_upscale">AI Upscale</div>
+        <div class="oc-card">
+          <div class="oc-card-header collapsible" data-target="upscaleBody">
+            <span data-i18n="uxp.video.realesrgan_video_upscale">Real-ESRGAN Video Upscale</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708.708l-6 6a.5.5 0 01-.708 0l-6-6a.5.5 0 010-.708z"/></svg>
+          </div>
+          <div class="oc-card-body" id="upscaleBody">
+            <div class="oc-field-row">
+              <label class="oc-label" for="upscaleScaleUxp" data-i18n="uxp.video.scale_factor">Scale Factor</label>
+              <select class="oc-select" id="upscaleScaleUxp">
+                <option value="2" selected data-i18n="uxp.video.scale_2x">2x</option>
+                <option value="3" data-i18n="uxp.video.scale_3x">3x</option>
+                <option value="4" data-i18n="uxp.video.scale_4x">4x</option>
+              </select>
+            </div>
+            <div class="oc-field-row">
+              <label class="oc-label" for="upscaleModelUxp" data-i18n="uxp.video.model">Model</label>
+              <select class="oc-select" id="upscaleModelUxp">
+                <option value="realesrgan-x4plus" selected data-i18n="uxp.video.realesrgan_x4plus">Real-ESRGAN x4plus</option>
+                <option value="realesrgan-x4plus-anime" data-i18n="uxp.video.anime">Anime</option>
+                <option value="realesrgan-x2plus" data-i18n="uxp.video.realesrgan_x2plus">Real-ESRGAN x2plus</option>
+              </select>
+            </div>
+            <button type="button" class="oc-btn oc-btn-primary oc-btn-full" id="runUpscaleBtnUxp" data-i18n="uxp.video.upscale_video">Upscale Video</button>
+          </div>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.video.scene_detection">Scene Detection</div>
+        <div class="oc-card">
+          <div class="oc-card-header collapsible" data-target="sceneDetectBody">
+            <span data-i18n="uxp.video.detect_scene_boundaries">Detect Scene Boundaries</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708.708l-6 6a.5.5 0 01-.708 0l-6-6a.5.5 0 010-.708z"/></svg>
+          </div>
+          <div class="oc-card-body" id="sceneDetectBody">
+            <div class="oc-field-row">
+              <label class="oc-label" for="sceneMethodUxp" data-i18n="uxp.video.method">Method</label>
+              <select class="oc-select" id="sceneMethodUxp">
+                <option value="ffmpeg" selected data-i18n="uxp.video.ffmpeg_threshold">FFmpeg Threshold</option>
+                <option value="ml" data-i18n="uxp.video.transnetv2_ml">TransNetV2 (ML)</option>
+                <option value="pyscenedetect" data-i18n="uxp.video.pyscenedetect">PySceneDetect</option>
+              </select>
+            </div>
+            <div class="oc-slider-row">
+              <label class="oc-label" for="sceneThresholdUxp" data-i18n="uxp.video.sensitivity">Sensitivity</label>
+              <input type="range" class="oc-slider" id="sceneThresholdUxp" min="0.1" max="0.9" value="0.3" step="0.05">
+              <span class="oc-slider-val" id="sceneThresholdValUxp">0.30</span>
+            </div>
+            <button type="button" class="oc-btn oc-btn-primary oc-btn-full" id="runSceneDetectBtnUxp" data-i18n="uxp.video.detect_scenes">Detect Scenes</button>
+          </div>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.video.style_transfer">Style Transfer</div>
+        <div class="oc-card">
+          <div class="oc-card-header collapsible" data-target="styleTransferBody">
+            <span data-i18n="uxp.video.ai_style_transfer">AI Style Transfer</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708.708l-6 6a.5.5 0 01-.708 0l-6-6a.5.5 0 010-.708z"/></svg>
+          </div>
+          <div class="oc-card-body" id="styleTransferBody">
+            <div class="oc-field-row">
+              <label class="oc-label" for="styleNameUxp" data-i18n="uxp.video.style">Style</label>
+              <select class="oc-select" id="styleNameUxp">
+                <option value="candy" selected data-i18n="uxp.video.style_candy">Candy</option>
+                <option value="mosaic" data-i18n="uxp.video.style_mosaic">Mosaic</option>
+                <option value="starry_night" data-i18n="uxp.video.style_starry_night">Starry Night</option>
+                <option value="la_muse" data-i18n="uxp.video.style_la_muse">La Muse</option>
+                <option value="udnie" data-i18n="uxp.video.style_udnie">Udnie</option>
+                <option value="rain_princess" data-i18n="uxp.video.style_rain_princess">Rain Princess</option>
+                <option value="the_scream" data-i18n="uxp.video.style_the_scream">The Scream</option>
+                <option value="pointilism" data-i18n="uxp.video.style_pointilism">Pointillism</option>
+              </select>
+            </div>
+            <div class="oc-slider-row">
+              <label class="oc-label" for="styleIntensityUxp" data-i18n="uxp.video.intensity">Intensity</label>
+              <input type="range" class="oc-slider" id="styleIntensityUxp" min="0" max="100" value="100" step="5">
+              <span class="oc-slider-val" id="styleIntensityValUxp">100%</span>
+            </div>
+            <button type="button" class="oc-btn oc-btn-primary oc-btn-full" id="runStyleTransferBtnUxp" data-i18n="uxp.video.apply_style">Apply Style</button>
+          </div>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.video.shorts_pipeline">Magic Clips</div>
+        <div class="oc-card">
+          <div class="oc-card-header collapsible" data-target="shortsPipelineBody">
+            <span data-i18n="uxp.video.one_click_short_form_clips">One-Click Short-Form Clips</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708.708l-6 6a.5.5 0 01-.708 0l-6-6a.5.5 0 010-.708z"/></svg>
+          </div>
+          <div class="oc-card-body" id="shortsPipelineBody">
+            <p class="oc-hint" data-i18n="uxp.video.shorts_pipeline_hint">Transcribe, detect highlights, face-reframe, burn captions, and export short-form clips in one step.</p>
+            <div class="oc-field-row">
+              <label class="oc-label" for="shortsPlatformUxp" data-i18n="uxp.video.platform">Platform</label>
+              <select class="oc-input" id="shortsPlatformUxp">
+                <option value="tiktok" selected data-i18n="uxp.video.tiktok_1080x1920">TikTok (1080x1920)</option>
+                <option value="youtube_shorts" data-i18n="uxp.video.youtube_shorts_1080x1920">YouTube Shorts (1080x1920)</option>
+                <option value="instagram_reels" data-i18n="uxp.video.instagram_reels_1080x1920">Instagram Reels (1080x1920)</option>
+                <option value="instagram_feed" data-i18n="uxp.video.square_feed_1080x1080">Square Feed (1080x1080)</option>
+              </select>
+            </div>
+            <div class="oc-field-row">
+              <label class="oc-label" for="shortsMaxUxp" data-i18n="uxp.video.max_clips">Max Clips</label>
+              <input type="number" class="oc-input" id="shortsMaxUxp" value="5" min="1" max="20">
+            </div>
+            <div class="oc-field-row">
+              <label class="oc-label" for="shortsCaptionStyleUxp" data-i18n="uxp.video.caption_style">Caption Style</label>
+              <select class="oc-select" id="shortsCaptionStyleUxp">
+                <option value="default" selected data-i18n="uxp.video.caption_style_default">Default</option>
+                <option value="bold_yellow" data-i18n="uxp.video.caption_style_bold_yellow">Bold Yellow</option>
+                <option value="boxed_dark" data-i18n="uxp.video.caption_style_boxed_dark">Boxed Dark</option>
+                <option value="neon_cyan" data-i18n="uxp.video.caption_style_neon_cyan">Neon Cyan</option>
+                <option value="cinematic_serif" data-i18n="uxp.video.caption_style_cinematic_serif">Cinematic Serif</option>
+                <option value="top_center" data-i18n="uxp.video.caption_style_top_center">Top Center</option>
+              </select>
+            </div>
+            <div class="oc-field-row">
+              <label class="oc-label" for="shortsMinUxp" data-i18n="uxp.video.clip_duration">Clip Duration</label>
+              <div class="oc-inline-inputs">
+                <input type="number" class="oc-input" id="shortsMinUxp" value="15" min="5" max="300" step="5" aria-label="Minimum short duration" data-i18n-aria-label="uxp.video.minimum_short_duration">
+                <input type="number" class="oc-input" id="shortsMaxDurUxp" value="60" min="10" max="600" step="5" aria-label="Maximum short duration" data-i18n-aria-label="uxp.video.maximum_short_duration">
+              </div>
+            </div>
+            <div class="oc-check-row">
+              <input type="checkbox" id="shortsFaceTrackUxp" checked>
+              <label for="shortsFaceTrackUxp" data-i18n="uxp.video.face_tracking_reframe">Face tracking reframe</label>
+            </div>
+            <div class="oc-check-row">
+              <input type="checkbox" id="shortsCaptionsUxp" checked>
+              <label for="shortsCaptionsUxp" data-i18n="uxp.video.burn_in_captions">Burn-In Captions</label>
+            </div>
+            <button type="button" class="oc-btn oc-btn-secondary oc-btn-full" id="previewShortsPlanBtnUxp" data-i18n="uxp.video.preview_plan">Preview Plan</button>
+            <button type="button" class="oc-btn oc-btn-primary oc-btn-full" id="runShortsPipelineBtnUxp" data-i18n="uxp.video.generate_shorts">Generate Shorts</button>
+            <button type="button" class="oc-btn oc-btn-secondary oc-btn-full" id="renderShortsApprovedBtnUxp" disabled data-i18n="uxp.video.render_approved">Render Approved</button>
+            <div class="oc-result-area hidden" id="shortsReviewBoardUxp" data-state="idle" aria-live="polite">
+              <div class="oc-result-header" id="shortsReviewSummaryUxp"></div>
+              <div class="oc-result-list" id="shortsReviewListUxp"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.video.social_media_upload">Social Media Upload</div>
+        <div class="oc-card">
+          <div class="oc-card-header collapsible" data-target="socialBody">
+            <span data-i18n="uxp.video.post_to_social_media">Post to Social Media</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708.708l-6 6a.5.5 0 01-.708 0l-6-6a.5.5 0 010-.708z"/></svg>
+          </div>
+          <div class="oc-card-body" id="socialBody">
+            <div class="oc-field-row">
+              <label class="oc-label" for="socialPlatformUxp" data-i18n="uxp.video.platform">Platform</label>
+              <select id="socialPlatformUxp" class="oc-select" aria-label="Social media platform" data-i18n-aria-label="uxp.video.social_media_platform">
+                <option value="youtube" selected data-i18n="uxp.video.youtube">YouTube</option>
+                <option value="tiktok" data-i18n="uxp.video.tiktok">TikTok</option>
+                <option value="instagram" data-i18n="uxp.video.instagram_reels">Instagram Reels</option>
+              </select>
+            </div>
+            <div class="oc-field-row">
+              <label class="oc-label" for="socialTitleUxp" data-i18n="uxp.video.title">Title</label>
+              <input type="text" id="socialTitleUxp" class="oc-input" maxlength="100" placeholder="Video title" aria-label="Video title" data-i18n-placeholder="uxp.video.video_title_placeholder" data-i18n-aria-label="uxp.video.video_title">
+            </div>
+            <div class="oc-field-row">
+              <label class="oc-label" for="socialDescriptionUxp" data-i18n="uxp.video.description">Description</label>
+              <textarea id="socialDescriptionUxp" class="oc-textarea" rows="2" maxlength="2200" placeholder="Caption" aria-label="Description" data-i18n-placeholder="uxp.video.caption_placeholder" data-i18n-aria-label="uxp.video.description"></textarea>
+            </div>
+            <div class="oc-field-row">
+              <label class="oc-label" for="socialPrivacyUxp" data-i18n="uxp.video.privacy">Privacy</label>
+              <select id="socialPrivacyUxp" class="oc-select" aria-label="Privacy level" data-i18n-aria-label="uxp.video.privacy_level">
+                <option value="private" selected data-i18n="uxp.video.privacy_private">Private</option>
+                <option value="unlisted" data-i18n="uxp.video.privacy_unlisted">Unlisted</option>
+                <option value="public" data-i18n="uxp.video.privacy_public">Public</option>
+              </select>
+            </div>
+            <button type="button" class="oc-btn oc-btn-secondary oc-btn-full" id="socialConnectBtnUxp" data-i18n="uxp.video.connect_account">Connect Account</button>
+            <button type="button" class="oc-btn oc-btn-primary oc-btn-full" id="socialUploadBtnUxp" data-i18n="uxp.video.upload">Upload</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== TIMELINE TAB ==================== -->
+      <div class="oc-tab-panel" id="tab-timeline" role="tabpanel" aria-labelledby="tabBtnTimeline">
+
+        <div class="oc-uxp-notice" id="uxpTimelineNotice">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1a7 7 0 100 14A7 7 0 008 1zm0 3a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 018 4zm0 8a1 1 0 110-2 1 1 0 010 2z"/></svg>
+          <span data-i18n="uxp.timeline.preview_notice">Direct UXP sequence write-back is still in preview. Some timeline tasks hand off to the CEP panel for dependable execution.</span>
+        </div>
+        <div class="oc-inline-summary-grid oc-inline-summary-grid--timeline" aria-label="Timeline workspace readiness" data-i18n-aria-label="uxp.timeline.workspace_readiness">
+          <div class="oc-inline-stat">
+            <span class="oc-label" data-i18n="uxp.timeline.bridge">Bridge</span>
+            <span class="oc-status-pill" id="timelineBridgePill" data-state="working" data-i18n="uxp.timeline.checking_bridge">Checking bridge</span>
+          </div>
+          <div class="oc-inline-stat">
+            <span class="oc-label" data-i18n="uxp.timeline.cuts_ready">Cuts Ready</span>
+            <span class="oc-inline-value" id="timelineCutsValue" data-i18n="uxp.timeline.no_cuts_ready">No cuts ready</span>
+          </div>
+          <div class="oc-inline-stat">
+            <span class="oc-label" data-i18n="uxp.timeline.markers_ready">Markers Ready</span>
+            <span class="oc-inline-value" id="timelineMarkersValue" data-i18n="uxp.timeline.no_markers_ready">No markers ready</span>
+          </div>
+          <div class="oc-inline-stat">
+            <span class="oc-label" data-i18n="uxp.timeline.last_action">Last Action</span>
+            <span class="oc-inline-value" id="timelineLastActionValue" data-i18n="uxp.timeline.no_write_back_activity">No write-back activity</span>
+          </div>
+        </div>
+        <div class="oc-status-line" id="timelineStatusLine" role="status" aria-live="polite" data-i18n="uxp.timeline.status_line">Generate cuts or beat markers first, then return here to write back, export OTIO, or validate captions for sequence import.</div>
+
+        <div class="oc-section-title" data-i18n="uxp.timeline.sequence_write_back">Sequence Write-Back</div>
+        <div class="oc-card">
+          <div class="oc-card-header collapsible" data-target="applyCutsBody">
+            <span data-i18n="uxp.timeline.apply_cuts_to_sequence">Apply Cuts to Sequence</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708.708l-6 6a.5.5 0 01-.708 0l-6-6a.5.5 0 010-.708z"/></svg>
+          </div>
+          <div class="oc-card-body" id="applyCutsBody">
+            <p class="oc-hint" data-i18n="uxp.timeline.apply_cuts_hint">Send the latest cut pass to the active Premiere sequence.</p>
+            <div class="oc-inline-summary-grid oc-inline-summary-grid--timeline-card" aria-label="Apply cuts readiness" data-i18n-aria-label="uxp.timeline.apply_cuts_readiness">
+              <div class="oc-inline-stat">
+                <span class="oc-label" data-i18n="uxp.timeline.latest_cuts">Latest Cuts</span>
+                <span class="oc-inline-value" id="timelineCutsSourceValue" data-i18n="uxp.timeline.run_cut_pass_first">Run a cut pass first</span>
+              </div>
+              <div class="oc-inline-stat">
+                <span class="oc-label" data-i18n="uxp.timeline.sequence_bridge">Sequence Bridge</span>
+                <span class="oc-inline-value" id="timelineSequenceValue" data-i18n="uxp.timeline.checking_uxp_bridge">Checking UXP bridge</span>
+              </div>
+            </div>
+            <div class="oc-field-row">
+              <label class="oc-label" for="timelineInterchangeThreshold" data-i18n="uxp.timeline.interchange_threshold">Interchange threshold (cuts)</label>
+              <input type="number" class="oc-input oc-input-sm" id="timelineInterchangeThreshold" value="100" min="1" max="10000" step="1" aria-label="Interchange threshold in cuts" data-i18n-aria-label="uxp.timeline.interchange_threshold_aria">
+            </div>
+            <p class="oc-hint" data-i18n="uxp.timeline.interchange_threshold_hint">Above this count, import one linked FCP XML timeline instead of ripple-deleting each cut.</p>
+            <button type="button" class="oc-btn oc-btn-primary oc-btn-full" id="applyTimelineCutsBtn" data-i18n="uxp.timeline.apply_latest_cuts">Apply Latest Cuts</button>
+          </div>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.timeline.export_otio_universal">Export as OTIO (Universal)</div>
+        <div class="oc-card">
+          <div class="oc-card-header collapsible" data-target="otioExportBody">
+            <span data-i18n="uxp.timeline.opentimelineio_export">OpenTimelineIO Export</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708.708l-6 6a.5.5 0 01-.708 0l-6-6a.5.5 0 010-.708z"/></svg>
+          </div>
+          <div class="oc-card-body" id="otioExportBody">
+            <p class="oc-hint" data-i18n="uxp.timeline.otio_export_hint">Export cuts or markers as .otio for DaVinci Resolve, Final Cut Pro, Avid, or any OTIO-compatible editor.</p>
+            <div class="oc-field-row">
+              <label class="oc-label" for="otioExportMode" data-i18n="uxp.timeline.mode">Mode</label>
+              <select class="oc-select" id="otioExportMode">
+                <option value="cuts" selected data-i18n="uxp.timeline.mode_cuts">Cuts (remove regions)</option>
+                <option value="markers" data-i18n="uxp.timeline.mode_markers">Markers (beats/chapters)</option>
+              </select>
+            </div>
+            <div class="oc-field-row">
+              <label class="oc-label" for="otioAdapter" data-i18n="uxp.timeline.otio_adapter">Adapter</label>
+              <select class="oc-select" id="otioAdapter" aria-label="OTIO adapter" data-i18n-aria-label="uxp.timeline.otio_adapter_aria">
+                <option value="otio_json" selected data-i18n="uxp.timeline.otio_adapter_native">Native OTIO JSON (.otio)</option>
+              </select>
+            </div>
+            <div class="oc-field-row">
+              <label class="oc-label" for="otioSchemaTarget" data-i18n="uxp.timeline.otio_schema_target">Compatibility</label>
+              <select class="oc-select" id="otioSchemaTarget" aria-label="OTIO schema compatibility target" data-i18n-aria-label="uxp.timeline.otio_schema_target_aria">
+                <option value="current" selected data-i18n="uxp.timeline.otio_schema_current">Current schema</option>
+              </select>
+            </div>
+            <label class="oc-checkbox-row" for="otioAcceptLossy">
+              <input type="checkbox" id="otioAcceptLossy">
+              <span data-i18n="uxp.timeline.otio_accept_lossy">Allow a downgrade after reviewing reported data loss</span>
+            </label>
+            <button type="button" class="oc-btn oc-btn-secondary oc-btn-full" id="exportOtioBtn" aria-label="Export OpenTimelineIO file" data-i18n="uxp.timeline.export_otio_file" data-i18n-aria-label="uxp.timeline.export_opentimelineio_file">Export .otio File</button>
+          </div>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.timeline.beat_markers_to_sequence">Beat Markers to Sequence</div>
+        <div class="oc-card">
+          <div class="oc-card-header collapsible" data-target="beatSeqBody">
+            <span data-i18n="uxp.timeline.add_beat_markers">Add Beat Markers</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708.708l-6 6a.5.5 0 01-.708 0l-6-6a.5.5 0 010-.708z"/></svg>
+          </div>
+          <div class="oc-card-body" id="beatSeqBody">
+            <p class="oc-hint" data-i18n="uxp.timeline.beat_markers_hint">Adds beat markers from the last Beat Detection run to the active sequence timeline.</p>
+            <div class="oc-field-row">
+              <label class="oc-label" for="beatMarkerColor" data-i18n="uxp.timeline.marker_color">Marker Color</label>
+              <select class="oc-select" id="beatMarkerColor">
+                <option value="green" data-i18n="uxp.timeline.color_green">Green</option>
+                <option value="red" data-i18n="uxp.timeline.color_red">Red</option>
+                <option value="blue" data-i18n="uxp.timeline.color_blue">Blue</option>
+                <option value="yellow" data-i18n="uxp.timeline.color_yellow">Yellow</option>
+                <option value="purple" data-i18n="uxp.timeline.color_purple">Purple</option>
+              </select>
+            </div>
+            <button type="button" class="oc-btn oc-btn-primary oc-btn-full" id="addBeatMarkersBtn" data-i18n="uxp.timeline.add_beat_markers">Add Beat Markers</button>
+          </div>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.timeline.batch_export_from_markers">Batch Export from Markers</div>
+        <div class="oc-card">
+          <div class="oc-card-header collapsible" data-target="batchExportBody">
+            <span data-i18n="uxp.timeline.marker_based_export">Marker-Based Export</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708.708l-6 6a.5.5 0 01-.708 0l-6-6a.5.5 0 010-.708z"/></svg>
+          </div>
+          <div class="oc-card-body" id="batchExportBody">
+            <p class="oc-hint" data-i18n="uxp.timeline.batch_export_hint">Export beat-marked or cut-defined segments from the current clip once the output folder is set.</p>
+            <div class="oc-inline-summary-grid oc-inline-summary-grid--timeline-card" aria-label="Batch export readiness" data-i18n-aria-label="uxp.timeline.batch_export_readiness">
+              <div class="oc-inline-stat">
+                <span class="oc-label" data-i18n="uxp.timeline.source_windows">Source Windows</span>
+                <span class="oc-inline-value" id="timelineExportSourceValue" data-i18n="uxp.timeline.awaiting_cuts_or_markers">Awaiting cuts or markers</span>
+              </div>
+              <div class="oc-inline-stat">
+                <span class="oc-label" data-i18n="uxp.timeline.destination">Destination</span>
+                <span class="oc-inline-value" id="timelineExportOutputValue" data-i18n="uxp.timeline.choose_output_folder">Choose output folder</span>
+              </div>
+            </div>
+            <div class="oc-field-row">
+              <label class="oc-label" for="exportPreset" data-i18n="uxp.timeline.export_preset">Export Preset</label>
+              <select class="oc-select" id="exportPreset">
+                <option value="youtube" data-i18n="uxp.timeline.preset_youtube_h264">YouTube H.264</option>
+                <option value="tiktok" data-i18n="uxp.timeline.preset_tiktok">TikTok</option>
+                <option value="instagram" data-i18n="uxp.timeline.preset_instagram">Instagram</option>
+                <option value="prores" data-i18n="uxp.timeline.preset_prores_422">ProRes 422</option>
+                <option value="h265" data-i18n="uxp.timeline.preset_h265_hq">H.265 HQ</option>
+              </select>
+            </div>
+            <div class="oc-field-row">
+              <label class="oc-label" for="exportDir" data-i18n="uxp.timeline.output_folder">Output Folder</label>
+              <div class="oc-input-group">
+                <input type="text" class="oc-input" id="exportDir" placeholder="Choose an export destination…" data-i18n-placeholder="uxp.timeline.export_destination_placeholder">
+                <button type="button" class="oc-btn oc-btn-secondary" id="browseExportDir" data-i18n="common.browse">Browse</button>
+              </div>
+            </div>
+            <button type="button" class="oc-btn oc-btn-primary oc-btn-full" id="runBatchExportBtn" data-i18n="uxp.timeline.batch_export">Batch Export</button>
+            <button type="button" class="oc-btn oc-btn-secondary oc-btn-full" id="runExportPresetBtn" data-i18n="uxp.timeline.export_single_preset">Export Current Clip with Preset</button>
+          </div>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.timeline.batch_rename">Batch Rename</div>
+        <div class="oc-card">
+          <div class="oc-card-header collapsible" data-target="batchRenameBody">
+            <span data-i18n="uxp.timeline.rename_project_items">Rename Project Items</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708.708l-6 6a.5.5 0 01-.708 0l-6-6a.5.5 0 010-.708z"/></svg>
+          </div>
+          <div class="oc-card-body" id="batchRenameBody">
+            <p class="oc-hint" data-i18n="uxp.timeline.batch_rename_hint">Preview and apply project-wide names through the available Premiere host bridge.</p>
+            <div class="oc-field-row">
+              <label class="oc-label" for="renamePattern" data-i18n="uxp.timeline.pattern">Pattern</label>
+              <input type="text" class="oc-input" id="renamePattern" placeholder="{name}_{index:03d}" value="{name}_{index:03d}" data-i18n-placeholder="uxp.timeline.rename_pattern_placeholder">
+            </div>
+            <div class="oc-field-row">
+              <label class="oc-label" for="renameScope" data-i18n="uxp.timeline.scope">Scope</label>
+              <select class="oc-select" id="renameScope">
+                <option value="selected" data-i18n="uxp.timeline.scope_selected_items">Selected Items</option>
+                <option value="bin" data-i18n="uxp.timeline.scope_current_bin">Current Bin</option>
+                <option value="project" data-i18n="uxp.timeline.scope_whole_project">Whole Project</option>
+              </select>
+            </div>
+            <div class="oc-inline-summary-grid oc-inline-summary-grid--timeline-card" aria-label="Batch rename availability" data-i18n-aria-label="uxp.timeline.batch_rename_availability">
+              <div class="oc-inline-stat">
+                <span class="oc-label" data-i18n="uxp.timeline.availability">Availability</span>
+                <span class="oc-status-pill" id="timelineRenamePill" data-state="idle" data-i18n="uxp.timeline.checking_host">Checking host</span>
+              </div>
+              <div class="oc-inline-stat">
+                <span class="oc-label" data-i18n="uxp.timeline.pattern">Pattern</span>
+                <span class="oc-inline-value" id="timelineRenamePatternValue">{name}_{index:03d}</span>
+              </div>
+            </div>
+            <button type="button" class="oc-btn oc-btn-secondary oc-btn-full" id="runBatchRenameBtn" disabled data-i18n="uxp.timeline.run_batch_rename">Run batch rename</button>
+          </div>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.timeline.smart_bins">Smart Bins</div>
+        <div class="oc-card">
+          <div class="oc-card-header collapsible" data-target="smartBinsBody">
+            <span data-i18n="uxp.timeline.auto_organize_bins">Auto-Organize Bins</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708.708l-6 6a.5.5 0 01-.708 0l-6-6a.5.5 0 010-.708z"/></svg>
+          </div>
+          <div class="oc-card-body" id="smartBinsBody">
+            <div class="oc-field-row">
+              <label class="oc-label" for="binStrategy" data-i18n="uxp.timeline.organize_by">Organize By</label>
+              <select class="oc-select" id="binStrategy">
+                <option value="type" data-i18n="uxp.timeline.organize_file_type">File Type</option>
+                <option value="date" data-i18n="uxp.timeline.organize_date">Date</option>
+                <option value="camera" data-i18n="uxp.timeline.organize_camera_source">Camera/Source</option>
+                <option value="scene" data-i18n="uxp.timeline.organize_scene_ai">Scene (AI)</option>
+                <option value="speaker" data-i18n="uxp.timeline.organize_speaker">Speaker</option>
+              </select>
+            </div>
+            <p class="oc-hint" data-i18n="uxp.timeline.smart_bins_hint">Organize project items through the available Premiere host bridge.</p>
+            <div class="oc-inline-summary-grid oc-inline-summary-grid--timeline-card" aria-label="Smart bins availability" data-i18n-aria-label="uxp.timeline.smart_bins_availability">
+              <div class="oc-inline-stat">
+                <span class="oc-label" data-i18n="uxp.timeline.availability">Availability</span>
+                <span class="oc-status-pill" id="timelineSmartBinsPill" data-state="idle" data-i18n="uxp.timeline.checking_host">Checking host</span>
+              </div>
+              <div class="oc-inline-stat">
+                <span class="oc-label" data-i18n="uxp.timeline.strategy">Strategy</span>
+                <span class="oc-inline-value" id="timelineSmartBinsValue" data-i18n="uxp.timeline.organize_file_type">File Type</span>
+              </div>
+            </div>
+            <button type="button" class="oc-btn oc-btn-secondary oc-btn-full" id="runSmartBinsBtn" disabled data-i18n="uxp.timeline.run_smart_bins">Run smart bins</button>
+          </div>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.timeline.srt_prep">SRT Prep</div>
+        <div class="oc-card">
+          <div class="oc-card-header collapsible" data-target="srtImportBody">
+            <span data-i18n="uxp.timeline.validate_srt_for_timeline_import">Validate SRT for Timeline Import</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708.708l-6 6a.5.5 0 01-.708 0l-6-6a.5.5 0 010-.708z"/></svg>
+          </div>
+          <div class="oc-card-body" id="srtImportBody">
+            <p class="oc-hint" data-i18n="uxp.timeline.srt_prep_hint">Check the file and count caption segments here, then place them on a Premiere caption track.</p>
+            <div class="oc-field-row">
+              <label class="oc-label" for="srtFilePath" data-i18n="uxp.timeline.srt_file">SRT File</label>
+              <div class="oc-input-group">
+                <input type="text" class="oc-input" id="srtFilePath" placeholder="Path to .srt file…" data-i18n-placeholder="uxp.timeline.srt_file_placeholder">
+                <button type="button" class="oc-btn oc-btn-secondary" id="browseSrtFile" data-i18n="common.browse">Browse</button>
+              </div>
+            </div>
+            <div class="oc-field-row">
+              <label class="oc-label" for="srtTrackIndex" data-i18n="uxp.timeline.target_track">Target Track</label>
+              <input type="number" class="oc-input oc-input-sm" id="srtTrackIndex" value="1" min="1" max="99">
+            </div>
+            <div class="oc-inline-summary-grid oc-inline-summary-grid--timeline-card" aria-label="SRT validation summary" data-i18n-aria-label="uxp.timeline.srt_validation_summary">
+              <div class="oc-inline-stat">
+                <span class="oc-label" data-i18n="uxp.timeline.file">File</span>
+                <span class="oc-inline-value" id="timelineSrtValue" data-i18n="uxp.timeline.choose_srt_file">Choose .srt file</span>
+              </div>
+              <div class="oc-inline-stat">
+                <span class="oc-label" data-i18n="uxp.timeline.target">Target</span>
+                <span class="oc-inline-value" id="timelineSrtTrackValue" data-i18n="uxp.timeline.track_1">Track 1</span>
+              </div>
+            </div>
+            <button type="button" class="oc-btn oc-btn-primary oc-btn-full" id="runSrtImportBtn" data-i18n="uxp.timeline.validate_srt_file">Validate SRT File</button>
+            <div class="oc-divider"></div>
+            <div class="oc-section-title" data-i18n="uxp.timeline.srt_resync_title">Resync Existing SRT</div>
+            <p class="oc-hint" data-i18n="uxp.timeline.srt_resync_hint">Uses the selected video or captions source, previews the timing transform, and writes a sidecar only after Apply.</p>
+            <div class="oc-checkbox-row">
+              <label class="oc-checkbox-label">
+                <input type="checkbox" id="srtResyncOverwrite"> <span data-i18n="uxp.timeline.srt_resync_overwrite">Replace an existing output file</span>
+              </label>
+            </div>
+            <div class="oc-btn-row">
+              <button type="button" class="oc-btn oc-btn-secondary" id="runSrtResyncPreviewBtn" data-i18n="uxp.timeline.srt_resync_preview">Preview Resync</button>
+              <button type="button" class="oc-btn oc-btn-primary" id="runSrtResyncApplyBtn" disabled data-i18n="uxp.timeline.srt_resync_apply">Apply Resync</button>
+            </div>
+            <div class="oc-status-line" id="srtResyncStatus" role="status" aria-live="polite" data-i18n="uxp.timeline.srt_resync_idle">Choose an SRT and source clip to preview timing.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== SEARCH TAB ==================== -->
+      <div class="oc-tab-panel" id="tab-search" role="tabpanel" aria-labelledby="tabBtnSearch">
+
+        <div class="oc-section-title" data-i18n="uxp.search.library_index">Footage Index</div>
+        <div class="oc-card">
+          <div class="oc-card-header collapsible" data-target="indexLibBody">
+            <span data-i18n="uxp.search.index_media_library">Index Media Library</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708.708l-6 6a.5.5 0 01-.708 0l-6-6a.5.5 0 010-.708z"/></svg>
+          </div>
+          <div class="oc-card-body" id="indexLibBody">
+            <div class="oc-field-row">
+              <label class="oc-label" for="indexFolder" data-i18n="uxp.search.media_folder">Media Folder</label>
+              <div class="oc-input-group">
+                <input type="text" class="oc-input" id="indexFolder" placeholder="Choose the root folder to index…" data-i18n-placeholder="uxp.search.index_folder_placeholder">
+                <button type="button" class="oc-btn oc-btn-secondary" id="browseIndexFolder" data-i18n="common.browse">Browse</button>
+              </div>
+            </div>
+            <div class="oc-checkbox-row">
+              <label class="oc-checkbox-label">
+                <input type="checkbox" id="indexTranscripts" checked> <span data-i18n="uxp.search.transcribe_audio_for_text_search">Transcribe audio for text search</span>
+              </label>
+              <label class="oc-checkbox-label">
+                <input type="checkbox" id="indexFrames"> <span data-i18n="uxp.search.index_key_frames">Index key frames</span>
+              </label>
+            </div>
+            <div class="oc-inline-summary-grid" aria-label="Footage index status" data-i18n-aria-label="uxp.search.library_index_status">
+              <div class="oc-field-row oc-inline-stat">
+                <span class="oc-label" data-i18n="uxp.search.index">Index</span>
+                <span id="indexStatePill" class="oc-inline-value oc-status-pill" data-state="idle" data-i18n="uxp.search.ready">Ready</span>
+              </div>
+              <div class="oc-field-row oc-inline-stat">
+                <span class="oc-label" data-i18n="uxp.search.indexed">Indexed</span>
+                <span id="indexStatsValue" class="oc-inline-value" data-i18n="uxp.search.zero_files_indexed">0 files indexed</span>
+              </div>
+            </div>
+            <div class="oc-btn-row">
+              <button type="button" class="oc-btn oc-btn-primary" id="runIndexLibBtn" data-i18n="uxp.search.index_library">Index Library</button>
+              <button type="button" class="oc-btn oc-btn-secondary" id="clearIndexBtn" data-i18n="uxp.search.clear_index">Clear Index</button>
+            </div>
+            <div class="oc-status-line" id="indexStatus" role="status" aria-live="polite" data-i18n="uxp.search.ready_to_build_library">Ready to build a searchable library.</div>
+          </div>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.search.search_footage">Search Footage</div>
+        <div class="oc-card">
+          <div class="oc-card-header collapsible" data-target="searchFootageBody">
+            <span data-i18n="uxp.search.semantic_search">Semantic Search</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708.708l-6 6a.5.5 0 01-.708 0l-6-6a.5.5 0 010-.708z"/></svg>
+          </div>
+          <div class="oc-card-body" id="searchFootageBody">
+            <div class="oc-field-row">
+              <label class="oc-label" for="searchQuery" data-i18n="uxp.search.query">Query</label>
+              <input type="text" class="oc-input" id="searchQuery" placeholder='e.g. "person laughing outdoors"' data-i18n-placeholder="uxp.search.query_placeholder">
+            </div>
+            <div class="oc-chip-group" role="group" aria-label="Suggested search prompts" data-i18n-aria-label="uxp.search.suggested_search_prompts">
+              <button type="button" class="oc-chip" data-fill-target="searchQuery" data-fill-value="person laughing outdoors" data-i18n="uxp.search.laughing_outdoors">Laughing outdoors</button>
+              <button type="button" class="oc-chip" data-fill-target="searchQuery" data-fill-value="close-up interview in studio lighting" data-i18n="uxp.search.studio_interview">Studio interview</button>
+              <button type="button" class="oc-chip" data-fill-target="searchQuery" data-fill-value="wide city street b-roll at dusk" data-i18n="uxp.search.city_broll">City b-roll</button>
+            </div>
+            <div class="oc-field-row">
+              <label class="oc-label" for="searchResultCount" data-i18n="uxp.search.results">Results</label>
+              <input type="number" class="oc-input oc-input-sm" id="searchResultCount" value="10" min="1" max="100">
+            </div>
+            <button type="button" class="oc-btn oc-btn-primary oc-btn-full" id="runFootageSearchBtn" data-i18n="uxp.search.search_footage">Search Footage</button>
+            <div class="oc-status-line" id="searchStatus" role="status" aria-live="polite" data-i18n="uxp.search.choose_query_status">Choose a descriptive query, then load the best match back into the workspace.</div>
+            <div class="oc-result-list" id="searchResultList">
+              <div class="oc-empty-state oc-empty-state-inline">
+                <div class="oc-empty-state-kicker" data-i18n="uxp.search.search_the_library">Search the library</div>
+                <p data-i18n="uxp.search.empty_search_hint">Index a folder, then search with descriptive phrases to pull the right shot back into the workspace.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.search.nlp_command">NLP Command</div>
+        <div class="oc-card">
+          <div class="oc-card-header collapsible" data-target="nlpBody">
+            <span data-i18n="uxp.search.natural_language_edit_commands">Natural Language Edit Commands</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708.708l-6 6a.5.5 0 01-.708 0l-6-6a.5.5 0 010-.708z"/></svg>
+          </div>
+          <div class="oc-card-body" id="nlpBody">
+            <div class="oc-field-row">
+              <label class="oc-label" for="nlpCommand" data-i18n="uxp.search.command">Command</label>
+              <input type="text" class="oc-input" id="nlpCommand" placeholder='e.g. "remove all silences longer than 1 second"' data-i18n-placeholder="uxp.search.command_placeholder">
+            </div>
+            <div class="oc-chip-group" role="group" aria-label="Suggested edit commands" data-i18n-aria-label="uxp.search.suggested_edit_commands">
+              <button type="button" class="oc-chip" data-fill-target="nlpCommand" data-fill-value="remove all silences longer than 0.8 seconds" data-i18n="uxp.search.tighten_pauses">Stage pause cleanup for review</button>
+              <button type="button" class="oc-chip" data-fill-target="nlpCommand" data-fill-value="add markers on every beat drop in this clip" data-i18n="uxp.search.mark_beat_drops">Mark beat drops</button>
+              <button type="button" class="oc-chip" data-fill-target="nlpCommand" data-fill-value="create chapter markers around each topic change" data-i18n="uxp.search.create_chapters">Create chapters</button>
+            </div>
+            <div class="oc-field-row">
+              <label class="oc-label" for="nlpLlmProvider" data-i18n="uxp.search.llm">LLM</label>
+              <select class="oc-select" id="nlpLlmProvider">
+                <option value="ollama" data-i18n="uxp.search.ollama_local">Ollama (local)</option>
+                <option value="openai" data-i18n="uxp.search.openai">OpenAI</option>
+              </select>
+            </div>
+            <button type="button" class="oc-btn oc-btn-primary oc-btn-full" id="runNlpBtn" data-i18n="uxp.search.execute_command">Execute Command</button>
+            <div class="oc-result-area oc-hidden" id="nlpResultArea" tabindex="-1" aria-live="polite">
+              <div class="oc-result-header-row">
+                <div class="oc-result-header" data-i18n="uxp.search.parsed_action">Parsed Action</div>
+                <div class="oc-result-summary" id="nlpResultSummary" data-i18n="uxp.search.review_before_applying">Review before applying</div>
+              </div>
+              <pre class="oc-code-block" id="nlpResultBody"></pre>
+              <button type="button" class="oc-btn oc-btn-secondary oc-btn-sm" id="applyNlpBtn" data-i18n="uxp.search.apply_to_timeline">Apply to Timeline</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== DELIVERABLES TAB ==================== -->
+      <div class="oc-tab-panel" id="tab-deliverables" role="tabpanel" aria-labelledby="tabBtnDeliverables">
+
+        <div class="oc-section-title" data-i18n="uxp.deliverables.sequence_info">Sequence Info</div>
+        <div class="oc-card">
+          <div class="oc-card-header collapsible" data-target="seqInfoBody">
+            <span data-i18n="uxp.deliverables.load_active_sequence">Load Active Sequence</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708.708l-6 6a.5.5 0 01-.708 0l-6-6a.5.5 0 010-.708z"/></svg>
+          </div>
+          <div class="oc-card-body" id="seqInfoBody">
+            <div class="oc-inline-summary-grid" aria-label="Sequence readiness" data-i18n-aria-label="uxp.deliverables.sequence_readiness">
+              <div class="oc-field-row oc-inline-stat">
+                <span class="oc-label" data-i18n="uxp.deliverables.sequence">Sequence</span>
+                <span id="seqInfoStatePill" class="oc-inline-value oc-status-pill" data-state="empty" data-i18n="uxp.deliverables.not_loaded">Not Loaded</span>
+              </div>
+              <div class="oc-field-row oc-inline-stat">
+                <span class="oc-label" data-i18n="uxp.deliverables.summary">Summary</span>
+                <span id="seqInfoSummary" class="oc-inline-value" data-i18n="uxp.deliverables.sequence_summary_placeholder">Load the active Premiere sequence before generating handoff docs.</span>
+              </div>
+            </div>
+            <button type="button" class="oc-btn oc-btn-secondary oc-btn-full" id="loadSeqInfoBtn" data-i18n="uxp.deliverables.load_sequence_info">Load Sequence Info</button>
+            <div class="oc-info-grid" id="seqInfoGrid">
+              <div class="oc-empty-state oc-empty-state-inline">
+                <div class="oc-empty-state-kicker" data-i18n="uxp.deliverables.sequence_details">Sequence details</div>
+                <p data-i18n="uxp.deliverables.sequence_details_hint">Load the active Premiere sequence to review timing, resolution, and track layout before generating handoff documents.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.deliverables.export_documents">Export Documents</div>
+        <div class="oc-card">
+          <div class="oc-card-header collapsible" data-target="deliverablesBody">
+            <span data-i18n="uxp.deliverables.generate_deliverable_documents">Generate Deliverable Documents</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708.708l-6 6a.5.5 0 01-.708 0l-6-6a.5.5 0 010-.708z"/></svg>
+          </div>
+          <div class="oc-card-body" id="deliverablesBody">
+            <div class="oc-field-row">
+              <label class="oc-label" for="delivOutputDir" data-i18n="uxp.deliverables.output_folder">Output Folder</label>
+              <div class="oc-input-group">
+                <input type="text" class="oc-input" id="delivOutputDir" placeholder="Choose where reports and handoff docs should land…" data-i18n-placeholder="uxp.deliverables.output_folder_placeholder">
+                <button type="button" class="oc-btn oc-btn-secondary" id="browseDelivDir" data-i18n="common.browse">Browse</button>
+              </div>
+            </div>
+            <div class="oc-inline-summary-grid" aria-label="Deliverables readiness" data-i18n-aria-label="uxp.deliverables.deliverables_readiness">
+              <div class="oc-field-row oc-inline-stat">
+                <span class="oc-label" data-i18n="uxp.deliverables.sequence">Sequence</span>
+                <span id="deliverablesSequenceValue" class="oc-inline-value" data-i18n="uxp.deliverables.load_sequence_info_value">Load sequence info</span>
+              </div>
+              <div class="oc-field-row oc-inline-stat">
+                <span class="oc-label" data-i18n="uxp.deliverables.destination">Destination</span>
+                <span id="deliverablesOutputValue" class="oc-inline-value" data-i18n="uxp.deliverables.session_temp_folder">Session temp folder</span>
+              </div>
+              <div class="oc-field-row oc-inline-stat">
+                <span class="oc-label" data-i18n="uxp.deliverables.last_export">Last Export</span>
+                <span id="deliverablesLastExportValue" class="oc-inline-value" data-i18n="uxp.deliverables.no_exports_yet">No exports yet</span>
+              </div>
+            </div>
+            <div class="oc-deliverable-grid">
+              <button type="button" class="oc-deliv-btn" id="delivVfxSheetBtn">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M1.5 0A1.5 1.5 0 000 1.5v13A1.5 1.5 0 001.5 16h13a1.5 1.5 0 001.5-1.5V1.5A1.5 1.5 0 0014.5 0h-13zm1 2.5h11a.5.5 0 01.5.5v1a.5.5 0 01-.5.5h-11a.5.5 0 01-.5-.5V3a.5.5 0 01.5-.5zm0 3h11a.5.5 0 01.5.5v1a.5.5 0 01-.5.5h-11a.5.5 0 01-.5-.5V6a.5.5 0 01.5-.5zm0 3h6a.5.5 0 01.5.5v1a.5.5 0 01-.5.5h-6a.5.5 0 01-.5-.5V9a.5.5 0 01.5-.5z"/></svg>
+                <span class="oc-deliv-copy">
+                  <span class="oc-deliv-title" data-i18n="uxp.deliverables.vfx_sheet">VFX Sheet</span>
+                  <span class="oc-deliv-text" data-i18n="uxp.deliverables.vfx_sheet_desc">Shot notes, vendor handoff context, and status-ready tracking.</span>
+                </span>
+              </button>
+              <button type="button" class="oc-deliv-btn" id="delivAdrListBtn">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M6 1v14l-4-4H0V5h2l4-4zm5.854 4.146a.5.5 0 010 .708L10.707 7l1.147 1.146a.5.5 0 01-.708.708L10 7.707l-1.146 1.147a.5.5 0 01-.708-.708L9.293 7 8.146 5.854a.5.5 0 01.708-.708L10 6.293l1.146-1.147a.5.5 0 01.708 0z"/></svg>
+                <span class="oc-deliv-copy">
+                  <span class="oc-deliv-title" data-i18n="uxp.deliverables.adr_list">ADR List</span>
+                  <span class="oc-deliv-text" data-i18n="uxp.deliverables.adr_list_desc">Dialogue pickup notes for editorial, mix, and post review.</span>
+                </span>
+              </button>
+              <button type="button" class="oc-deliv-btn" id="delivMusicCueBtn">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M6 13c0 1.105-1.12 2-2.5 2S1 14.105 1 13c0-1.104 1.12-2 2.5-2s2.5.896 2.5 2zm9-2c0 1.105-1.12 2-2.5 2s-2.5-.895-2.5-2 1.12-2 2.5-2 2.5.895 2.5 2zM14 11V2h1v9h-1zM6 12V3h1v9H6zM6 2.5a.5.5 0 01.5-.5l8-1a.5.5 0 01.5.5v1.5a.5.5 0 01-.5.5l-8 1A.5.5 0 016 4V2.5z"/></svg>
+                <span class="oc-deliv-copy">
+                  <span class="oc-deliv-title" data-i18n="uxp.deliverables.music_cue_sheet">Music Cue Sheet</span>
+                  <span class="oc-deliv-text" data-i18n="uxp.deliverables.music_cue_sheet_desc">Cue timing, usage context, and licensing handoff details.</span>
+                </span>
+              </button>
+              <button type="button" class="oc-deliv-btn" id="delivAssetListBtn">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M0 2a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H2a2 2 0 01-2-2V2zm5.5 3a.5.5 0 00-1 0v5.793L3.146 9.354a.5.5 0 10-.708.707l2 2a.5.5 0 00.708 0l2-2a.5.5 0 00-.708-.707L5.5 10.793V5z"/></svg>
+                <span class="oc-deliv-copy">
+                  <span class="oc-deliv-title" data-i18n="uxp.deliverables.asset_list">Asset List</span>
+                  <span class="oc-deliv-text" data-i18n="uxp.deliverables.asset_list_desc">Master a clean inventory of media, references, and outputs.</span>
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.deliverables.project_report">Project Report</div>
+        <div class="oc-card">
+          <div class="oc-card-header collapsible" data-target="projectReportBody">
+            <span data-i18n="uxp.deliverables.full_project_report">Full Project Report</span>
+            <svg class="oc-chevron" width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708.708l-6 6a.5.5 0 01-.708 0l-6-6a.5.5 0 010-.708z"/></svg>
+          </div>
+          <div class="oc-card-body" id="projectReportBody">
+            <p class="oc-hint" data-i18n="uxp.deliverables.project_report_hint">Choose the handoff sheets you need for this pass. The UXP deliverables workflow currently exports CSV documents for editorial review.</p>
+            <div class="oc-checkbox-row">
+              <label class="oc-checkbox-label"><input type="checkbox" id="rptIncludeVfx" checked> <span data-i18n="uxp.deliverables.vfx_sheet">VFX Sheet</span></label>
+              <label class="oc-checkbox-label"><input type="checkbox" id="rptIncludeAdr" checked> <span data-i18n="uxp.deliverables.adr_list">ADR List</span></label>
+              <label class="oc-checkbox-label"><input type="checkbox" id="rptIncludeMusic" checked> <span data-i18n="uxp.deliverables.music_cue_sheet">Music Cue Sheet</span></label>
+              <label class="oc-checkbox-label"><input type="checkbox" id="rptIncludeAssets" checked> <span data-i18n="uxp.deliverables.asset_list">Asset List</span></label>
+            </div>
+            <div class="oc-inline-summary-grid oc-inline-summary-grid--deliverables" aria-label="Project report summary" data-i18n-aria-label="uxp.deliverables.project_report_summary">
+              <div class="oc-field-row oc-inline-stat">
+                <span class="oc-label" data-i18n="uxp.deliverables.package">Package</span>
+                <span id="deliverablesPackageValue" class="oc-inline-value" data-i18n="uxp.deliverables.all_four_handoff_sheets">All four handoff sheets</span>
+              </div>
+              <div class="oc-field-row oc-inline-stat">
+                <span class="oc-label" data-i18n="uxp.deliverables.format">Format</span>
+                <span id="deliverablesReportFormatValue" class="oc-inline-value" data-i18n="uxp.deliverables.csv_handoff_sheets">CSV handoff sheets</span>
+              </div>
+              <div class="oc-field-row oc-inline-stat">
+                <span class="oc-label" data-i18n="uxp.deliverables.destination">Destination</span>
+                <span id="deliverablesReportDestinationValue" class="oc-inline-value" data-i18n="uxp.deliverables.session_temp_folder">Session temp folder</span>
+              </div>
+            </div>
+            <div class="oc-field-row">
+              <label class="oc-label" for="reportFormat" data-i18n="uxp.deliverables.format">Format</label>
+              <select class="oc-select" id="reportFormat">
+                <option value="csv" data-i18n="uxp.deliverables.report_format_csv">CSV (.csv) handoff sheets</option>
+                <option value="xlsx" disabled data-i18n="uxp.deliverables.report_format_xlsx_unavailable">Excel .xlsx (not available in UXP)</option>
+                <option value="pdf" disabled data-i18n="uxp.deliverables.report_format_pdf_unavailable">PDF (not available in UXP)</option>
+              </select>
+            </div>
+            <div class="oc-status-line" id="deliverablesStatus" role="status" aria-live="polite" data-i18n="uxp.deliverables.status_line">Load sequence info, choose a destination if needed, then generate the handoff docs you need.</div>
+            <button type="button" class="oc-btn oc-btn-primary oc-btn-full" id="runFullReportBtn" data-i18n="uxp.deliverables.generate_full_report">Generate Full Report</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== AGENT TAB ==================== -->
+      <!-- F143 conductor + the Q3/Q7/Q8 backend surfaces shipped in
+           the 2026-05-25 autonomous loop. UXP-only by design (CEP
+           uses the command palette + NLP tab; see PANEL_PARITY.json). -->
+      <div class="oc-tab-panel" id="tab-agent" role="tabpanel" aria-labelledby="tabBtnAgent">
+
+        <div class="oc-section-title" data-i18n="uxp.agent.chat_conductor_f143">Chat Conductor</div>
+        <div class="oc-card">
+          <p class="oc-hint" data-i18n="uxp.agent.chat_conductor_hint">Describe an edit. Review the plan before anything runs.</p>
+          <div class="oc-field-row">
+            <label class="oc-label" for="agentChatIntent" data-i18n="uxp.agent.intent">Intent</label>
+            <textarea class="oc-input" id="agentChatIntent" rows="3" placeholder="e.g. Cut silences then add captions in Spanish" data-i18n-placeholder="uxp.agent.intent_placeholder"></textarea>
+          </div>
+          <div class="oc-btn-row">
+            <button type="button" class="oc-btn oc-btn-primary" id="agentChatPlanBtn" data-i18n="uxp.agent.plan">Plan</button>
+            <button type="button" class="oc-btn oc-btn-secondary" id="agentChatReviewBtn" disabled data-i18n="uxp.agent.self_review">Self-Review</button>
+            <button type="button" class="oc-btn oc-btn-secondary" id="agentChatClearBtn" data-i18n="uxp.agent.clear">Clear</button>
+          </div>
+          <div class="oc-status-line" id="agentChatStatus" role="status" aria-live="polite" data-i18n="uxp.agent.no_active_session">No active session.</div>
+          <div class="oc-card oc-card--nested" id="agentChatPlanBox" hidden>
+            <div class="oc-card-header"><span data-i18n="uxp.agent.planned_steps">Planned Steps</span></div>
+            <ol class="oc-step-list" id="agentChatPlanList" aria-label="Conductor plan steps" data-i18n-aria-label="uxp.agent.conductor_plan_steps"></ol>
+          </div>
+          <div class="oc-card oc-card--nested" id="agentChatReviewBox" hidden>
+            <div class="oc-card-header"><span data-i18n="uxp.agent.self_review">Self-Review</span></div>
+            <p class="oc-hint" id="agentChatReviewSummary"></p>
+            <ul id="agentChatReviewNotes" aria-label="Drift notes" data-i18n-aria-label="uxp.agent.drift_notes"></ul>
+          </div>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.agent.one_click_enhance_q3">One-Click Enhance</div>
+        <div class="oc-card">
+          <p class="oc-hint" data-i18n="uxp.agent.one_click_enhance_hint">Apply explicit loudness targets, denoise, stabilization, deflicker, and grading in one pass.</p>
+          <div class="oc-field-row">
+            <label class="oc-label" for="enhanceClipPath" data-i18n="uxp.agent.clip_path">Clip Path</label>
+            <input type="text" class="oc-input" id="enhanceClipPath" placeholder="Paste a clip path…" data-i18n-placeholder="uxp.agent.clip_path_placeholder">
+          </div>
+          <div class="oc-field-row">
+            <label class="oc-label" for="enhanceStyle" data-i18n="uxp.agent.style">Style</label>
+            <select class="oc-input" id="enhanceStyle">
+              <option value="social" data-i18n="uxp.agent.style_social">Social (-16 LUFS, vibrant grade)</option>
+              <option value="speech" data-i18n="uxp.agent.style_speech">Speech (-16 LUFS, no grade)</option>
+              <option value="cinematic" data-i18n="uxp.agent.style_cinematic">Cinematic (-23 LUFS, full chain)</option>
+            </select>
+          </div>
+          <div class="oc-btn-row">
+            <button type="button" class="oc-btn oc-btn-secondary" id="enhanceDryRunBtn" data-i18n="uxp.agent.preview_plan">Preview Plan</button>
+            <button type="button" class="oc-btn oc-btn-primary" id="enhanceRunBtn" data-i18n="uxp.agent.run_enhance">Run Enhance</button>
+          </div>
+          <div class="oc-status-line" id="enhanceStatus" role="status" aria-live="polite" data-i18n="uxp.agent.enhance_status">Choose a clip and preview the plan.</div>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.agent.shorts_ab_variants_q8">Shorts A/B Variants</div>
+        <div class="oc-card">
+          <p class="oc-hint" data-i18n="uxp.agent.shorts_ab_variants_hint">Create 2-6 variants with different hooks, captions, and framing.</p>
+          <div class="oc-field-row">
+            <label class="oc-label" for="variantsClipPath" data-i18n="uxp.agent.clip_path">Clip Path</label>
+            <input type="text" class="oc-input" id="variantsClipPath" placeholder="Paste a clip path…" data-i18n-placeholder="uxp.agent.clip_path_placeholder">
+          </div>
+          <div class="oc-slider-row">
+            <label class="oc-label" for="variantsStart" data-i18n="uxp.agent.start_seconds">Start (s)</label>
+            <input type="number" class="oc-input" id="variantsStart" value="0" min="0" step="0.1">
+          </div>
+          <div class="oc-slider-row">
+            <label class="oc-label" for="variantsEnd" data-i18n="uxp.agent.end_seconds">End (s)</label>
+            <input type="number" class="oc-input" id="variantsEnd" value="15" min="0.1" step="0.1">
+          </div>
+          <div class="oc-slider-row">
+            <label class="oc-label" for="variantsN" data-i18n="uxp.agent.variants">Variants</label>
+            <input type="number" class="oc-input" id="variantsN" value="3" min="2" max="6" step="1">
+          </div>
+          <div class="oc-btn-row">
+            <button type="button" class="oc-btn oc-btn-secondary" id="variantsDryRunBtn" data-i18n="uxp.agent.preview_variants">Preview Variants</button>
+            <button type="button" class="oc-btn oc-btn-primary" id="variantsRunBtn" data-i18n="uxp.agent.generate">Generate</button>
+          </div>
+          <div class="oc-status-line" id="variantsStatus" role="status" aria-live="polite" data-i18n="uxp.agent.variants_status">2-6 variants per source window.</div>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.agent.sequence_index_q7_f273">Sequence Report</div>
+        <div class="oc-card">
+          <p class="oc-hint" data-i18n="uxp.agent.sequence_index_hint">Export the active-sequence report for clip timing, effects, ratings, and transcript excerpts; use backend search/index routes for cross-project queries.</p>
+          <div class="oc-btn-row">
+            <button type="button" class="oc-btn oc-btn-primary" id="sequenceIndexBuildBtn" data-i18n="uxp.agent.build_index">Build Index</button>
+            <button type="button" class="oc-btn oc-btn-secondary" id="sequenceIndexInfoBtn" data-i18n="uxp.agent.capability">Capability</button>
+            <button type="button" class="oc-btn oc-btn-secondary" id="sequenceIndexExportBtn" disabled data-i18n="uxp.agent.export_csv">Export CSV</button>
+          </div>
+          <div class="oc-status-line" id="sequenceIndexStatus" role="status" aria-live="polite" data-i18n="uxp.agent.no_index_yet">No index yet.</div>
+          <div class="oc-card oc-card--nested" id="sequenceIndexBox" hidden>
+            <div class="oc-status-line" id="sequenceIndexSummary"></div>
+            <div class="oc-field-row">
+              <label class="oc-label" for="sequenceIndexSearch" data-i18n="uxp.agent.index_search">Search</label>
+              <input type="search" class="oc-input" id="sequenceIndexSearch" placeholder="Name, path, transcript, tag…" data-i18n-placeholder="uxp.agent.index_search_placeholder">
+            </div>
+            <div class="oc-field-row">
+              <label class="oc-label" for="sequenceIndexTrackType" data-i18n="uxp.agent.index_track">Track</label>
+              <select class="oc-select" id="sequenceIndexTrackType">
+                <option value="" selected data-i18n="uxp.agent.index_track_any">All tracks</option>
+                <option value="video" data-i18n="uxp.agent.index_track_video">Video only</option>
+                <option value="audio" data-i18n="uxp.agent.index_track_audio">Audio only</option>
+              </select>
+            </div>
+            <div class="oc-field-row">
+              <label class="oc-label" for="sequenceIndexEffects" data-i18n="uxp.agent.index_effects">Effects</label>
+              <select class="oc-select" id="sequenceIndexEffects">
+                <option value="" selected data-i18n="uxp.agent.index_effects_any">Any</option>
+                <option value="with" data-i18n="uxp.agent.index_effects_with">With effects</option>
+                <option value="without" data-i18n="uxp.agent.index_effects_without">Without effects</option>
+              </select>
+            </div>
+            <div class="oc-field-row">
+              <label class="oc-label" for="sequenceIndexOffline" data-i18n="uxp.agent.index_media">Media</label>
+              <select class="oc-select" id="sequenceIndexOffline">
+                <option value="" selected data-i18n="uxp.agent.index_media_any">Any</option>
+                <option value="online" data-i18n="uxp.agent.index_media_online">Linked only</option>
+                <option value="offline" data-i18n="uxp.agent.index_media_offline">Offline only</option>
+              </select>
+            </div>
+            <div class="oc-field-row">
+              <label class="oc-label" for="sequenceIndexMinRating" data-i18n="uxp.agent.index_min_rating">Min rating</label>
+              <select class="oc-select" id="sequenceIndexMinRating">
+                <option value="0" selected data-i18n="uxp.agent.index_rating_any">Any</option>
+                <option value="1">1+</option>
+                <option value="2">2+</option>
+                <option value="3">3+</option>
+                <option value="4">4+</option>
+                <option value="5">5</option>
+              </select>
+            </div>
+            <fieldset class="oc-column-toggles" id="sequenceIndexColumns">
+              <legend class="oc-label" data-i18n="uxp.agent.index_columns">Columns</legend>
+            </fieldset>
+            <div class="oc-status-line" id="sequenceIndexCount" role="status" aria-live="polite"></div>
+            <div class="oc-table-scroll" id="sequenceIndexTableWrap">
+              <table class="oc-table" id="sequenceIndexTable" role="grid" aria-labelledby="sequenceIndexCount" aria-rowcount="0">
+                <caption class="oc-visually-hidden" data-i18n="uxp.agent.index_table_caption">Clips in the active sequence. Use the arrow keys to move between cells.</caption>
+                <thead>
+                  <tr role="row" id="sequenceIndexHeadRow"></tr>
+                </thead>
+                <tbody id="sequenceIndexBody"></tbody>
+              </table>
+            </div>
+            <div class="oc-empty-state oc-empty-state-inline" id="sequenceIndexEmpty" hidden>
+              <div class="oc-empty-state-kicker" data-i18n="uxp.agent.index_empty_kicker">No matching clips</div>
+              <p data-i18n="uxp.agent.index_empty_body">Clear the search box or relax the filters to see the rest of the timeline.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="oc-section-title" data-i18n="uxp.agent.mcp_bridge_f146">MCP Bridge</div>
+        <div class="oc-card">
+          <p class="oc-hint" data-i18n="uxp.agent.mcp_bridge_hint">UXP-native bridge to the MCP tool catalogue. Choose Capability for the live tool counts.</p>
+          <div class="oc-btn-row">
+            <button type="button" class="oc-btn oc-btn-secondary" id="mcpBridgeInfoBtn" data-i18n="uxp.agent.capability">Capability</button>
+            <button type="button" class="oc-btn oc-btn-secondary" id="mcpBridgeListBtn" data-i18n="uxp.agent.list_tools">List Tools</button>
+          </div>
+          <div class="oc-status-line" id="mcpBridgeStatus" role="status" aria-live="polite" data-i18n="uxp.agent.bridge_ready">Bridge ready.</div>
+        </div>
+
+      </div>
+
+      <!-- ==================== SETTINGS TAB ==================== -->
+      <div class="oc-tab-panel" id="tab-settings" role="tabpanel" aria-labelledby="tabBtnSettings">
+
+        <nav class="oc-settings-nav" aria-label="Settings sections" data-i18n-aria-label="uxp.settings.sections" role="tablist">
+          <button type="button" class="oc-settings-nav-item active" id="settingsNavWorkspace" data-settings-section="workspace" aria-controls="settingsPaneWorkspace" aria-selected="true" role="tab" data-i18n="uxp.settings.workspace">Workspace</button>
+          <button type="button" class="oc-settings-nav-item" id="settingsNavEngines" data-settings-section="engines" aria-controls="settingsPaneEngines" aria-selected="false" role="tab" data-i18n="uxp.settings.engine_routing">Engine Routing</button>
+          <button type="button" class="oc-settings-nav-item" id="settingsNavLiveUpdates" data-settings-section="live-updates" aria-controls="settingsPaneLiveUpdates" aria-selected="false" role="tab" data-i18n="uxp.settings.live_updates">Live Updates</button>
+          <button type="button" class="oc-settings-nav-item" id="settingsNavRecovery" data-settings-section="recovery" aria-controls="settingsPaneRecovery" aria-selected="false" role="tab" data-i18n="uxp.journal.recovery">Timeline Recovery</button>
+          <button type="button" class="oc-settings-nav-item" id="settingsNavDiagnostics" data-settings-section="diagnostics" aria-controls="settingsPaneDiagnostics" aria-selected="false" role="tab" data-i18n="uxp.settings.diagnostics">Diagnostics</button>
+          <button type="button" class="oc-settings-nav-item" id="settingsNavMigration" data-settings-section="migration" aria-controls="settingsPaneMigration" aria-selected="false" role="tab" data-i18n="uxp.settings.migration_risk">Migration</button>
+          <button type="button" class="oc-settings-nav-item" id="settingsNavPlugins" data-settings-section="plugins" aria-controls="settingsPanePlugins" aria-selected="false" role="tab" data-i18n="uxp.settings.plugin_trust">Plugins</button>
+          <button type="button" class="oc-settings-nav-item" id="settingsNavActions" data-settings-section="actions" aria-controls="settingsPaneActions" aria-selected="false" role="tab" data-i18n="uxp.settings.keyboard">Fast Actions</button>
+          <button type="button" class="oc-settings-nav-item" id="settingsNavAbout" data-settings-section="about" aria-controls="settingsPaneAbout" aria-selected="false" role="tab" data-i18n="uxp.settings.about">About</button>
+        </nav>
+
+        <section class="oc-settings-group oc-settings-group--workspace active" id="settingsPaneWorkspace" data-settings-pane="workspace" role="tabpanel" aria-labelledby="settingsNavWorkspace">
+        <div class="oc-section-title" data-i18n="uxp.settings.workspace">Workspace</div>
+        <div class="oc-card oc-command-card">
+          <p class="oc-hint" data-i18n="uxp.settings.workspace_hint">Current source, library, and backend.</p>
+          <div class="oc-command-state-list" role="list" aria-label="Current workspace context" data-i18n-aria-label="uxp.workspace.current_context">
+            <div class="oc-command-state-row" role="listitem">
+              <span class="oc-label" data-i18n="uxp.workspace.label_source">Active Shot</span>
+              <strong class="oc-command-state-value" id="settingsWorkspaceSourceValue" data-i18n="uxp.workspace.no_source_selected">No source selected</strong>
+            </div>
+            <div class="oc-command-state-row" role="listitem">
+              <span class="oc-label" data-i18n="uxp.workspace.label_library">Media Library</span>
+              <strong class="oc-command-state-value" id="settingsWorkspaceLibraryValue" data-i18n="uxp.workspace.library_zero">0 clips</strong>
+            </div>
+            <div class="oc-command-state-row" role="listitem">
+              <span class="oc-label" data-i18n="uxp.workspace.label_backend">Backend</span>
+              <strong class="oc-command-state-value" id="settingsWorkspaceBackendValue" data-state="offline" data-i18n="conn.offline">Offline</strong>
+            </div>
+          </div>
+          <div class="oc-btn-row oc-command-card-actions">
+            <button type="button" class="oc-btn oc-btn-primary" id="settingsWorkspaceChooseBtn" data-offline-enabled="true" data-workspace-command="choose-clip" data-i18n="uxp.workspace.choose_media">Choose Media</button>
+            <button type="button" class="oc-btn oc-btn-secondary" id="settingsWorkspaceSearchBtn" data-workspace-command="open-search" data-i18n="uxp.workspace.search_library">Search Library</button>
+            <button type="button" class="oc-btn oc-btn-secondary" id="settingsWorkspaceTimelineBtn" data-workspace-command="open-timeline" data-i18n="uxp.workspace.timeline_tools">Timeline Tools</button>
+          </div>
+        </div>
+        <div class="oc-card">
+          <p class="oc-hint" data-i18n="uxp.settings.settings_io_hint">Back up presets, favorites, and workflows for use on another OpenCut machine.</p>
+          <div class="oc-btn-row">
+            <button type="button" class="oc-btn oc-btn-secondary" id="uxpExportSettingsBtn" data-i18n="uxp.settings.export_settings">Export Settings</button>
+            <button type="button" class="oc-btn oc-btn-secondary" id="uxpImportSettingsBtn" data-i18n="uxp.settings.import_settings">Import Settings</button>
+          </div>
+          <div class="oc-status-line" id="uxpSettingsIOStatus" role="status" aria-live="polite" data-i18n="uxp.settings.settings_io_ready">Settings backup is ready.</div>
+        </div>
+        <div class="oc-card" id="uxpSupportCard">
+          <p class="oc-hint" data-i18n="uxp.settings.support_io_hint">Create a local redacted support file or open a reviewed issue report when network access is available.</p>
+          <div class="oc-btn-row">
+            <button type="button" class="oc-btn oc-btn-secondary" id="uxpExportSupportBundleBtn" data-i18n="uxp.settings.export_support_bundle">Export Support Bundle</button>
+            <button type="button" class="oc-btn oc-btn-secondary" id="uxpOpenIssueReportBtn" data-i18n="uxp.settings.open_issue_report">Open Issue Report</button>
+            <button type="button" class="oc-btn oc-btn-secondary" id="uxpRestartOnboardingBtn" data-i18n="uxp.settings.restart_onboarding">Show Getting Started</button>
+          </div>
+          <div class="oc-status-line" id="uxpSupportStatus" role="status" aria-live="polite" data-i18n="uxp.settings.support_io_ready">Support tools are ready.</div>
+        </div>
+        </section>
+
+        <section class="oc-settings-group oc-settings-group--recovery" id="settingsPaneRecovery" data-settings-pane="recovery" role="tabpanel" aria-labelledby="settingsNavRecovery">
+        <div class="oc-section-title" data-i18n="uxp.journal.recovery">Timeline Recovery</div>
+        <div class="oc-card">
+          <p class="oc-hint" data-i18n="uxp.journal.recovery_hint">Review host writes that began but did not record completion after a panel or Premiere restart.</p>
+          <div class="oc-inline-summary-grid oc-inline-summary-grid--settings" aria-label="Timeline recovery summary" data-i18n-aria-label="uxp.journal.recovery_summary">
+            <div class="oc-inline-stat">
+              <span class="oc-label" data-i18n="uxp.journal.interrupted">Interrupted</span>
+              <span class="oc-inline-value" id="settingsRecoveryCountValue" data-i18n="uxp.settings.loading">Loading…</span>
+            </div>
+            <div class="oc-inline-stat">
+              <span class="oc-label" data-i18n="uxp.journal.auto_restore">Auto-restore</span>
+              <span class="oc-inline-value" id="settingsRecoveryAutoValue" data-i18n="uxp.settings.loading">Loading…</span>
+            </div>
+          </div>
+          <div class="oc-status-line" id="settingsRecoveryStatus" role="status" aria-live="polite" data-i18n="uxp.journal.checking">Checking interrupted host writes…</div>
+          <div id="uxpRecoveryList" class="oc-engine-grid">
+            <div class="oc-empty-state oc-empty-state-inline">
+              <div class="oc-empty-state-kicker" data-i18n="uxp.journal.recovery">Timeline Recovery</div>
+              <p data-i18n="uxp.journal.checking_hint">Loading durable checkpoints and saved inverse plans…</p>
+            </div>
+          </div>
+          <button type="button" class="oc-btn oc-btn-secondary" id="uxpRefreshRecoveryBtn" data-i18n="uxp.journal.refresh">Refresh Recovery</button>
+        </div>
+        </section>
+
+        <section class="oc-settings-group oc-settings-group--engines" id="settingsPaneEngines" data-settings-pane="engines" role="tabpanel" aria-labelledby="settingsNavEngines">
+        <div class="oc-section-title" data-i18n="uxp.settings.engine_routing">Engine Routing</div>
+        <div class="oc-card">
+          <p class="oc-hint" data-i18n="uxp.settings.gpu_adapter_hint">Choose which visible CUDA adapter should run GPU-backed OpenCut operations. Auto uses the first available adapter.</p>
+          <div class="oc-field-row">
+            <label class="oc-label" for="uxpGpuDeviceSelect" data-i18n="uxp.settings.gpu_adapter_label">GPU adapter</label>
+            <select class="oc-select" id="uxpGpuDeviceSelect" aria-describedby="uxpGpuSelectionStatus">
+              <option value="auto" data-i18n="uxp.settings.gpu_adapter_auto">Auto (recommended)</option>
+            </select>
+          </div>
+          <div class="oc-status-line" id="uxpGpuSelectionStatus" role="status" aria-live="polite" data-i18n="uxp.settings.gpu_adapter_checking">Checking available GPU adapters…</div>
+        </div>
+        <div class="oc-card">
+          <p class="oc-hint" data-i18n="uxp.settings.engine_routing_hint">Pick the engine OpenCut should favor for each editing domain. Leave a domain on Auto to keep the best available option active for the current machine.</p>
+          <div class="oc-inline-summary-grid oc-inline-summary-grid--settings" aria-label="Engine routing summary" data-i18n-aria-label="uxp.settings.engine_routing_summary">
+            <div class="oc-inline-stat">
+              <span class="oc-label" data-i18n="uxp.settings.defaults">Defaults</span>
+              <span class="oc-inline-value" id="settingsEngineDefaultsValue" data-i18n="uxp.settings.loading">Loading…</span>
+            </div>
+            <div class="oc-inline-stat">
+              <span class="oc-label" data-i18n="uxp.settings.pinned">Pinned</span>
+              <span class="oc-inline-value" id="settingsEnginePinnedValue" data-i18n="uxp.settings.loading">Loading…</span>
+            </div>
+            <div class="oc-inline-stat">
+              <span class="oc-label" data-i18n="uxp.settings.coverage">Coverage</span>
+              <span class="oc-inline-value" id="settingsEngineCoverageValue" data-i18n="uxp.settings.loading">Loading…</span>
+            </div>
+          </div>
+          <div class="oc-status-line" id="settingsEngineStatus" role="status" aria-live="polite" data-i18n="uxp.settings.loading_engine_availability">Loading engine availability…</div>
+          <div id="uxpEngineGrid" class="oc-engine-grid">
+            <div class="oc-empty-state oc-empty-state-inline">
+              <div class="oc-empty-state-kicker" data-i18n="uxp.settings.engine_routing">Engine Routing</div>
+              <p data-i18n="uxp.settings.loading_engines_preferences">Loading available engines and saved preferences…</p>
+            </div>
+          </div>
+          <button type="button" class="oc-btn oc-btn-secondary" id="uxpRefreshEnginesBtn" data-i18n="uxp.settings.refresh_availability">Refresh Availability</button>
+        </div>
+        </section>
+
+        <section class="oc-settings-group oc-settings-group--live-updates" id="settingsPaneLiveUpdates" data-settings-pane="live-updates" role="tabpanel" aria-labelledby="settingsNavLiveUpdates">
+        <div class="oc-section-title" title="Live Updates Bridge" data-i18n="uxp.settings.live_updates" data-i18n-title="uxp.settings.live_updates_bridge">Live Updates</div>
+        <div class="oc-card">
+          <p class="oc-hint" data-i18n="uxp.settings.live_updates_bridge_hint">Keep progress, completion, and cancel feedback flowing into the panel while longer jobs run.</p>
+          <div class="oc-inline-summary-grid oc-inline-summary-grid--settings" aria-label="Live updates bridge summary" data-i18n-aria-label="uxp.settings.live_updates_bridge_summary">
+            <div class="oc-inline-stat">
+              <span class="oc-label" data-i18n="uxp.settings.bridge">Bridge</span>
+              <span id="uxpWsStatus" class="oc-inline-value oc-status-pill" data-state="unknown" data-i18n="uxp.settings.checking">Checking…</span>
+            </div>
+            <div class="oc-inline-stat">
+              <span class="oc-label" data-i18n="uxp.settings.listeners">Listeners</span>
+              <span id="uxpWsClients" class="oc-inline-value" data-i18n="uxp.settings.zero_listeners">0 listeners</span>
+            </div>
+            <div class="oc-inline-stat">
+              <span class="oc-label" data-i18n="uxp.settings.panel_link">Panel Link</span>
+              <span id="uxpWsPanelState" class="oc-inline-value" data-i18n="uxp.settings.waiting_to_connect">Waiting to connect</span>
+            </div>
+          </div>
+          <div class="oc-status-line" id="settingsBridgeStatus" role="status" aria-live="polite" data-i18n="uxp.settings.start_bridge_then_connect">Start the bridge, then connect this panel to receive live job updates.</div>
+          <div class="oc-btn-row">
+            <button type="button" class="oc-btn oc-btn-secondary" id="uxpWsStartBtn" data-i18n="uxp.settings.start_bridge">Start Bridge</button>
+            <button type="button" class="oc-btn oc-btn-secondary" id="uxpWsStopBtn" data-i18n="uxp.settings.stop_bridge">Stop Bridge</button>
+            <button type="button" class="oc-btn oc-btn-primary" id="uxpWsConnectBtn" data-i18n="uxp.settings.connect_live_updates">Connect Live Updates</button>
+          </div>
+        </div>
+        </section>
+
+        <section class="oc-settings-group oc-settings-group--diagnostics" id="settingsPaneDiagnostics" data-settings-pane="diagnostics" role="tabpanel" aria-labelledby="settingsNavDiagnostics">
+        <div class="oc-section-title" data-i18n="uxp.settings.diagnostics">Diagnostics</div>
+        <div class="oc-card oc-command-card">
+          <p class="oc-hint" data-i18n="uxp.settings.diagnostics_hint">Check the local services that power processing before troubleshooting an editing workflow.</p>
+          <div class="oc-command-state-list" role="list" aria-label="Backend connection details" data-i18n-aria-label="uxp.status.connection_details">
+            <div class="oc-command-state-row" role="listitem">
+              <span class="oc-label" data-i18n="uxp.workspace.label_backend">Backend</span>
+              <strong class="oc-command-state-value" id="settingsDiagnosticsBackendValue" data-state="offline" data-i18n="conn.offline">Offline</strong>
+            </div>
+            <div class="oc-command-state-row" role="listitem">
+              <span class="oc-label" data-i18n="uxp.settings.api_endpoint">API Endpoint</span>
+              <strong class="oc-command-state-value oc-command-state-value--code" id="settingsDiagnosticsEndpointValue">http://127.0.0.1:5679</strong>
+            </div>
+            <div class="oc-command-state-row" role="listitem">
+              <span class="oc-label" data-i18n="uxp.settings.engine_availability">Engine Availability</span>
+              <strong class="oc-command-state-value" id="settingsDiagnosticsEngineValue" data-i18n="uxp.settings.loading">Loading…</strong>
+            </div>
+            <div class="oc-command-state-row" role="listitem">
+              <span class="oc-label" data-i18n="uxp.settings.last_check">Last Check</span>
+              <strong class="oc-command-state-value" id="settingsDiagnosticsLastCheckValue" data-i18n="uxp.settings.not_checked_yet">Not checked yet</strong>
+            </div>
+          </div>
+          <button type="button" class="oc-btn oc-btn-secondary" id="settingsDiagnosticsDetailsBtn" data-i18n="uxp.settings.show_connection_details">Show Connection Details</button>
+        </div>
+        </section>
+
+        <section class="oc-settings-group" id="settingsPaneMigration" data-settings-pane="migration" role="tabpanel" aria-labelledby="settingsNavMigration">
+        <div class="oc-section-title" data-i18n="uxp.settings.migration_risk">Migration</div>
+        <div class="oc-card">
+          <p class="oc-hint" data-i18n="uxp.settings.migration_risk_hint">Track CEP fallback, direct UXP, and hybrid-plugin migration status from the generated host-action catalogue.</p>
+          <div class="oc-inline-summary-grid oc-inline-summary-grid--settings" aria-label="UXP migration risk summary" data-i18n-aria-label="uxp.settings.migration_risk_summary">
+            <div class="oc-inline-stat">
+              <span class="oc-label" data-i18n="uxp.settings.direct_uxp">Direct UXP</span>
+              <span class="oc-inline-value" id="settingsMigrationDirectValue" data-i18n="uxp.settings.loading">Loading…</span>
+            </div>
+            <div class="oc-inline-stat">
+              <span class="oc-label" data-i18n="uxp.settings.fallbacks">Fallbacks</span>
+              <span class="oc-inline-value" id="settingsMigrationFallbackValue" data-i18n="uxp.settings.loading">Loading…</span>
+            </div>
+            <div class="oc-inline-stat">
+              <span class="oc-label" data-i18n="uxp.settings.high_risk">High Risk</span>
+              <span class="oc-inline-value" id="settingsMigrationRiskValue" data-i18n="uxp.settings.loading">Loading…</span>
+            </div>
+            <div class="oc-inline-stat">
+              <span class="oc-label" data-i18n="uxp.settings.route_coverage">Route Coverage</span>
+              <span class="oc-inline-value" id="settingsMigrationRouteValue" data-i18n="uxp.settings.loading">Loading…</span>
+            </div>
+          </div>
+          <div class="oc-status-line" id="settingsMigrationStatus" role="status" aria-live="polite" data-i18n="uxp.settings.loading_migration_risk_data">Loading UXP migration risk data…</div>
+          <div id="uxpMigrationRiskGrid" class="oc-engine-grid">
+            <div class="oc-empty-state oc-empty-state-inline">
+              <div class="oc-empty-state-kicker" data-i18n="uxp.settings.migration_risk">Migration</div>
+              <p data-i18n="uxp.settings.loading_host_action_coverage">Loading CEP and UXP host-action coverage…</p>
+            </div>
+          </div>
+          <button type="button" class="oc-btn oc-btn-secondary" id="uxpRefreshMigrationRiskBtn" data-i18n="uxp.settings.refresh_migration_risk">Refresh Migration Risk</button>
+        </div>
+        </section>
+
+        <section class="oc-settings-group" id="settingsPanePlugins" data-settings-pane="plugins" role="tabpanel" aria-labelledby="settingsNavPlugins">
+        <div class="oc-section-title" data-i18n="uxp.settings.plugin_trust">Plugins</div>
+        <div class="oc-card" id="uxpPluginTrustCard">
+          <p class="oc-hint" data-i18n="uxp.settings.plugin_trust_hint">Review plugin locks, capability requests, failed loads, marketplace cache, and quarantine before enabling third-party automation.</p>
+          <div class="oc-inline-summary-grid oc-inline-summary-grid--settings" aria-label="Plugin trust summary" data-i18n-aria-label="uxp.settings.plugin_trust_summary">
+            <div class="oc-inline-stat">
+              <span class="oc-label" data-i18n="uxp.settings.loaded">Loaded</span>
+              <span class="oc-inline-value" id="settingsPluginLoadedValue" data-i18n="uxp.settings.loading">Loading…</span>
+            </div>
+            <div class="oc-inline-stat">
+              <span class="oc-label" data-i18n="uxp.settings.failed_unsigned">Failed / Unsigned</span>
+              <span class="oc-inline-value" id="settingsPluginFailedValue" data-i18n="uxp.settings.loading">Loading…</span>
+            </div>
+            <div class="oc-inline-stat">
+              <span class="oc-label" data-i18n="uxp.settings.quarantine">Quarantine</span>
+              <span class="oc-inline-value" id="settingsPluginQuarantineValue" data-i18n="uxp.settings.loading">Loading…</span>
+            </div>
+            <div class="oc-inline-stat">
+              <span class="oc-label" data-i18n="uxp.settings.marketplace">Marketplace</span>
+              <span class="oc-inline-value" id="settingsPluginMarketplaceValue" data-i18n="uxp.settings.loading">Loading…</span>
+            </div>
+          </div>
+          <div class="oc-status-line" id="settingsPluginTrustStatus" role="status" aria-live="polite" data-i18n="uxp.settings.loading_plugin_trust">Loading plugin trust dashboard…</div>
+          <div id="uxpPluginTrustGrid" class="oc-engine-grid">
+            <div class="oc-empty-state oc-empty-state-inline">
+              <div class="oc-empty-state-kicker" data-i18n="uxp.settings.plugin_trust">Plugins</div>
+              <p data-i18n="uxp.settings.loading_plugin_trust_hint">Checking installed plugins, locks, quarantine, and cached marketplace entries…</p>
+            </div>
+          </div>
+          <button type="button" class="oc-btn oc-btn-secondary" id="uxpRefreshPluginTrustBtn" data-i18n="uxp.settings.refresh_plugin_trust">Refresh Plugin Trust</button>
+        </div>
+        </section>
+
+        <section class="oc-settings-group" id="settingsPaneActions" data-settings-pane="actions" role="tabpanel" aria-labelledby="settingsNavActions">
+        <div class="oc-section-title" data-i18n="uxp.settings.keyboard">Fast Actions</div>
+        <div class="oc-card">
+          <p class="oc-hint" data-i18n="uxp.settings.keyboard_hint">Use these buttons to jump into high-traffic actions; the target control receives focus before anything runs.</p>
+          <div class="oc-shortcut-grid" aria-label="Fast action buttons" data-i18n-aria-label="uxp.settings.keyboard_shortcuts">
+            <div class="oc-shortcut-item">
+              <div class="oc-shortcut-copy">
+                <span class="oc-shortcut-label" data-i18n="uxp.settings.detect_silence">Detect Silence</span>
+                <span class="oc-shortcut-text" data-i18n="uxp.settings.detect_silence_text">Open the Cut workspace and focus the cleanup pass.</span>
+              </div>
+              <button type="button" class="oc-btn oc-btn-secondary oc-btn-sm oc-quick-action" data-quick-action="silence-detect" data-i18n="uxp.settings.open_action">Open</button>
+            </div>
+            <div class="oc-shortcut-item">
+              <div class="oc-shortcut-copy">
+                <span class="oc-shortcut-label" data-i18n="uxp.settings.generate_captions">Generate Captions</span>
+                <span class="oc-shortcut-text" data-i18n="uxp.settings.generate_captions_text">Open Captions and focus the transcription action.</span>
+              </div>
+              <button type="button" class="oc-btn oc-btn-secondary oc-btn-sm oc-quick-action" data-quick-action="caption-generate" data-i18n="uxp.settings.open_action">Open</button>
+            </div>
+            <div class="oc-shortcut-item">
+              <div class="oc-shortcut-copy">
+                <span class="oc-shortcut-label" data-i18n="uxp.settings.normalize_audio">Normalize Audio</span>
+                <span class="oc-shortcut-text" data-i18n="uxp.settings.normalize_audio_text">Open Audio and focus normalization before export or review.</span>
+              </div>
+              <button type="button" class="oc-btn oc-btn-secondary oc-btn-sm oc-quick-action" data-quick-action="audio-normalize" data-i18n="uxp.settings.open_action">Open</button>
+            </div>
+            <div class="oc-shortcut-item">
+              <div class="oc-shortcut-copy">
+                <span class="oc-shortcut-label" data-i18n="uxp.settings.cancel_active_job">Cancel Active Job</span>
+                <span class="oc-shortcut-text" data-i18n="uxp.settings.cancel_active_job_text">Stop a long-running process from the visible action button.</span>
+              </div>
+              <button type="button" class="oc-btn oc-btn-secondary oc-btn-sm oc-quick-action" data-quick-action="cancel-job" disabled data-i18n="uxp.settings.cancel_job_action">Cancel</button>
+            </div>
+          </div>
+        </div>
+        </section>
+
+        <section class="oc-settings-group" id="settingsPaneAbout" data-settings-pane="about" role="tabpanel" aria-labelledby="settingsNavAbout">
+        <div class="oc-section-title" data-i18n="uxp.settings.about">About</div>
+        <div class="oc-card" id="uxpUpdateNoticeCard" data-state="checking" aria-labelledby="uxpUpdateNoticeTitle">
+          <div class="oc-card-header">
+            <span id="uxpUpdateNoticeTitle" data-i18n="uxp.settings.updates">Updates</span>
+            <span class="oc-inline-value" id="uxpUpdateStatusText" data-state="working" data-i18n="uxp.settings.update_checking">Checking…</span>
+          </div>
+          <div class="oc-field-row">
+            <span class="oc-label" data-i18n="uxp.settings.update_current">Current</span>
+            <strong class="oc-inline-value" id="uxpUpdateCurrentVersion">1.55.1</strong>
+          </div>
+          <div class="oc-field-row">
+            <span class="oc-label" data-i18n="uxp.settings.update_available_version">Available</span>
+            <strong class="oc-inline-value" id="uxpUpdateAvailableVersion">—</strong>
+          </div>
+          <div class="oc-status-line" id="uxpUpdateSummary" role="status" aria-live="polite" data-i18n="uxp.settings.update_checking_summary">Checking GitHub for the latest OpenCut release.</div>
+          <div class="oc-update-release-details" id="uxpUpdateReleaseDetails" hidden>
+            <strong class="oc-card-copy" id="uxpUpdateReleaseName"></strong>
+            <details class="oc-update-notes" id="uxpUpdateNotesDetails" hidden>
+              <summary data-i18n="uxp.settings.update_release_notes">Release notes</summary>
+              <div class="oc-update-release-notes" id="uxpUpdateReleaseNotes"></div>
+            </details>
+            <div class="oc-btn-row">
+              <button type="button" class="oc-btn oc-btn-primary oc-btn-sm" id="uxpUpdateOpenBtn" data-i18n="uxp.settings.update_view_release">View Release</button>
+              <button type="button" class="oc-btn oc-btn-secondary oc-btn-sm" id="uxpUpdateDismissBtn" data-i18n="uxp.settings.update_dismiss">Dismiss</button>
+            </div>
+          </div>
+          <div class="oc-btn-row">
+            <button type="button" class="oc-btn oc-btn-secondary oc-btn-sm" id="uxpUpdateRetryBtn" data-i18n="uxp.settings.update_check_again">Check Again</button>
+          </div>
+        </div>
+        <div class="oc-card">
+          <div class="oc-field-row">
+            <span class="oc-label" data-i18n="uxp.settings.version">Version</span>
+                <span id="uxpVersionDisplay">1.55.1 (UXP)</span>
+          </div>
+          <div class="oc-field-row">
+            <span class="oc-label" data-i18n="uxp.settings.panel">Panel</span>
+            <span data-i18n="uxp.settings.panel_premiere_uxp">UXP panel for Premiere Pro 25.6+</span>
+          </div>
+        </div>
+        </section>
+      </div>
+
+    </main>
+
+    <div id="uxpOnboardingOverlay" class="oc-onboarding-overlay" hidden aria-hidden="true">
+      <div class="oc-onboarding-card" role="dialog" aria-modal="true" aria-labelledby="uxpOnboardingTitle" aria-describedby="uxpOnboardingBody">
+        <div class="oc-onboarding-kicker" data-i18n="uxp.onboarding.kicker">Getting started</div>
+        <div class="oc-onboarding-step" id="uxpOnboardingStep" aria-live="polite"></div>
+        <h2 id="uxpOnboardingTitle"></h2>
+        <p id="uxpOnboardingBody"></p>
+        <div class="oc-btn-row oc-onboarding-action-row">
+          <button type="button" class="oc-btn oc-btn-primary" id="uxpOnboardingActionBtn"></button>
+        </div>
+        <div class="oc-btn-row oc-onboarding-footer">
+          <button type="button" class="oc-btn oc-btn-ghost" id="uxpOnboardingBackBtn" data-i18n="uxp.onboarding.back">Back</button>
+          <button type="button" class="oc-btn oc-btn-ghost" id="uxpOnboardingSkipBtn" data-i18n="uxp.onboarding.skip">Skip</button>
+          <button type="button" class="oc-btn oc-btn-secondary" id="uxpOnboardingNextBtn" data-i18n="uxp.onboarding.next">Next</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== TOAST AREA ===== -->
+    <div id="toastArea" class="oc-toast-area" aria-live="polite" aria-atomic="false"></div>
+
+  </div><!-- #app -->
+
+  <script type="module" src="studio-workbench-v2.js"></script>
+  <script type="module" src="main.js"></script>
+  <script type="module">
+    if (localStorage.getItem("opencut_debug") === "1") {
+      import("./udt-smoke.js");
+    }
+  </script>
+</body>
+</html>
