@@ -14,6 +14,8 @@ Analyse et XML ont été testés avec le binaire réel et un audio de validation
 
 ## Installer le moteur et lancer le service
 
+**Zoom interlocuteur / Libellés timeline** : le code permet de lire les couleurs du projet enregistré, capturer un cadrage par couleur et source, puis envoyer des cadrages fixes ou animés aux clips sélectionnés. Les associations sont mémorisées dans les données locales du plugin. Ce nouveau parcours reste à valider dans Premiere et demeure grisé. Le mode Voix reste à développer. Voir [Zooms](docs/zooms.md).
+
 ```sh
 npm run setup:engine
 npm run service

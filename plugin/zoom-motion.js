@@ -67,6 +67,10 @@
     mode = button.dataset.zoomMode; say(''); refresh();
   }));
   document.querySelectorAll('[data-speaker-source]').forEach((button) => bind(button, () => {
+    if (busy || el('apply-zoom').getAttribute('aria-disabled') === 'true') return;
+    el('speaker-labels-pane').hidden = button.dataset.speakerSource !== 'labels';
+    el('speaker-voice-pending').hidden = button.dataset.speakerSource !== 'voice';
+    el('speaker-label-status').hidden = button.dataset.speakerSource !== 'labels';
     document.querySelectorAll('[data-speaker-source]').forEach((other) => {
       const active = other === button;
       other.classList.toggle('is-active', active); other.setAttribute('aria-pressed', String(active));
@@ -199,6 +203,13 @@
     } catch (error) { say(error.message || 'Animation indisponible.', 'error'); }
     finally { busy = false; el('apply-zoom').setAttribute('aria-disabled', 'false'); }
   }
-  window.NocturnzZoom = { usesMotion, applyMotion };
+  window.NocturnzZoom = {
+    usesMotion, applyMotion, buildKeys, presets,
+    acquire() {
+      if (busy || el('apply-zoom').getAttribute('aria-disabled') === 'true') return false;
+      busy = true; el('apply-zoom').setAttribute('aria-disabled', 'true'); return true;
+    },
+    release() { busy = false; el('apply-zoom').setAttribute('aria-disabled', 'false'); },
+  };
   refresh();
 })();

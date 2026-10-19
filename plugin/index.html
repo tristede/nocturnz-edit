@@ -74,7 +74,26 @@
               <div class="is-active" role="button" tabindex="0" data-speaker-source="labels" aria-pressed="true"><img src="icons/zoom-labels.svg" alt="" width="28" height="28"><span>Libellés timeline</span></div>
               <div role="button" tabindex="0" data-speaker-source="voice" aria-pressed="false"><img src="icons/zoom-voice.svg" alt="" width="28" height="28"><span>Voix</span></div>
             </div>
-            <p class="pending-state" role="status">En développement</p>
+            <section id="speaker-labels-pane">
+              <div class="button button-secondary" id="speaker-read-labels" role="button" tabindex="0">Lire les libellés enregistrés</div>
+              <p class="source-name" id="speaker-label-source">Projet enregistré</p>
+              <div id="speaker-label-rows"></div>
+              <section id="speaker-apply-controls" hidden>
+                <div class="zoom-fields"><label>Preset<select id="speaker-preset"></select></label></div>
+                <section id="speaker-amount-field" hidden>
+                  <div class="control-label-row"><label for="speaker-amount">Intensité</label><output id="speaker-amount-value">10 %</output></div>
+                  <input class="zoom-range" id="speaker-amount" type="range" min="1" max="100" step="1" value="10">
+                </section>
+                <div class="zoom-fields" id="speaker-motion-fields" hidden>
+                  <label>Durée<select id="speaker-duration"><option value="0">Tout le clip</option><option value="300">0,3 s</option><option value="600">0,6 s</option><option value="1200">1,2 s</option><option value="2400">2,4 s</option></select></label>
+                  <label>Courbe<select id="speaker-easing"><option value="smooth">Douce</option><option value="linear">Linéaire</option></select></label>
+                </div>
+                <div class="zoom-scope">Clips vidéo sélectionnés · libellés enregistrés</div>
+                <div class="button button-primary" id="speaker-apply" role="button" tabindex="0">Appliquer les cadrages</div>
+              </section>
+            </section>
+            <p class="pending-state" id="speaker-voice-pending" role="status" hidden>Voix · en développement</p>
+            <p class="tool-status" id="speaker-label-status" role="status" aria-live="polite"></p>
           </section>
           <section id="zoom-shared-settings">
           <div class="control-label-row"><label for="zoom-increase">Intensité</label><output id="zoom-value" for="zoom-increase">10 %</output></div>
@@ -107,6 +126,7 @@
   </main>
   <script src="silences.js"></script>
   <script src="zoom-motion.js"></script>
+  <script src="speaker-labels.js"></script>
   <script src="index.js"></script>
 </body>
 </html>

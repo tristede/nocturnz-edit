@@ -10,13 +10,14 @@ if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from service.auto_editor import ROOT, engine_info
 from service.jobs import Jobs
+from service.timeline_labels import read_timeline_labels
 
 
 def health_payload():
     engine = engine_info()
     return {
-        'name': 'Nocturnz/Edit Local Service', 'version': '0.2.0', 'status': 'ready',
-        'capabilities': ['silence-analysis', 'silence-review', 'premiere-xml-export'] if engine['available'] else [],
+        'name': 'Nocturnz/Edit Local Service', 'version': '0.3.0', 'status': 'ready',
+        'capabilities': ['saved-timeline-labels'] + (['silence-analysis', 'silence-review', 'premiere-xml-export'] if engine['available'] else []),
         'mediaProcessing': engine['available'], 'engines': [engine],
     }
 
@@ -77,7 +78,9 @@ class Handler(BaseHTTPRequestHandler):
             payload = json.loads(self.rfile.read(length))
             if not isinstance(payload, dict):
                 raise ValueError('Objet JSON requis.')
-            if self.path == '/api/v1/silences/analyze':
+            if self.path == '/api/v1/zooms/labels/read':
+                self.reply(200, read_timeline_labels(payload))
+            elif self.path == '/api/v1/silences/analyze':
                 if not engine_info()['available']:
                     self.reply(503, {'error': 'Moteur absent : lance python3 scripts/install-engine.py.'})
                     return

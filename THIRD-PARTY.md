@@ -30,6 +30,12 @@ Voir [l’inventaire et les conditions de reprise](vendor/README.md) et [la corr
 
 ## Hôte et environnements
 
+### Lecture des libellés de timeline
+
+Le lecteur original `service/timeline_labels.py` reprend les chemins du graphe de projet documentés dans le code [Pouf/py-premiere](https://github.com/Pouf/py-premiere) au commit `38e72ef5d389f472183fb23c471f9c9eb79394f8` (MIT, copyright 2026 Aurore Delaunay). Licence et attribution conservées dans [third_party/py-premiere.LICENSE](third_party/py-premiere.LICENSE). La bibliothèque n’est pas installée ni importée; aucun de ses scripts n’a été exécuté. Aucun média ni projet de démonstration amont n’est redistribué.
+
+### Adobe et environnements
+
 Adobe Premiere et UXP Developer Tool sont propriétaires et ne sont pas redistribués. Node.js et Python sont des environnements externes. Aucune dépendance Python tierce n’est requise par le service Nocturnz.
 
 ## Modèles et médias
