@@ -7,7 +7,8 @@ Le périmètre final comprend le nettoyage des silences, hésitations et répét
 - [x] Créer un dépôt autonome identifié à la suite Nocturnz.
 - [x] Charger un panneau UXP et vérifier l’accès à l’API Premiere.
 - [x] Lire séquence, cadence, dimensions, pistes vidéo et clips.
-- [ ] Vérifier la version de Premiere effectivement utilisée par Adam.
+- [x] Ajouter un zoom relatif sur les clips sélectionnés, en préservant l’échelle existante et via une transaction annulable (vérifié sur un clip réel; annulation lancée, retour de valeur à revalider).
+- [x] Vérifier la version de Premiere utilisée pour la validation initiale (Beta 27.0.0).
 - [ ] Dupliquer une séquence de manière annulable.
 - [ ] Couper un rush au milieu, puis appliquer position/échelle et images clés.
 - [ ] Confirmer le résultat visuel et le retour arrière dans Premiere.
@@ -20,6 +21,9 @@ Le périmètre final comprend le nettoyage des silences, hésitations et répét
 - Révision réversible, duplication, préservation des médias et corrections manuelles.
 
 ## C — nettoyage et texte
+
+Première tranche Silences implémentée avec auto-editor 29.3.1 : analyse d’un média source, marges/durée minimale, révision et XML. Moteur réel testé; intégration UXP source/import et traitement de la timeline complète restent à valider/développer. Le module reste grisé.
+
 
 - Détection de silences par seuil et VAD, marges, pistes et pauses naturelles.
 - Transcription française locale modifiable; hésitations, reprises et répétitions révisables.

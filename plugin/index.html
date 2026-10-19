@@ -1,48 +1,87 @@
 <!doctype html>
 <html lang="fr">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <link rel="stylesheet" href="panel.css">
-    <title>Nocturnz</title>
-  </head>
-  <body>
-    <main class="panel">
-      <header class="header">
-        <div class="brand"><span class="mark">N</span><span>Nocturnz Edit</span></div>
-        <span class="edition">PREMIERE</span>
-      </header>
-
-      <section class="intro">
-        <p class="eyebrow">ESPACE DE TRAVAIL</p>
-        <h1>Montage</h1>
-        <p class="sequence-status" id="host-status">Connecte le panneau à Premiere.</p>
-      </section>
-
-      <section class="card sequence-card">
-        <div class="card-head">
-          <div><p class="eyebrow">SÉQUENCE ACTIVE</p><h2 id="sequence-name">Aucune séquence lue</h2></div>
-          <span class="host-dot" id="host-dot" aria-label="État de Premiere"></span>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="panel.css"><title>Nocturnz Edit</title></head>
+<body>
+  <main class="panel">
+    <header class="topbar">
+      <div class="brand">Nocturnz<span> Edit</span></div>
+      <div class="header-actions"><span class="host-dot" id="host-dot"><span class="sr-only" id="host-status">Premiere déconnecté</span></span><div class="icon-button" role="button" tabindex="0" id="open-settings" aria-label="Réglages"><img src="icons/settings.svg" alt="" width="22" height="22"></div></div>
+    </header>
+    <div class="panel-scroll" id="workspace">
+      <section id="home-view" aria-label="Outils">
+        <div class="modules-grid">
+            <div class="module-tile is-unfinished" role="button" tabindex="0" data-tool="silences" data-title="Silences" aria-label="Silences"><img src="icons/unfinished/silences.svg" alt="" width="38" height="38"><span>Silences</span></div>
+            <div class="module-tile is-unfinished" role="button" tabindex="0" data-tool="hesitations" data-title="Hésitations" aria-label="Hésitations"><img src="icons/unfinished/hesitations.svg" alt="" width="38" height="38"><span>Hésitations</span></div>
+            <div class="module-tile is-unfinished" role="button" tabindex="0" data-tool="repetitions" data-title="Répétitions" aria-label="Répétitions"><img src="icons/unfinished/repetitions.svg" alt="" width="38" height="38"><span>Répétitions</span></div>
+            <div class="module-tile is-unfinished" role="button" tabindex="0" data-tool="transcription" data-title="Transcription" aria-label="Transcription"><img src="icons/unfinished/transcription.svg" alt="" width="38" height="38"><span>Transcription</span></div>
+            <div class="module-tile is-unfinished" role="button" tabindex="0" data-tool="captions" data-title="Sous-titres" aria-label="Sous-titres"><img src="icons/unfinished/captions.svg" alt="" width="38" height="38"><span>Sous-titres</span></div>
+            <div class="module-tile is-unfinished" role="button" tabindex="0" data-tool="podcast" data-title="Podcast" aria-label="Podcast"><img src="icons/unfinished/podcast.svg" alt="" width="38" height="38"><span>Podcast</span></div>
+            <div class="module-tile is-unfinished" role="button" tabindex="0" data-tool="cadrages" data-title="Cadrages" aria-label="Cadrages"><img src="icons/unfinished/cadrages.svg" alt="" width="38" height="38"><span>Cadrages</span></div>
+            <div class="module-tile" role="button" tabindex="0" data-tool="zooms" data-title="Zooms" aria-label="Zooms"><img src="icons/zooms.svg" alt="" width="38" height="38"><span>Zooms</span></div>
+            <div class="module-tile is-unfinished" role="button" tabindex="0" data-tool="recadrage" data-title="Recadrage" aria-label="Recadrage"><img src="icons/unfinished/recadrage.svg" alt="" width="38" height="38"><span>Recadrage</span></div>
+            <div class="module-tile is-unfinished" role="button" tabindex="0" data-tool="shorts" data-title="Shorts" aria-label="Shorts"><img src="icons/unfinished/shorts.svg" alt="" width="38" height="38"><span>Shorts</span></div>
+            <div class="module-tile is-unfinished" role="button" tabindex="0" data-tool="chapitres" data-title="Chapitres" aria-label="Chapitres"><img src="icons/unfinished/chapitres.svg" alt="" width="38" height="38"><span>Chapitres</span></div>
+            <div class="module-tile is-unfinished" role="button" tabindex="0" data-tool="broll" data-title="B-roll" aria-label="B-roll"><img src="icons/unfinished/broll.svg" alt="" width="38" height="38"><span>B-roll</span></div>
+            <div class="module-tile is-unfinished" role="button" tabindex="0" data-tool="audio" data-title="Audio" aria-label="Audio"><img src="icons/unfinished/audio.svg" alt="" width="38" height="38"><span>Audio</span></div>
+            <div class="module-tile is-unfinished" role="button" tabindex="0" data-tool="musique" data-title="Musique" aria-label="Musique"><img src="icons/unfinished/musique.svg" alt="" width="38" height="38"><span>Musique</span></div>
+            <div class="module-tile is-unfinished" role="button" tabindex="0" data-tool="censure" data-title="Censure" aria-label="Censure"><img src="icons/unfinished/censure.svg" alt="" width="38" height="38"><span>Censure</span></div>
+            <div class="module-tile is-unfinished" role="button" tabindex="0" data-tool="recettes" data-title="Recettes" aria-label="Recettes"><img src="icons/unfinished/recettes.svg" alt="" width="38" height="38"><span>Recettes</span></div>
+            <div class="module-tile is-unfinished" role="button" tabindex="0" data-tool="lots" data-title="Traitement par lot" aria-label="Traitement par lot"><img src="icons/unfinished/lots.svg" alt="" width="38" height="38"><span>Traitement par lot</span></div>
         </div>
-        <div class="sequence-meta" id="sequence-meta">La lecture ne modifie pas ton projet.</div>
-        <button class="button button-primary" id="read-sequence">Lire la séquence active</button>
-        <button class="button button-secondary" id="inspect-selection">Lire les effets de la sélection</button>
-        <div class="track-list" id="track-list" aria-live="polite"></div>
-        <div class="effect-report" id="effect-report" aria-live="polite"></div>
       </section>
-
-      <section class="card local-card">
-        <div class="card-head">
-          <div><p class="eyebrow">MOTEUR LOCAL</p><h2>Service Nocturnz</h2></div>
-          <span class="service-state" id="service-state">Non vérifié</span>
-        </div>
-        <p class="muted" id="service-detail">Les médias restent sur cette machine. Aucun traitement n’est encore lancé.</p>
-        <button class="button button-secondary" id="check-service">Vérifier le service</button>
+      <section id="tool-view" hidden>
+        <div class="back-link" role="button" tabindex="0" data-home><img src="icons/back.svg" alt="" width="16" height="16"><span>Outils</span></div>
+        <div class="tool-page-heading"><img id="tool-icon" src="icons/zooms.svg" alt="" width="34" height="34"><h1 id="tool-title">Zooms</h1></div>
+        <p class="pending-state" id="pending-state" role="status">À développer</p>
+        <section id="silence-controls" hidden>
+          <div class="source-actions"><div class="button button-secondary" id="silence-selection" role="button" tabindex="0">Sélection Premiere</div><div class="button button-secondary" id="silence-file" role="button" tabindex="0">Fichier</div></div>
+          <p class="source-name" id="silence-source">—</p>
+          <div class="silence-fields">
+            <label>Seuil (dB)<input id="silence-threshold" type="number" min="-90" max="0" step="1" value="-35"></label>
+            <label>Silence minimum (ms)<input id="silence-minimum" type="number" min="40" max="60000" step="20" value="400"></label>
+            <label>Marge avant (ms)<input id="silence-before" type="number" min="0" max="5000" step="20" value="120"></label>
+            <label>Marge après (ms)<input id="silence-after" type="number" min="0" max="5000" step="20" value="120"></label>
+            <label>Piste source<select id="silence-stream"><option value="all">Toutes</option><option value="0">1</option><option value="1">2</option><option value="2">3</option><option value="3">4</option></select></label>
+            <label>Cadence<input id="silence-rate" type="text" value="25/1"></label>
+          </div>
+          <div class="button button-primary" id="silence-analyze" role="button" tabindex="0">Analyser la source</div>
+          <div class="button button-secondary" id="silence-cancel" role="button" tabindex="0" hidden>Annuler</div>
+          <p class="tool-status" id="silence-status" role="status" aria-live="polite"></p>
+          <section id="silence-review" hidden>
+            <div class="results-heading"><h2>Coupes proposées</h2><span id="silence-summary"></span></div>
+            <div class="review-actions"><div role="button" tabindex="0" id="silence-accept-all">Tout couper</div><div role="button" tabindex="0" id="silence-reject-all">Tout garder</div></div>
+            <div id="silence-cuts"></div>
+            <div class="review-actions"><div role="button" tabindex="0" id="silence-previous">Précédent</div><span id="silence-page"></span><div role="button" tabindex="0" id="silence-next">Suivant</div></div>
+            <div class="button button-primary" id="silence-export" role="button" tabindex="0">Générer XML source</div>
+            <div class="button button-secondary" id="silence-save" role="button" tabindex="0" hidden>Enregistrer XML</div>
+            <div class="button button-secondary" id="silence-import" role="button" tabindex="0" hidden>Importer comme nouvelle séquence source</div>
+          </section>
+        </section>
+        <section id="zoom-controls" hidden>
+          <h2>Zoom relatif</h2>
+          <div class="control-label-row"><label for="zoom-increase">Intensité</label><output id="zoom-value" for="zoom-increase">10 %</output></div>
+          <input class="zoom-range" id="zoom-range" type="range" min="1" max="200" step="1" value="10" aria-label="Intensité du zoom">
+          <div class="quick-values"><div role="button" tabindex="0" data-zoom="5">+5</div><div role="button" tabindex="0" data-zoom="10" class="is-active">+10</div><div role="button" tabindex="0" data-zoom="20">+20</div></div>
+          <input class="number-input" id="zoom-increase" type="number" min="1" max="200" step="1" value="10" aria-label="Intensité du zoom en pourcentage">
+          <div class="button button-primary" id="apply-zoom" role="button" tabindex="0">Appliquer</div>
+          <p class="tool-status" id="zoom-status" role="status" aria-live="polite"></p>
+        </section>
       </section>
-
-      <footer><span>Lecture seule · étape A</span><span>v0.1.0</span></footer>
+      <section id="settings-view" hidden>
+        <div class="back-link" role="button" tabindex="0" data-home><img src="icons/back.svg" alt="" width="16" height="16"><span>Outils</span></div>
+        <h1>Réglages</h1>
+        <section class="settings-section"><h2>Séquence</h2><h3 id="sequence-name">—</h3><p id="sequence-meta" class="muted"></p>
+          <div class="button button-secondary" id="read-sequence" role="button" tabindex="0">Actualiser</div>
+          <section id="sequence-results" hidden><div class="results-heading"><h3>Pistes vidéo</h3><span id="clip-total"></span></div><div id="track-list" class="muted"></div></section>
+          <div class="button button-secondary" id="inspect-selection" role="button" tabindex="0">Inspecter la sélection</div><div class="effect-report" id="effect-report" aria-live="polite"></div>
+        </section>
+        <section class="settings-section"><div class="results-heading"><h2>Moteur local</h2><span class="service-state" id="service-state">Non vérifié</span></div><div class="button button-secondary" id="check-service" role="button" tabindex="0">Vérifier</div><p class="muted" id="service-detail"></p></section>
+        <span class="version">v0.1.0</span>
+      </section>
       <p class="notice" id="notice" role="status" aria-live="polite"></p>
-    </main>
-    <script src="index.js"></script>
-  </body>
+    </div>
+  </main>
+  <script src="silences.js"></script>
+  <script src="index.js"></script>
+</body>
 </html>
