@@ -56,6 +56,65 @@ async function readSequence() {
   }
 }
 
+async function inspectSelection() {
+  if (!premiere) {
+    status('L’API Premiere est disponible uniquement dans Premiere Pro.', true);
+    return;
+  }
+  $('inspect-selection').disabled = true;
+  $('effect-report').replaceChildren();
+  status('Lecture de la sélection…');
+  try {
+    const project = await premiere.Project.getActiveProject();
+    const sequence = project && await project.getActiveSequence();
+    if (!sequence) throw new Error('Aucune séquence active.');
+    const selection = await sequence.getSelection();
+    const items = selection ? await selection.getTrackItems() : [];
+    if (!items.length) throw new Error('Sélectionne un clip vidéo dans la timeline.');
+
+    let componentTotal = 0;
+    for (const item of items) {
+      const name = await item.getName();
+      const trackIndex = await item.getTrackIndex();
+      const chain = await item.getComponentChain();
+      const componentCount = chain.getComponentCount();
+      const heading = document.createElement('p');
+      heading.className = 'effect-title';
+      heading.textContent = `${name} · piste ${trackIndex + 1}`;
+      $('effect-report').appendChild(heading);
+
+      for (let index = 0; index < componentCount; index += 1) {
+        const component = chain.getComponentAtIndex(index);
+        const [displayName, matchName] = await Promise.all([
+          component.getDisplayName(), component.getMatchName(),
+        ]);
+        const paramCount = component.getParamCount();
+        const paramNames = [];
+        for (let paramIndex = 0; paramIndex < paramCount; paramIndex += 1) {
+          const param = component.getParam(paramIndex);
+          if (param && param.displayName) paramNames.push(param.displayName);
+        }
+        const block = document.createElement('div');
+        block.className = 'effect-block';
+        const title = document.createElement('p');
+        title.className = 'effect-title';
+        title.textContent = displayName || matchName || `Effet ${index + 1}`;
+        const params = document.createElement('p');
+        params.className = 'effect-params';
+        params.textContent = paramNames.join(' · ') || 'Aucun paramètre exposé';
+        block.append(title, params);
+        $('effect-report').appendChild(block);
+        componentTotal += 1;
+      }
+    }
+    status(`${items.length} clip${items.length > 1 ? 's' : ''} lus · ${componentTotal} effet${componentTotal > 1 ? 's' : ''}. Aucune modification appliquée.`);
+  } catch (error) {
+    status(error.message || 'La sélection n’a pas pu être lue.', true);
+  } finally {
+    $('inspect-selection').disabled = false;
+  }
+}
+
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 }
@@ -81,6 +140,7 @@ async function checkService() {
 }
 
 $('read-sequence').addEventListener('click', readSequence);
+$('inspect-selection').addEventListener('click', inspectSelection);
 $('check-service').addEventListener('click', checkService);
 
 entrypoints.setup({

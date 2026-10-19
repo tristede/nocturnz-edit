@@ -9,6 +9,7 @@
 ## Lecture
 
 - Comparer le nom de la séquence, la cadence, la taille d’image, le nombre de pistes vidéo et les noms/durées des clips avec la timeline.
+- Sélectionner un clip déjà recadré et comparer les noms d’effets/paramètres affichés par le panneau à ceux de Premiere.
 - Tester une cadence fractionnaire (par ex. 30000/1001), un clip commençant après zéro et un clip déjà recadré.
 
 ## Modifications à valider avant activation
