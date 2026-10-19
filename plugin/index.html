@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="panel.css">
+    <title>Nocturnz</title>
+  </head>
+  <body>
+    <main class="panel">
+      <header class="header">
+        <div class="brand"><span class="mark">N</span><span>Nocturnz Edit</span></div>
+        <span class="edition">PREMIERE</span>
+      </header>
+
+      <section class="intro">
+        <p class="eyebrow">ESPACE DE TRAVAIL</p>
+        <h1>Montage</h1>
+        <p class="sequence-status" id="host-status">Connecte le panneau à Premiere.</p>
+      </section>
+
+      <section class="card sequence-card">
+        <div class="card-head">
+          <div><p class="eyebrow">SÉQUENCE ACTIVE</p><h2 id="sequence-name">Aucune séquence lue</h2></div>
+          <span class="host-dot" id="host-dot" aria-label="État de Premiere"></span>
+        </div>
+        <div class="sequence-meta" id="sequence-meta">La lecture ne modifie pas ton projet.</div>
+        <button class="button button-primary" id="read-sequence">Lire la séquence active</button>
+        <div class="track-list" id="track-list" aria-live="polite"></div>
+      </section>
+
+      <section class="card local-card">
+        <div class="card-head">
+          <div><p class="eyebrow">MOTEUR LOCAL</p><h2>Service Nocturnz</h2></div>
+          <span class="service-state" id="service-state">Non vérifié</span>
+        </div>
+        <p class="muted" id="service-detail">Les médias restent sur cette machine. Aucun traitement n’est encore lancé.</p>
+        <button class="button button-secondary" id="check-service">Vérifier le service</button>
+      </section>
+
+      <footer><span>Lecture seule · étape A</span><span>v0.1.0</span></footer>
+      <p class="notice" id="notice" role="status" aria-live="polite"></p>
+    </main>
+    <script src="index.js"></script>
+  </body>
+</html>
