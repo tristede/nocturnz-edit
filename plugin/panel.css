@@ -36,6 +36,22 @@ h2 { margin:0 0 18px; font-size:14px; font-weight:600; }
 h3 { font-size:12px; font-weight:550; margin:7px 0; }
 .pending-state { margin:18px 0; color:var(--faint); font-size:12px; }
 #zoom-controls { padding:19px 16px; border:1px solid var(--line); border-radius:10px; background:rgba(134,89,201,.05); }
+.zoom-modes { display:flex; flex-wrap:wrap; border-bottom:1px solid var(--line); padding-bottom:12px; margin-bottom:18px; }
+.zoom-modes [role=button] { padding:7px 8px; border-radius:5px; color:var(--muted); font-size:11px; cursor:pointer; }
+.zoom-modes [role=button].is-active { color:var(--lilac); background:rgba(134,89,201,.16); }
+.zoom-modes [role=button].is-pending { color:var(--faint); }
+.zoom-presets,.speaker-sources { display:flex; flex-wrap:wrap; justify-content:space-between; }
+.zoom-preset,.speaker-sources [role=button] { display:flex; flex-direction:column; justify-content:center; align-items:center; width:calc(50% - 4px); min-height:83px; margin-bottom:8px; border:1px solid var(--line); border-radius:7px; color:var(--muted); font-size:11px; cursor:pointer; }
+.zoom-preset img,.speaker-sources img { margin-bottom:9px; }
+.zoom-preset:hover,.speaker-sources [role=button]:hover { background:rgba(134,89,201,.08); }
+.zoom-preset.is-active,.speaker-sources .is-active { background:rgba(134,89,201,.12); border-color:rgba(203,179,236,.4); color:var(--lilac); }
+.zoom-preset.is-pending { color:var(--faint); }
+.zoom-preset.is-pending img { opacity:.5; }
+.speaker-sources { opacity:.5; }
+.zoom-fields { display:flex; flex-wrap:wrap; justify-content:space-between; margin-top:14px; }
+.zoom-fields label { flex:1; min-width:100px; margin:0 6px 10px 0; font-size:10px; color:var(--muted); }
+.zoom-fields select { display:block; width:100%; min-height:32px; margin-top:5px; padding:6px 8px; border:1px solid var(--line); border-radius:5px; background:#120d1e; color:var(--text); font:inherit; font-size:11px; }
+.zoom-scope { margin-top:18px; color:var(--faint); font-size:10px; }
 .control-label-row,.results-heading { display:flex; align-items:baseline; justify-content:space-between; margin:12px 0 4px; }
 .control-label-row label { font-size:11px; }
 .control-label-row output { color:var(--lilac); font-weight:600; }

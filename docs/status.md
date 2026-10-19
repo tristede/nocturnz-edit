@@ -35,3 +35,9 @@
 Sources de six dépôts copiées avec licences, commits et SHA-256 dans `vendor/manifest.json`. Correspondance des 17 modules dans `vendor/module-map.json`. Les fichiers sources importés sont inchangés; les tests et installateurs amont n’ont pas été exécutés. Aucun nouveau module n’est déclaré opérationnel sur la seule base de cet import : les adaptateurs UXP restent à développer. Les outils partiels restent grisés.
 
 `auto-zoom-premiere` est référencé sans copie publique, faute de licence identifiable. Voir `vendor/README.md` pour les exclusions de médias, modèles et binaires.
+
+## Zooms — modes et presets
+
+Interface organisée en Presets, Aux cuts et Interlocuteur. Six presets disponibles dans le code : Fixe, Lent in/out, Punch in/out, Aller-retour. L’animation In/Out et l’alternance par clip sélectionné utilisent des images clés relatives à l’échelle existante; elles restent à valider dans Premiere et sont atténuées. Aucun nouveau test ni action dans Premiere n’a été lancé pour cette tranche.
+
+Interlocuteur reste grisé en développement, avec deux sources prévues : voix ou libellés couleur des occurrences dans la timeline. Adam confirme utiliser les libellés dans la timeline; la lecture des couleurs du chutier ne satisfait pas cette demande. Voir `docs/zooms.md`.

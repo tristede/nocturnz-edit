@@ -58,12 +58,36 @@
           </section>
         </section>
         <section id="zoom-controls" hidden>
-          <h2>Zoom relatif</h2>
+          <div class="zoom-modes" aria-label="Mode de zoom">
+            <div role="button" tabindex="0" data-zoom-mode="presets" class="is-active" aria-pressed="true">Presets</div>
+            <div role="button" tabindex="0" data-zoom-mode="cuts" class="is-pending" aria-pressed="false">Aux cuts</div>
+            <div role="button" tabindex="0" data-zoom-mode="speaker" class="is-pending" aria-pressed="false">Interlocuteur</div>
+          </div>
+          <section id="zoom-presets-pane">
+            <div class="zoom-presets" id="zoom-presets" aria-label="Presets de zoom"></div>
+          </section>
+          <section id="zoom-cuts-pane" hidden>
+            <div class="zoom-fields"><label>Mouvement<select id="zoom-direction"><option value="alternate">In / Out alterné</option><option value="in">Zoom in</option><option value="out">Zoom out</option></select></label></div>
+          </section>
+          <section id="zoom-speaker-pane" hidden>
+            <div class="speaker-sources" aria-label="Source de l’interlocuteur">
+              <div class="is-active" role="button" tabindex="0" data-speaker-source="labels" aria-pressed="true"><img src="icons/zoom-labels.svg" alt="" width="28" height="28"><span>Libellés timeline</span></div>
+              <div role="button" tabindex="0" data-speaker-source="voice" aria-pressed="false"><img src="icons/zoom-voice.svg" alt="" width="28" height="28"><span>Voix</span></div>
+            </div>
+            <p class="pending-state" role="status">En développement</p>
+          </section>
+          <section id="zoom-shared-settings">
           <div class="control-label-row"><label for="zoom-increase">Intensité</label><output id="zoom-value" for="zoom-increase">10 %</output></div>
           <input class="zoom-range" id="zoom-range" type="range" min="1" max="200" step="1" value="10" aria-label="Intensité du zoom">
           <div class="quick-values"><div role="button" tabindex="0" data-zoom="5">+5</div><div role="button" tabindex="0" data-zoom="10" class="is-active">+10</div><div role="button" tabindex="0" data-zoom="20">+20</div></div>
           <input class="number-input" id="zoom-increase" type="number" min="1" max="200" step="1" value="10" aria-label="Intensité du zoom en pourcentage">
+          <div class="zoom-fields" id="zoom-motion-fields" hidden>
+            <label>Durée<select id="zoom-duration"><option value="0">Tout le clip</option><option value="300">0,3 s</option><option value="600">0,6 s</option><option value="1200">1,2 s</option><option value="2400">2,4 s</option></select></label>
+            <label>Courbe<select id="zoom-easing"><option value="smooth">Douce</option><option value="linear">Linéaire</option></select></label>
+          </div>
+          <div class="zoom-scope">Clips vidéo sélectionnés</div>
           <div class="button button-primary" id="apply-zoom" role="button" tabindex="0">Appliquer</div>
+          </section>
           <p class="tool-status" id="zoom-status" role="status" aria-live="polite"></p>
         </section>
       </section>
@@ -82,6 +106,7 @@
     </div>
   </main>
   <script src="silences.js"></script>
+  <script src="zoom-motion.js"></script>
   <script src="index.js"></script>
 </body>
 </html>

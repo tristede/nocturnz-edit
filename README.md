@@ -54,6 +54,7 @@ npm test
 - [État des fonctions](docs/status.md)
 - [Composants et licences](THIRD-PARTY.md)
 - [Protocole de validation Premiere](docs/premiere-validation.md)
+- [Zooms : modes, presets et interlocuteurs](docs/zooms.md)
 
 ## Licence
 

@@ -283,14 +283,18 @@ bindNavigation($('inspect-selection'), () => {
   if ($('inspect-selection').getAttribute('aria-disabled') !== 'true') inspectSelection();
 });
 $('apply-zoom').addEventListener('click', () => {
-  if ($('apply-zoom').getAttribute('aria-disabled') !== 'true') applyRelativeZoom();
+  if ($('apply-zoom').getAttribute('aria-disabled') !== 'true') applySelectedZoom();
 });
 $('apply-zoom').addEventListener('keydown', (event) => {
   if ((event.key === 'Enter' || event.key === ' ') && $('apply-zoom').getAttribute('aria-disabled') !== 'true') {
     event.preventDefault();
-    applyRelativeZoom();
+    applySelectedZoom();
   }
 });
+function applySelectedZoom() {
+  if (window.NocturnzZoom && window.NocturnzZoom.usesMotion()) return window.NocturnzZoom.applyMotion();
+  return applyRelativeZoom();
+}
 bindNavigation($('check-service'), () => {
   if ($('check-service').getAttribute('aria-disabled') !== 'true') checkService();
 });

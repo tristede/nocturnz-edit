@@ -37,6 +37,7 @@ Première tranche Silences implémentée avec auto-editor 29.3.1 : analyse d’u
 
 - Association manuelle voix/cadrage A/B/large, puis assistance facultative.
 - Podcast multicam, interruptions, rythme, zooms progressifs et ancres.
+- Zooms : presets et animation In/Out aux cuts implémentés, validation Premiere à faire. Zoom interlocuteur à développer avec deux entrées : voix ou libellés couleur propres aux clips de timeline (tri existant d’Adam), associés à des cadrages. Voir `docs/zooms.md`.
 - Recadrage vertical/carré, suivi facultatif, split-screen.
 
 ## E — couverture complète
