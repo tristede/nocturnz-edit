@@ -1,5 +1,11 @@
 export const TICKS_PER_SECOND = 254016000000;
 
+function roundDiv(numerator, denominator) {
+  const sign = numerator < 0n ? -1n : 1n;
+  const absolute = numerator < 0n ? -numerator : numerator;
+  return sign * ((absolute * 2n + denominator) / (2n * denominator));
+}
+
 function gcd(a, b) {
   a = Math.abs(a); b = Math.abs(b);
   while (b) [a, b] = [b, a % b];
@@ -16,7 +22,7 @@ export function rational(numerator, denominator = 1) {
 }
 
 export function secondsToTicks(seconds) {
-  if (!Number.isFinite(seconds) || seconds < 0) throw new RangeError('Durée invalide.');
+  if (!Number.isFinite(seconds)) throw new RangeError('Durée invalide.');
   const [mantissa, exponentText] = seconds.toString().toLowerCase().split('e');
   const exponent = Number(exponentText || 0);
   const [whole, fraction = ''] = mantissa.split('.');
@@ -25,7 +31,7 @@ export function secondsToTicks(seconds) {
   if (exponent > 0) numerator *= 10n ** BigInt(exponent);
   if (exponent < 0) denominator *= 10n ** BigInt(-exponent);
   const scaled = numerator * BigInt(TICKS_PER_SECOND);
-  return ((scaled * 2n + denominator) / (2n * denominator)).toString();
+  return roundDiv(scaled, denominator).toString();
 }
 
 export function ticksToSeconds(ticks) {
@@ -41,17 +47,17 @@ export function frameRate(numerator, denominator = 1) {
 }
 
 export function frameIndexToTicks(frameIndex, rate) {
-  if (!Number.isSafeInteger(frameIndex) || frameIndex < 0) throw new RangeError('Image invalide.');
+  if (!Number.isSafeInteger(frameIndex)) throw new RangeError('Image invalide.');
   const numerator = BigInt(frameIndex) * BigInt(TICKS_PER_SECOND) * BigInt(rate.denominator);
   const denominator = BigInt(rate.numerator);
-  return ((numerator * 2n + denominator) / (2n * denominator)).toString();
+  return roundDiv(numerator, denominator).toString();
 }
 
 export function ticksToFrameIndex(ticks, rate) {
   const tickValue = BigInt(ticks);
   const numerator = tickValue * BigInt(rate.numerator);
   const denominator = BigInt(TICKS_PER_SECOND) * BigInt(rate.denominator);
-  return Number((numerator * 2n + denominator) / (2n * denominator));
+  return Number(roundDiv(numerator, denominator));
 }
 
 export function composeScale(basePercent, relativePercent) {

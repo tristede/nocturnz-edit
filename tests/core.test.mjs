@@ -17,6 +17,13 @@ test('les grands temps Premiere restent des ticks exacts en chaîne', () => {
   assert.equal(ticksToSeconds(ticks), 36000.125);
 });
 
+test('la conversion conserve le signe des temps et images négatifs', () => {
+  const rate = frameRate(25);
+  assert.equal(frameIndexToTicks(-25, rate), '-254016000000');
+  assert.equal(ticksToFrameIndex('-254016000000', rate), -25);
+  assert.equal(secondsToTicks(-0.5), '-127008000000');
+});
+
 test('un zoom relatif respecte le cadrage existant', () => {
   assert.equal(composeScale(180, 110), 198);
 });
