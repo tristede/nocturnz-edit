@@ -20,8 +20,8 @@ MODULES = {
     'repetitions': dict(title='Répétitions', action='Détecter', fields=[TRANSCRIPT, LANGUAGE, MODEL,
         field('threshold', 'Similarité', default=0.6, min=0.1, max=1, step=0.05)], upstream=['repeat_detect.detect_repeated_takes']),
     'captions': dict(title='Sous-titres', action='Générer', fields=[TRANSCRIPT, LANGUAGE, MODEL,
-        field('format', 'Format', 'select', 'srt', choices=['srt', 'vtt', 'ass', 'animated']),
-        field('style', 'Style animé', 'text', 'default')], upstream=['export.srt', 'styled_captions.render_styled_caption_video']),
+        field('format', 'Format', 'select', 'animated', choices=['srt', 'vtt', 'ass', 'animated']),
+        field('style', 'Style animé', 'select', 'nocturnz', choices=['nocturnz','youtube_bold','clean_modern','neon_pop','minimal'])], upstream=['export.srt', 'styled_captions.render_styled_caption_video']),
     'podcast': dict(title='Podcast', action='Préparer le montage', multiple=True, fields=[
         field('segments', 'Prises de parole JSON', 'file', '', extensions=['json'], optional=True),
         field('minCut', 'Plan minimum (s)', default=1, min=0.2, max=60, step=0.1)],

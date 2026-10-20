@@ -45,3 +45,9 @@ Aucun modèle d’IA ni média tiers n’est redistribué dans Git. L’analyse 
 ### Runtime média des nouveaux adaptateurs
 
 Sur Mac, l’installateur compile FFmpeg avec libx264 et zlib dans `.runtime/toolchain`, à partir de commits figés; les sources, notices et logs restent dans `.runtime/`. Le build FFmpeg annonce GPL version 2 ou ultérieure. Ces exécutables ne sont pas redistribués dans le dépôt et leur licence n’est pas remplacée par la licence MIT de Nocturnz. Les dépendances Python conservent leurs métadonnées et licences dans l’environnement installé. Le détail technique et le périmètre des adaptateurs sont dans [docs/modules.md](docs/modules.md).
+
+## Lecture de transcription Adobe existante
+
+`plugin/premiere-transcript.js` est adapté de `uxp-panel/transcript-export.js` du dépôt [ayushozha/AdobePremiereProMCP](https://github.com/ayushozha/AdobePremiereProMCP), commit `36574e4920d56ae71efeb055ba8e2af827b2106c`, copyright 2026 Ayush Ojha, licence MIT conservée dans `third_party/AdobePremiereProMCP.LICENSE`. Adaptations : lecture dans le panneau, suppression de l’export manuel, récupération du chemin source et raccord au brouillon. Les services Go/Rust/CEP de ce dépôt ne sont pas embarqués.
+
+Le helper de collage `service/clipboard_image.swift` est original et utilise AppKit fourni par macOS ; aucun framework Apple n’est redistribué. OpenCurve et Ambar restent des références d’audit sans reprise de code, faute de licence trouvée dans les versions examinées.

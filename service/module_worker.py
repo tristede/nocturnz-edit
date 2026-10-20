@@ -97,13 +97,15 @@ def run(module, paths, options, directory):
         from opencut.export import srt
         format_name = options.get('format', 'srt')
         if format_name == 'animated':
-            from opencut.core.styled_captions import render_styled_caption_video
+            from opencut.core.styled_captions import render_styled_caption_video, STYLES
             from opencut.utils.media import probe
             info = probe(source)
             if not info.video:
                 raise ValueError('Le rendu animé demande une source vidéo.')
+            STYLES['nocturnz'] = dataclasses.replace(STYLES['clean_modern'], name='nocturnz', label='Nocturnz',
+                highlight_color=(203,179,236,255), action_color=(203,179,236,255))
             return render_styled_caption_video(result, str(directory / 'sous-titres.mov'),
-                style_name=options.get('style', 'default'), video_width=info.video.width,
+                style_name=options.get('style', 'nocturnz'), video_width=info.video.width,
                 video_height=info.video.height, fps=info.video.fps, total_duration=info.duration, on_progress=progress)
         return getattr(srt, 'export_' + format_name)(result, str(directory / ('sous-titres.' + format_name)))
     if module == 'podcast':
@@ -293,6 +295,10 @@ if __name__ == '__main__':
     directory = Path(sys.argv[1]).resolve()
     try:
         request = load_json(directory / 'request.json')
+        if 'editedTranscript' in request:
+            snapshot = directory / 'transcription-editee.json'
+            write_json(snapshot, request['editedTranscript'])
+            request['options']['transcript'] = str(snapshot)
         result = run(request['module'], request['paths'], request['options'], directory / 'outputs')
         write_json(directory / 'result.json', {'result': plain(result)})
         progress(100, 'Terminé')

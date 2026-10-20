@@ -177,7 +177,7 @@ window.NocturnzModules = [
         "key": "format",
         "label": "Format",
         "type": "select",
-        "default": "srt",
+        "default": "animated",
         "choices": [
           "srt",
           "vtt",
@@ -188,8 +188,15 @@ window.NocturnzModules = [
       {
         "key": "style",
         "label": "Style animé",
-        "type": "text",
-        "default": "default"
+        "type": "select",
+        "default": "nocturnz",
+        "choices": [
+          "nocturnz",
+          "youtube_bold",
+          "clean_modern",
+          "neon_pop",
+          "minimal"
+        ]
       }
     ],
     "upstream": [

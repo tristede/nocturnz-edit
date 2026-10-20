@@ -13,13 +13,14 @@ from service.jobs import Jobs
 from service.timeline_labels import read_timeline_labels
 from service.module_catalog import catalog
 from service.module_jobs import ModuleJobs
+from service.clipboard_image import paste_image
 
 
 def health_payload():
     engine = engine_info()
     return {
-        'name': 'Nocturnz/Edit Local Service', 'version': '0.4.0', 'status': 'ready',
-        'capabilities': ['saved-timeline-labels'] + (['silence-analysis', 'silence-review', 'premiere-xml-export'] if engine['available'] else []),
+        'name': 'Nocturnz/Edit Local Service', 'version': '0.5.0', 'status': 'ready',
+        'capabilities': ['saved-timeline-labels', 'caption-editor-render', 'premiere-source-transcript'] + (['clipboard-image'] if sys.platform == 'darwin' and (ROOT / '.runtime/bin/nocturnz-clipboard').is_file() else []) + (['silence-analysis', 'silence-review', 'premiere-xml-export'] if engine['available'] else []),
         'mediaProcessing': engine['available'], 'engines': [engine],
     }
 
@@ -86,12 +87,17 @@ class Handler(BaseHTTPRequestHandler):
             if self.headers.get_content_type() != 'application/json':
                 raise ValueError('JSON requis.')
             length = int(self.headers.get('Content-Length', '0'))
-            if length <= 0 or length > 1024 * 1024:
+            caption_route = self.path == '/api/v1/captions/from-premiere' or self.path.endswith('/captions')
+            if length <= 0 or length > (8 if caption_route else 1) * 1024 * 1024:
                 raise ValueError('Taille de requête invalide.')
             payload = json.loads(self.rfile.read(length))
             if not isinstance(payload, dict):
                 raise ValueError('Objet JSON requis.')
-            if self.path == '/api/v1/zooms/labels/read':
+            if self.path == '/api/v1/captions/from-premiere':
+                self.reply(202, self.server.module_jobs.from_premiere_transcript(payload))
+            elif self.path == '/api/v1/clipboard/image':
+                self.reply(201, paste_image())
+            elif self.path == '/api/v1/zooms/labels/read':
                 self.reply(200, read_timeline_labels(payload))
             elif re.fullmatch(r'/api/v1/modules/[a-z]+/run', self.path):
                 self.reply(202, self.server.module_jobs.create(self.path.split('/')[4], payload))
@@ -99,6 +105,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(200, self.server.module_jobs.cancel(self.path.split('/')[4]))
             elif re.fullmatch(r'/api/v1/module-jobs/[0-9a-f]{32}/review', self.path):
                 self.reply(202, self.server.module_jobs.review(self.path.split('/')[4], payload))
+            elif re.fullmatch(r'/api/v1/module-jobs/[0-9a-f]{32}/captions', self.path):
+                self.reply(202, self.server.module_jobs.captions(self.path.split('/')[4], payload))
             elif self.path == '/api/v1/silences/analyze':
                 if not engine_info()['available']:
                     self.reply(503, {'error': 'Moteur absent : lance python3 scripts/install-engine.py.'})

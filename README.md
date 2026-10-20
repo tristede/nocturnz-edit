@@ -19,6 +19,7 @@ Analyse et XML ont été testés avec le binaire réel et un audio de validation
 ```sh
 npm run setup:engine
 npm run setup:modules
+npm run setup:clipboard
 npm run service
 ```
 
@@ -28,10 +29,17 @@ Le service écoute uniquement `127.0.0.1:8765`. Le panneau le joint via `http://
 
 ### Utiliser Silences
 
-1. Ouvrir **Silences**, puis **Fichier**, ou sélectionner une seule source dans la timeline et choisir **Sélection Premiere**.
-2. Régler le seuil, la durée minimale et les marges, puis **Analyser la source**.
-3. Cocher les plages à retirer; décocher une plage la conserve.
-4. **Générer XML source**, puis l’enregistrer ou l’importer dans un projet Premiere ouvert. Les médias originaux restent intacts.
+1. Sélectionner un rush puis ouvrir **Silences** ; ou utiliser **Choisir**.
+2. Choisir **Naturel**, **Dynamique** ou **Prudent**, puis **Nettoyer les silences**.
+3. **Créer la version nettoyée** génère et importe une nouvelle séquence source. Ajustement des coupes et paramètres techniques restent accessibles dans les sections repliées.
+
+### Sous-titres et images
+
+**Sous-titres** : transcription locale, éditeur de mots intégré, quatre presets et rendu transparent importable ; formats texte en options avancées. La transcription d’un média déjà transcrit dans le chutier Premiere peut être reprise sans reconnaissance supplémentaire.
+
+**Images** : sur Mac, **Coller une image** ou ⌘V importe une image externe au chutier. Le helper natif se compile avec `npm run setup:clipboard`. Les médias collés persistent dans `.runtime/clipboard` : conserver ce dossier ou collecter les médias avant de déplacer le projet.
+
+Ces nouveaux parcours sont implémentés, mais leur validation complète dans Premiere reste à faire. Détails, limites et composants d’interface dans [docs/ux-outils.md](docs/ux-outils.md). Audit des dix projets récemment proposés dans [docs/audit-nouveaux-repos.md](docs/audit-nouveaux-repos.md).
 
 ## Charger le panneau UXP
 

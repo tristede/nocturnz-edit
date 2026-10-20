@@ -9,6 +9,7 @@ import math
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import time
 import xml.etree.ElementTree as ET
 
@@ -48,7 +49,24 @@ def validate_request(data):
     if not source.is_absolute() or not source.is_file() or source.suffix.lower() not in MEDIA_EXTENSIONS:
         raise ValueError('Choisis un fichier audio ou vidéo local existant.')
     source = source.resolve()
-    rate = Fraction(str(data.get('frameRate', '25/1')))
+    raw_rate = str(data.get('frameRate', '25/1'))
+    if raw_rate == 'auto':
+        private_probe = ROOT / '.runtime/toolchain/bin' / ('ffprobe.exe' if os.name == 'nt' else 'ffprobe')
+        probe = str(private_probe) if private_probe.is_file() else shutil.which('ffprobe')
+        if not probe:
+            raise ValueError('Cadence automatique indisponible : renseigne la cadence dans Options avancées.')
+        result = subprocess.run([probe, '-v', 'error', '-select_streams', 'v:0', '-show_entries',
+            'stream=avg_frame_rate,r_frame_rate', '-of', 'json', str(source)], capture_output=True, text=True, timeout=15)
+        if result.returncode:
+            raise ValueError('La cadence du média ne peut pas être lue.')
+        streams = json.loads(result.stdout).get('streams', [])
+        raw_rate = '25/1'
+        if streams:
+            raw_rate = next((streams[0].get(key) for key in ('avg_frame_rate', 'r_frame_rate')
+                if streams[0].get(key) not in (None, '0/0', '0/1')), '')
+            if not raw_rate:
+                raise ValueError('Cadence inconnue : renseigne-la dans Options avancées.')
+    rate = Fraction(raw_rate)
     if not 1 <= rate <= 240:
         raise ValueError('Cadence invalide.')
     stream = str(data.get('stream', 'all'))

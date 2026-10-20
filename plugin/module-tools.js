@@ -13,7 +13,7 @@
   const extensions = ['wav','mp3','mp4','mov','m4a','mkv','aiff','aif','flac','webm','mxf'];
   const clear = (element) => { while (element.firstChild) element.removeChild(element.firstChild); };
   function bind(button, action) {
-    const run = () => Promise.resolve().then(action).catch((error) => say(error.message, true));
+    const run = () => { if(button.getAttribute('aria-disabled')==='true') return; return Promise.resolve().then(action).catch((error) => say(error.message, true)); };
     button.addEventListener('click', run);
     button.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); run(); }
@@ -42,17 +42,44 @@
     $('module-run').setAttribute('aria-disabled', String(value));
     $('module-file').setAttribute('aria-disabled', String(value));
     $('module-selection').setAttribute('aria-disabled', String(value));
+    $('caption-apply').setAttribute('aria-disabled',String(value));$('caption-from-premiere').setAttribute('aria-disabled',String(value));
     $('module-cancel').hidden = !value;
     $('module-progress').hidden = !value;
-    document.querySelectorAll('#module-fields input,#module-fields select').forEach((input)=>{input.disabled=value;});
+    document.querySelectorAll('#module-fields input,#module-fields select,#module-advanced-fields input,#module-advanced-fields select').forEach((input)=>{input.disabled=value;});
   }
   async function choose(multiple=false, types=extensions) {
     if (!uxp) throw new Error('Choix de fichiers disponible dans Premiere.');
     const files = await uxp.storage.localFileSystem.getFileForOpening({allowMultiple:multiple, types});
     return files ? (Array.isArray(files) ? files : [files]) : [];
   }
+  const basicFields={cadrages:['layout'],recadrage:['aspect'],shorts:['count'],broll:['footage'],
+    audio:['operation','music'],musique:['operation','duration'],censure:['operation','words'],recettes:['recipe'],lots:['module']};
+  const captionStyles=[['nocturnz','Nocturnz'],['youtube_bold','Impact'],['neon_pop','Néon'],['minimal','Sobre']];
+  let previewWord=0;
+  function renderPresets() {
+    clear($('caption-presets'));
+    const data=state();
+    for(const [value,title] of captionStyles) {
+      const button=document.createElement('div');button.className='caption-preset'+(data.options.style===value ? ' is-active':'');
+      button.dataset.style=value;button.setAttribute('role','button');button.setAttribute('tabindex','0');
+      button.setAttribute('aria-pressed',String(data.options.style===value));
+      const sample=document.createElement('span');sample.className='preset-sample';sample.textContent='Aa';
+      const name=document.createElement('span');name.textContent=title;button.appendChild(sample);button.appendChild(name);
+      bind(button,()=>{if($('module-run').getAttribute('aria-disabled')==='true') return;data.options.style=value;renderFields();});
+      $('caption-presets').appendChild(button);
+    }
+    $('caption-preview').dataset.style=data.options.style;
+    clear($('caption-preview-line'));
+    for(const text of ['Chaque','mot','compte.']) {const word=document.createElement('span');word.textContent=text;$('caption-preview-line').appendChild(word);}
+  }
+  setInterval(()=>{
+    if(active!=='captions' || $('tool-view').hidden) return;
+    const words=$('caption-preview-line').children;
+    for(let i=0;i<words.length;i++) words[i].classList.toggle('is-spoken',i===previewWord%words.length);
+    previewWord++;
+  },550);
   function renderFields() {
-    clear($('module-fields'));
+    clear($('module-fields'));clear($('module-advanced-fields'));
     const spec = definitions.get(active), data=state();
     document.querySelector('#module-controls .zoom-scope').textContent=active==='podcast' || active==='cadrages'
       ? 'Sources synchronisées au même départ · résultats séparés' : 'Médias source entiers · résultats séparés';
@@ -96,13 +123,18 @@
           for(const name of ['min','max','step']) if(field[name]!==undefined) input.setAttribute(name,String(field[name]));
         }
         input.value=String(data.options[field.key]);
-        input.addEventListener('change',()=>{data.options[field.key]=field.type==='number' ? Number(input.value):input.value;});
+        input.addEventListener('change',()=>{data.options[field.key]=field.type==='number' ? Number(input.value):input.value;if(field.key==='operation' || field.key==='style') renderFields();});
         label.appendChild(input);
       }
-      $('module-fields').appendChild(label);
+      const visible=(basicFields[active] || []).includes(field.key) &&
+        !(field.key==='music' && data.options.operation!=='duck') &&
+        !(field.key==='words' && data.options.operation==='faces');
+      (visible ? $('module-fields'):$('module-advanced-fields')).appendChild(label);
     }
     $('module-source').textContent = data.paths.length ? data.paths.map((path)=>path.split(/[\\/]/).pop()).join(' · ') : 'Média source';
-    $('module-run').textContent=spec.action;
+    $('caption-from-premiere').hidden=!['captions','transcription'].includes(active);
+    $('caption-studio').hidden=active!=='captions';if(active==='captions') renderPresets();
+    $('module-run').textContent=active==='captions' ? 'Créer les sous-titres':spec.action;
   }
   async function history() {
     const data=await api('module-jobs');
@@ -123,7 +155,11 @@
     $('module-results').hidden=record.status!=='complete';
     $('module-review').hidden=true; $('module-result-text').hidden=true;$('module-save-text').hidden=true;$('module-transcript-editor').hidden=true;
     openedText=null;clear($('module-artifacts'));clear($('module-cuts'));
+    $('caption-apply').hidden=true;
     if(record.status!=='complete') return;
+    if(data.transcript) {transcriptData=data.transcript;transcriptPage=data.transcriptPage || 0;renderTranscript();}
+    $('module-results-title').textContent=active==='captions' ? 'Modifier les sous-titres':'Résultats';
+    $('caption-apply').hidden=active!=='captions' || !data.transcript;
     if(record.result?.reviewRequired && Array.isArray(record.result.cuts)) {
       $('module-review').hidden=false;
       if(data.reviewJob!==record.id) {data.accepted=new Set(record.result.cuts.map((_,index)=>index));data.reviewJob=record.id;data.cutPage=0;}
@@ -159,7 +195,7 @@
           openedText=result;transcriptData=null;$('module-transcript-editor').hidden=true;
           if(/(^|\/)transcription\.json$/.test(artifact.name)) {
             const data=JSON.parse(result.text);
-            if(Array.isArray(data.segments)) {transcriptData=data;transcriptPage=0;renderTranscript();}
+            if(Array.isArray(data.segments)) {state().transcript=data;state().transcriptJob=record.id;transcriptData=data;transcriptPage=0;renderTranscript();$('caption-apply').hidden=active!=='captions';}
           }
           $('module-result-text').value=result.text;$('module-result-text').hidden=Boolean(transcriptData);$('module-save-text').hidden=false;
         });row.appendChild(button);
@@ -171,6 +207,7 @@
   bind($('module-cuts-next'),()=>{const data=state();if(data.job?.result?.cuts && ((data.cutPage || 0)+1)*40<data.job.result.cuts.length) {data.cutPage=(data.cutPage || 0)+1;renderJob(data.job);}});
   function renderTranscript() {
     const holder=$('module-transcript-segments');clear(holder);$('module-transcript-editor').hidden=false;
+    state().transcriptPage=transcriptPage;
     const segments=transcriptData.segments,start=transcriptPage*20;
     for(const segment of segments.slice(start,start+20)) {
       const row=document.createElement('div');row.className='module-transcript-row';
@@ -181,12 +218,12 @@
           const input=document.createElement('input');input.type='text';input.value=word.text || word.word || '';
           input.setAttribute('aria-label',`Mot à ${Number(word.start).toFixed(2)} secondes`);
           input.setAttribute('size',String(Math.max(3,Math.min(24,input.value.length+1))));
-          input.addEventListener('change',()=>{word.text=input.value;segment.text=segment.words.map((item)=>item.text || item.word || '').join(' ');});
+          input.addEventListener('input',()=>{word.text=input.value;segment.text=segment.words.map((item)=>item.text ?? item.word ?? '').join(' ');});
           words.appendChild(input);
         }
       } else {
         const input=document.createElement('input');input.type='text';input.value=segment.text || '';input.setAttribute('aria-label','Texte du segment');
-        input.addEventListener('change',()=>{segment.text=input.value;});words.appendChild(input);
+        input.addEventListener('input',()=>{segment.text=input.value;});words.appendChild(input);
       }
       row.appendChild(words);holder.appendChild(row);
     }
@@ -195,6 +232,17 @@
   }
   bind($('module-transcript-previous'),()=>{if(transcriptPage>0) {transcriptPage-=1;renderTranscript();}});
   bind($('module-transcript-next'),()=>{if(transcriptData && (transcriptPage+1)*20<transcriptData.segments.length) {transcriptPage+=1;renderTranscript();}});
+  async function openTranscript(record,module) {
+    const data=states.get(module);
+    if(data.transcript) return;
+    const artifact=record.artifacts.find((item)=>/(^|\/)transcription\.json$/.test(item.name));
+    if(!artifact) return;
+    const result=await api(`module-jobs/${record.id}/artifacts/${artifact.id}`);
+    const parsed=JSON.parse(result.text);
+    if(!Array.isArray(parsed.segments) || data.job?.id!==record.id) return;
+    data.transcript=parsed;data.transcriptJob=record.id;data.transcriptPage=0;
+    if(active===module) {openedText=result;transcriptData=parsed;transcriptPage=0;renderTranscript();$('caption-apply').hidden=module!=='captions';$('module-save-text').hidden=false;}
+  }
   async function follow(record,module) {
     while(['queued','running','cancelling'].includes(record.status)) {
       states.get(module).job=record;
@@ -204,13 +252,17 @@
     }
     states.get(module).job=record;
     if(active===module) {renderJob(record);await history();}
+    if(record.status==='complete' && ['captions','transcription'].includes(module)) await openTranscript(record,module);
+    return record;
   }
   bind($('module-file'),async()=>{
     if($('module-file').getAttribute('aria-disabled')==='true') return;
-    const files=await choose(Boolean(definitions.get(active).multiple));
-    if(files.length) {state().paths=files.map((file)=>file.nativePath);renderFields();}
+    const module=active,data=state();
+    const files=await choose(Boolean(definitions.get(module).multiple));
+    if(files.length) {data.paths=files.map((file)=>file.nativePath);data.transcript=null;data.job=null;if(active===module) {$('module-results').hidden=true;renderFields();}}
   });
-  bind($('module-selection'),async()=>{
+  async function selectedSource(module=active) {
+    const data=states.get(module);
     if($('module-selection').getAttribute('aria-disabled')==='true') return;
     if(!host) throw new Error('Disponible dans Premiere.');
     const project=await host.Project.getActiveProject(),sequence=project && await project.getActiveSequence();
@@ -223,14 +275,52 @@
       paths.add((await clip.getMediaFilePath()).replace(/^\/{3,}/,'/'));
     }
     if(!paths.size) throw new Error('Sélectionne un média dans la timeline.');
-    if(!definitions.get(active).multiple && paths.size>1) throw new Error('Sélectionne une seule source.');
-    state().paths=[...paths];renderFields();
-  });
+    if(!definitions.get(module).multiple && paths.size>1) throw new Error('Sélectionne une seule source.');
+    data.paths=[...paths];data.transcript=null;data.job=null;if(active===module) {$('module-results').hidden=true;renderFields();}
+  }
+  bind($('module-selection'),()=>selectedSource());
   bind($('module-run'),async()=>{
     if($('module-run').getAttribute('aria-disabled')==='true') return;
     const module=active,data=state();busy(true);say('Préparation…');
-    try { const record=await api(`modules/${module}/run`,{paths:data.paths,options:data.options});await follow(record,module); }
-    catch(error) { if(active===module) busy(false);throw error; }
+    try {
+      if(!data.paths.length && !definitions.get(module).sourceOptional) {
+        try {await selectedSource(module);} catch(_) {
+          const files=await choose(Boolean(definitions.get(module).multiple));if(!files.length) return;
+          data.paths=files.map((file)=>file.nativePath);if(active===module) renderFields();
+        }
+      }
+      if(active!==module) return;
+      busy(true);data.transcript=null;data.transcriptJob=null;transcriptData=null;
+      const target=module==='captions' && !data.options.transcript ? 'transcription':module;
+      const options=module==='captions' ? (data.options.transcript ? {...data.options,format:'srt'}:{language:data.options.language,model:data.options.model}):data.options;
+      const record=await api(`modules/${target}/run`,{paths:data.paths,options});await follow(record,module);
+    } finally {if(active===module) busy(false);}
+  });
+  bind($('caption-from-premiere'),async()=>{
+    const module=active,data=state();busy(true);
+    try {
+      const payload=await window.NocturnzPremiereTranscript(host);
+      data.paths=payload.paths;data.transcript=null;data.transcriptJob=null;renderFields();busy(true);
+      await follow(await api('captions/from-premiere',payload),module);
+    } finally {if(active===module) busy(false);}
+  });
+  bind($('caption-apply'),async()=>{
+    const module=active,data=state();
+    if(module!=='captions' || !data.transcriptJob || !data.transcript) return;
+    busy(true);
+    try {
+      const record=await follow(await api(`module-jobs/${data.transcriptJob}/captions`,{
+        transcript:data.transcript,style:data.options.style,format:data.options.format || 'animated'}),module);
+      if(record.status!=='complete') return;
+      if(active===module) busy(true);
+      const artifact=record.artifacts.find((item)=>item.importable);
+      if(!artifact) throw new Error('Aucun résultat importable.');
+      if(!host) {say('Sous-titres générés. Import disponible dans Premiere.');return;}
+      const project=await host.Project.getActiveProject();
+      if(!project) throw new Error('Ouvre un projet Premiere.');
+      if(!await project.importFiles([artifact.path],true,await project.getRootItem(),false)) throw new Error('Import non confirmé.');
+      if(active===module) say('Sous-titres importés dans le chutier.');
+    } finally {if(active===module) busy(false);}
   });
   bind($('module-cancel'),async()=>{
     if(state().job) renderJob(await api(`module-jobs/${state().job.id}/cancel`,{}));
@@ -251,7 +341,7 @@
       const record=await api(`module-jobs/${$('module-history').value}`);
       const module=record.module==='reviewcuts' ? active : record.module;
       if(!definitions.has(module)) return;
-      active=module;state();$('tool-title').textContent=definitions.get(module).title;renderFields();renderJob(record);
+      active=module;const data=state();data.transcript=null;data.paths=record.request.paths;data.options={...data.options,...record.request.options};transcriptData=null;$('tool-title').textContent=definitions.get(module).title;renderFields();renderJob(record);if(record.status==='complete') await openTranscript(record,module);
       if(['queued','running','cancelling'].includes(record.status)) follow(record,module).catch((error)=>say(error.message,true));
     } catch(error) {say(error.message,true);}
   });
@@ -259,9 +349,9 @@
     const module=tile.dataset.tool;
     $('module-controls').hidden=!definitions.has(module);
     if(!definitions.has(module)) {active=null;return;}
-    active=module;state();$('pending-state').hidden=true;renderFields();
+    active=module;state();transcriptData=null;$('pending-state').hidden=true;renderFields();
     $('module-results').hidden=true;$('module-review').hidden=true;busy(false);say('');
-    if(state().job) renderJob(state().job);
+    if(state().job) {renderJob(state().job);if(state().job.status==='complete') openTranscript(state().job,module).catch((error)=>say(error.message,true));}
     history().catch((error)=>say(error.message,true));
   }));
 })();

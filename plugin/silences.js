@@ -26,7 +26,7 @@
   };
   function setBusy(value) {
     busy = value;
-    for (const id of ['silence-selection','silence-file','silence-analyze','silence-export','silence-save','silence-import','silence-accept-all','silence-reject-all','silence-previous','silence-next']) el(id).setAttribute('aria-disabled', String(value));
+    for (const id of ['silence-apply','silence-selection','silence-file','silence-analyze','silence-export','silence-save','silence-import','silence-accept-all','silence-reject-all','silence-previous','silence-next']) el(id).setAttribute('aria-disabled', String(value));
     fields.forEach((id) => { el(id).disabled = value; });
     document.querySelectorAll('#silence-cuts input').forEach((input) => { input.disabled = value; });
     el('silence-cancel').hidden = !value || !job;
@@ -64,7 +64,7 @@
   function review() {
     const count = plan.operations.length;
     const duration = plan.operations.filter((op) => selected.has(op.id)).reduce((sum, op) => sum+op.durationSeconds, 0);
-    el('silence-summary').textContent = `${selected.size}/${count} · ${duration.toFixed(2)} s`;
+    el('silence-summary').textContent = `${selected.size} coupes · ${duration.toFixed(1)} s récupérées`;
     const cuts = el('silence-cuts');
     while (cuts.firstChild) cuts.removeChild(cuts.firstChild);
     const visible = plan.operations.slice(page*pageSize,(page+1)*pageSize);
@@ -107,16 +107,19 @@
     el('silence-rate').value=`${tickBase}/${String(await sequence.getTimebase())}`;
   }
   bind('silence-selection',selectedSource);
-  bind('silence-file',async () => {
+  async function chooseSource() {
     if (!uxp) throw new Error('Ouvre le panneau dans Premiere pour choisir un fichier.');
     const file=await uxp.storage.localFileSystem.getFileForOpening({types:['wav','mp3','mp4','mov','m4a','mkv','aiff','flac','webm','mxf'],allowMultiple:false});
-    if (file) setSource({path:file.nativePath,sourceInTicks:'0',sequenceStartTicks:'0'},file.name);
-  });
+    if (file) {setSource({path:file.nativePath,sourceInTicks:'0',sequenceStartTicks:'0'},file.name);el('silence-rate').value='auto';}
+  }
+  bind('silence-file',chooseSource);
   fields.forEach((id) => el(id).addEventListener('change', () => { if (!busy) reset(); }));
   bind('silence-analyze',async () => {
-    if (!source) throw new Error('Choisis une source.');
-    reset(); setBusy(true); say('Analyse en cours…');
+    setBusy(true);
     try {
+      if (!source) {try {await selectedSource();} catch(_) {await chooseSource();}}
+      if (!source) return;
+      reset();say('Analyse en cours…');
       const record=await api('/api/v1/silences/analyze',{
         ...source, thresholdDb:Number(el('silence-threshold').value), minSilenceMs:Number(el('silence-minimum').value),
         beforeMs:Number(el('silence-before').value), afterMs:Number(el('silence-after').value),
@@ -155,7 +158,7 @@
     const file=await uxp.storage.localFileSystem.getFileForSaving('Nocturnz_Silences.xml',{types:['xml']});
     if (file) { await file.write(xml); say('XML enregistré.'); }
   });
-  bind('silence-import',async () => {
+  async function importSequence() {
     if (!exported || !host) return;
     setBusy(true); el('silence-cancel').hidden=true;
     try {
@@ -165,7 +168,30 @@
       const imported=await project.importFiles([exported.path],true,await project.getRootItem(),false);
       const after=await project.getSequences();
       if (!imported || after.length<=before.length) throw new Error('Premiere n’a pas confirmé de nouvelle séquence. Le XML reste disponible.');
-      say('Nouvelle séquence source importée. Projet non sauvegardé.');
+      const previous=new Set(before.map((sequence)=>String(sequence.guid)));
+      const added=after.filter((sequence)=>!previous.has(String(sequence.guid)));
+      if(added.length===1 && added[0].guid && typeof project.openSequence==='function') await project.openSequence(added[0].guid);
+      say('Nouvelle séquence source importée.');
     } finally { setBusy(false); }
+  }
+  bind('silence-import',importSequence);
+  bind('silence-apply',async()=>{
+    if(!plan || !job) throw new Error('Analyse requise.');
+    setBusy(true);el('silence-cancel').hidden=true;say('Création de la version nettoyée…');
+    try {
+      exported=await api(`/api/v1/jobs/${job}/export`,{acceptedIds:[...selected]});
+      el('silence-save').hidden=false;el('silence-import').hidden=!host;
+      if(host) await importSequence();else say('Version nettoyée générée. Import disponible dans Premiere.');
+    } finally {setBusy(false);}
+  });
+  const rhythms={natural:[-35,400,120,120],dynamic:[-30,250,80,80],gentle:[-40,650,200,200]};
+  document.querySelectorAll('[data-silence-preset]').forEach((button)=>{
+    const select=()=>{
+      if(busy) return;
+      const values=rhythms[button.dataset.silencePreset];
+      ['silence-threshold','silence-minimum','silence-before','silence-after'].forEach((id,index)=>{el(id).value=String(values[index]);});
+      document.querySelectorAll('[data-silence-preset]').forEach((item)=>{item.classList.toggle('is-active',item===button);item.setAttribute('aria-pressed',String(item===button));});reset();
+    };
+    button.addEventListener('click',select);button.addEventListener('keydown',(event)=>{if(event.key==='Enter' || event.key===' ') {event.preventDefault();select();}});
   });
 })();

@@ -1,5 +1,15 @@
 # État des fonctions
 
+## Tranche UX et collage — 20 octobre 2026
+
+- Options avancées repliées pour les quinze adaptateurs ; paramètres principaux ciblés par outil.
+- Sous-titres : éditeur ouvert automatiquement après Whisper, quatre presets, envoi direct du brouillon au rendu et import au chutier. Option de lecture d’une transcription de clip source Adobe, adaptée du composant MIT AdobePremiereProMCP.
+- Silences : trois rythmes, cadence automatique pour les fichiers, révision facultative et export/import en une action vers une nouvelle séquence source.
+- Images : dix-huitième tuile, collage natif Mac à la demande, PNG durable et import au chutier, choix de fichier alternatif. Helper Swift compilé et installé dans `.runtime/bin`.
+- Contrôles de syntaxe et compilation seulement pour cette tranche. Aucun test ajouté/exécuté, aucun collage lu à l’installation, parcours complets Premiere non validés ; tuiles maintenues atténuées.
+- [Périmètre détaillé](ux-outils.md) et [audit des dix nouveaux projets](audit-nouveaux-repos.md).
+
+
 ## Validation dans Premiere Pro Beta — 2026-10-19
 
 - Accueil refait en 17 tuiles SVG et titre, sans textes explicatifs. Ouverture de Zooms, ouverture de Silences avec son état « À développer » et retour à l’accueil vérifiés dans Premiere. Le bloc séquence et les diagnostics sont accessibles via Réglages. Les icônes originales du projet sont sous la licence MIT du dépôt.

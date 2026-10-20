@@ -11,6 +11,7 @@ from threading import Event, Lock
 import time
 from uuid import uuid4
 from .module_catalog import PYTHON, ROOT, validate
+from .caption_transcript import clean_transcript
 
 ACTIVE = ('queued', 'running', 'cancelling')
 IMPORTABLE = {'.xml', '.srt', '.mp4', '.mov', '.wav', '.mp3', '.aiff', '.png'}
@@ -66,6 +67,23 @@ class ModuleJobs:
         if not isinstance(accepted, list) or len(accepted) > len(cuts) or len(set(accepted)) != len(accepted) or any(type(i) is not int or not 0 <= i < len(cuts) for i in accepted):
             raise ValueError('Sélection de coupes invalide.')
         return self._create({'module': 'reviewcuts', 'paths': record['request']['paths'], 'options': {'cuts': [cuts[i] for i in accepted]}})
+
+    def captions(self, key, payload):
+        record = self.get(key)
+        if record['status'] != 'complete' or not record['request']['paths']:
+            raise ValueError('Transcription requise.')
+        if not any(Path(item['name']).name == 'transcription.json' for item in record['artifacts']):
+            raise ValueError('Cette tâche ne contient pas de transcription.')
+        draft = clean_transcript(payload.get('transcript'))
+        options = {'style': payload.get('style', 'nocturnz'), 'format': payload.get('format', 'animated')}
+        request = validate('captions', {'paths': record['request']['paths'][:1], 'options': options})
+        request['editedTranscript'] = draft
+        return self._create(request)
+
+    def from_premiere_transcript(self, payload):
+        request = validate('transcription', {'paths': payload.get('paths', []), 'options': {}})
+        request['editedTranscript'] = clean_transcript(payload.get('transcript'), adobe=True)
+        return self._create(request)
 
     def list(self):
         with self.lock:

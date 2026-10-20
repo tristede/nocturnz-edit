@@ -7,7 +7,7 @@ Les 15 modules auparavant sans adaptateur sont reliés au panneau et au service.
 1. Choisir un module puis les fichiers, ou récupérer les médias de la sélection Premiere.
 2. Régler les paramètres et lancer. Pour les outils texte, une transcription peut être produite automatiquement, choisie dans un fichier ou réutilisée depuis une tâche récente de la même source.
 3. Suivre le traitement et l’annuler si nécessaire. Les tâches et leurs sorties restent dans `.runtime/module-jobs/<id>/`; un redémarrage signale les tâches interrompues.
-4. Ouvrir/enregistrer les résultats texte ou importer les sorties compatibles dans le projet. Une transcription s’ouvre dans un éditeur de mots horodatés paginé; ses corrections s’enregistrent dans un nouveau fichier choisi par l’utilisateur.
+4. Les transcriptions s’ouvrent automatiquement dans l’éditeur de mots horodatés. Pour Sous-titres, le brouillon corrigé est directement raccordé au rendu et à l’import. Les exports manuels restent accessibles. Voir [les nouveaux parcours](ux-outils.md).
 5. Pour Hésitations/Répétitions, cocher les coupes à retirer, puis générer le XML révisé. La suppression n’est jamais appliquée silencieusement à la timeline.
 
 La sélection Premiere fournit les **fichiers source entiers**, pas les seuls points d’entrée/sortie du montage. Ces adaptateurs ne recopient pas les effets ni le montage existant. Les XML importent de nouvelles séquences source; les rendus importent de nouveaux médias. Aucun adaptateur de ces 15 modules ne modifie une séquence Premiere ou un fichier source. Les zooms utilisent un parcours natif distinct avec duplication obligatoire.
@@ -61,3 +61,7 @@ Les 15 adaptateurs ont chacun terminé un traitement réel par leur worker. Les 
 Variantes exécutées : sous-titres animés, recadrage visage, débruitage, ducking, SFX, floutage et recette Réseaux sociaux. L’export des coupes cochées a produit son XML. L’absence de visage réel dans les mires ne valide pas la qualité du suivi ou du masquage des visages. Les propositions heuristiques ne constituent pas une validation éditoriale.
 
 La syntaxe Python/JavaScript et les espaces du diff ont été contrôlés. La suite automatisée antérieure n’a pas été relancée pour cette tranche. Le parcours visuel UXP et l’import des nouvelles sorties dans Premiere restent à valider. L’aperçu navigateur `file://` a été refusé par la politique du navigateur; ce refus n’a pas été contourné. Les tuiles restent atténuées jusqu’à la validation native.
+
+## Parcours simplifiés et Images
+
+Les réglages techniques sont repliés par défaut. Le module Images ajoute le collage natif Mac sur action explicite et le choix de fichier. Les modifications du 20 octobre sont décrites dans [ux-outils.md](ux-outils.md) ; pas de nouvelle validation native annoncée.

@@ -26,6 +26,7 @@
             <div class="module-tile is-unfinished" role="button" tabindex="0" data-tool="musique" data-title="Musique" aria-label="Musique"><img src="icons/unfinished/musique.svg" alt="" width="38" height="38"><span>Musique</span></div>
             <div class="module-tile is-unfinished" role="button" tabindex="0" data-tool="censure" data-title="Censure" aria-label="Censure"><img src="icons/unfinished/censure.svg" alt="" width="38" height="38"><span>Censure</span></div>
             <div class="module-tile is-unfinished" role="button" tabindex="0" data-tool="recettes" data-title="Recettes" aria-label="Recettes"><img src="icons/unfinished/recettes.svg" alt="" width="38" height="38"><span>Recettes</span></div>
+            <div class="module-tile is-unfinished" role="button" tabindex="0" data-tool="images" data-title="Images" aria-label="Images"><img src="icons/images.svg" alt="" width="38" height="38"><span>Images</span></div>
             <div class="module-tile is-unfinished" role="button" tabindex="0" data-tool="lots" data-title="Traitement par lot" aria-label="Traitement par lot"><img src="icons/unfinished/lots.svg" alt="" width="38" height="38"><span>Traitement par lot</span></div>
         </div>
       </section>
@@ -34,13 +35,20 @@
         <div class="tool-page-heading"><img id="tool-icon" src="icons/zooms.svg" alt="" width="34" height="34"><h1 id="tool-title">Zooms</h1></div>
         <p class="pending-state" id="pending-state" role="status">À développer</p>
         <section id="module-controls" hidden>
-          <div class="source-actions">
-            <div class="button button-secondary" id="module-file" role="button" tabindex="0">Fichiers</div>
-            <div class="button button-secondary" id="module-selection" role="button" tabindex="0">Sélection Premiere</div>
-          </div>
-          <div class="source-name" id="module-source">Média source</div>
+          <div class="source-card"><span class="source-name" id="module-source">Sélectionne un rush</span><div class="text-action" id="module-file" role="button" tabindex="0">Choisir</div></div>
+          <section id="caption-studio" hidden>
+            <div class="caption-preview" id="caption-preview" data-style="nocturnz"><span class="preview-badge">Aperçu du style</span><div id="caption-preview-line"></div></div>
+            <div class="caption-presets" id="caption-presets" aria-label="Presets de sous-titres"></div>
+          </section>
           <div class="silence-fields" id="module-fields"></div>
-          <div class="zoom-scope">Médias source entiers · résultats séparés</div>
+          <div class="disclosure" role="button" tabindex="0" data-disclosure="module-advanced" aria-expanded="false">Options avancées<span>+</span></div>
+          <div id="module-advanced" hidden>
+            <div class="text-action" id="caption-from-premiere" role="button" tabindex="0" hidden>Reprendre la transcription Premiere</div>
+            <div class="silence-fields" id="module-advanced-fields"></div>
+            <div class="text-action" id="module-selection" role="button" tabindex="0">Reprendre la sélection Premiere</div>
+            <div class="zoom-scope">Médias source entiers · résultats séparés</div>
+            <label class="module-history-label">Historique<select id="module-history"><option value="" selected>Choisir une tâche</option></select></label>
+          </div>
           <div class="button button-primary" id="module-run" role="button" tabindex="0">Lancer</div>
           <div class="button button-secondary" id="module-cancel" role="button" tabindex="0" hidden>Annuler le traitement</div>
           <progress id="module-progress" max="100" value="0" hidden></progress>
@@ -50,38 +58,54 @@
             <div id="module-cuts"></div>
             <div class="button button-primary" id="module-review-export" role="button" tabindex="0">Créer le XML des coupes cochées</div>
           </section>
-          <section id="module-results" hidden><div class="results-heading"><h2>Résultats</h2></div><div id="module-artifacts"></div>
+          <section id="module-results" hidden><div class="results-heading"><h2 id="module-results-title">Résultats</h2></div>
             <section id="module-transcript-editor" hidden>
               <div class="review-actions"><div id="module-transcript-previous" role="button" tabindex="0">Précédent</div><span id="module-transcript-page"></span><div id="module-transcript-next" role="button" tabindex="0">Suivant</div></div>
               <div id="module-transcript-segments"></div>
             </section>
             <textarea id="module-result-text" aria-label="Résultat texte" rows="10" hidden></textarea>
             <div class="button button-secondary" id="module-save-text" role="button" tabindex="0" hidden>Enregistrer</div>
+            <div class="button button-primary" id="caption-apply" role="button" tabindex="0" hidden>Importer les sous-titres</div>
+            <div class="disclosure" role="button" tabindex="0" data-disclosure="module-files" aria-expanded="false">Fichiers et exports<span>+</span></div>
+            <div id="module-files" hidden><div id="module-artifacts"></div></div>
           </section>
-          <label class="module-history-label">Tâches récentes<select id="module-history"><option value="" selected>Choisir une tâche</option></select></label>
+        </section>
+        <section id="image-controls" hidden>
+          <div class="button button-primary" id="image-paste" role="button" tabindex="0">Coller une image</div>
+          <div class="text-action" id="image-choose" role="button" tabindex="0">Choisir une image</div>
+          <p class="muted" id="image-name">⌘V</p>
+          <div class="button button-secondary" id="image-import" role="button" tabindex="0" hidden>Importer</div>
+          <p class="tool-status" id="image-status" role="status" aria-live="polite"></p>
         </section>
         <section id="silence-controls" hidden>
-          <div class="source-actions"><div class="button button-secondary" id="silence-selection" role="button" tabindex="0">Sélection Premiere</div><div class="button button-secondary" id="silence-file" role="button" tabindex="0">Fichier</div></div>
-          <p class="source-name" id="silence-source">—</p>
-          <div class="silence-fields">
+          <div class="source-card"><span class="source-name" id="silence-source">Sélectionne un rush</span><div class="text-action" id="silence-file" role="button" tabindex="0">Choisir</div></div>
+          <div class="choice-pills" aria-label="Rythme du montage"><div role="button" tabindex="0" data-silence-preset="natural" class="is-active" aria-pressed="true">Naturel</div><div role="button" tabindex="0" data-silence-preset="dynamic" aria-pressed="false">Dynamique</div><div role="button" tabindex="0" data-silence-preset="gentle" aria-pressed="false">Prudent</div></div>
+          <div class="disclosure" role="button" tabindex="0" data-disclosure="silence-advanced" aria-expanded="false">Options avancées<span>+</span></div>
+          <div id="silence-advanced" hidden><div class="text-action" id="silence-selection" role="button" tabindex="0">Reprendre la sélection Premiere</div><div class="silence-fields">
             <label>Seuil (dB)<input id="silence-threshold" type="number" min="-90" max="0" step="1" value="-35"></label>
             <label>Silence minimum (ms)<input id="silence-minimum" type="number" min="40" max="60000" step="20" value="400"></label>
             <label>Marge avant (ms)<input id="silence-before" type="number" min="0" max="5000" step="20" value="120"></label>
             <label>Marge après (ms)<input id="silence-after" type="number" min="0" max="5000" step="20" value="120"></label>
             <label>Piste source<select id="silence-stream"><option value="all" selected>Toutes</option><option value="0">1</option><option value="1">2</option><option value="2">3</option><option value="3">4</option></select></label>
-            <label>Cadence<input id="silence-rate" type="text" value="25/1"></label>
-          </div>
-          <div class="button button-primary" id="silence-analyze" role="button" tabindex="0">Analyser la source</div>
+            <label>Cadence<input id="silence-rate" type="text" value="auto"></label>
+          </div></div>
+          <div class="button button-primary" id="silence-analyze" role="button" tabindex="0">Nettoyer les silences</div>
           <div class="button button-secondary" id="silence-cancel" role="button" tabindex="0" hidden>Annuler</div>
           <p class="tool-status" id="silence-status" role="status" aria-live="polite"></p>
           <section id="silence-review" hidden>
             <div class="results-heading"><h2>Coupes proposées</h2><span id="silence-summary"></span></div>
+            <p class="muted">Nouvelle séquence source · effets du montage non repris</p>
+            <div class="button button-primary" id="silence-apply" role="button" tabindex="0">Créer la version nettoyée</div>
+            <div class="disclosure" role="button" tabindex="0" data-disclosure="silence-details" aria-expanded="false">Ajuster les coupes<span>+</span></div>
+            <div id="silence-details" hidden>
             <div class="review-actions"><div role="button" tabindex="0" id="silence-accept-all">Tout couper</div><div role="button" tabindex="0" id="silence-reject-all">Tout garder</div></div>
             <div id="silence-cuts"></div>
             <div class="review-actions"><div role="button" tabindex="0" id="silence-previous">Précédent</div><span id="silence-page"></span><div role="button" tabindex="0" id="silence-next">Suivant</div></div>
-            <div class="button button-primary" id="silence-export" role="button" tabindex="0">Générer XML source</div>
+            </div>
+            <div class="disclosure" role="button" tabindex="0" data-disclosure="silence-exports" aria-expanded="false">Exports<span>+</span></div><div id="silence-exports" hidden>
+            <div class="button button-secondary" id="silence-export" role="button" tabindex="0">Préparer un export</div>
             <div class="button button-secondary" id="silence-save" role="button" tabindex="0" hidden>Enregistrer XML</div>
-            <div class="button button-secondary" id="silence-import" role="button" tabindex="0" hidden>Importer comme nouvelle séquence source</div>
+            <div class="button button-secondary" id="silence-import" role="button" tabindex="0" hidden>Importer la séquence</div></div>
           </section>
         </section>
         <section id="zoom-controls" hidden>
@@ -156,6 +180,9 @@
   <script src="speaker-labels.js"></script>
   <script src="index.js"></script>
   <script src="module-catalog.js"></script>
+  <script src="premiere-transcript.js"></script>
   <script src="module-tools.js"></script>
+  <script src="ui-controls.js"></script>
+  <script src="image-paste.js"></script>
 </body>
 </html>

@@ -8,6 +8,7 @@
     "setup:engine": "python3 scripts/install-engine.py",
     "setup:modules": "python3 scripts/install-modules.py",
     "sync:catalog": "python3 scripts/install-modules.py --catalog-only",
-    "service": "python3 service/server.py"
+    "service": "python3 service/server.py",
+    "setup:clipboard": "python3 scripts/install-clipboard.py"
   }
 }
