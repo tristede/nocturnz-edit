@@ -3,8 +3,8 @@ const TICKS=254016000000n;
 const seconds=(ticks)=>Number(BigInt(ticks))/Number(TICKS);
 function mix(a,b,t) {
   return {scale:a.scale+(b.scale-a.scale)*t,rotation:a.rotation+(b.rotation-a.rotation)*t,
-    position:{x:a.position.x+(b.position.x-a.position.x)*t,y:a.position.y+(b.position.y-a.position.y)*t},
-    anchor:{x:a.anchor.x+(b.anchor.x-a.anchor.x)*t,y:a.anchor.y+(b.anchor.y-a.anchor.y)*t},frameSize:b.frameSize};
+    position:{...b.position},
+    anchor:{...b.anchor},frameSize:b.frameSize};
 }
 // Editorial decisions are slower than the half-second voice classifier.
 // Brief hesitations/uncertainty must not repeatedly reset the shot to wide.
@@ -76,4 +76,45 @@ function plan(targets,turns,wide,frames,timebase,config) {
   }
   return plans;
 }
-module.exports={plan,settle};
+// One independent layer per paced intervention. Its pivot stays on the speaker;
+// only scale changes. All offsets are relative to the layer, not the source clip.
+function layerPlan(targets,turns,wide,frames,bases,timebase,config,names) {
+  const frameTicks=BigInt(timebase),types=config.motion==='alternate' ? config.types:[config.motion];
+  if(!types.length || types.some(type=>!['in','out','jump'].includes(type))) throw new Error('Choisis au moins un type de zoom.');
+  if(!Number.isFinite(config.duration) || config.duration<=0) throw new Error('Durée de transition invalide.');
+  const segments=[];let ordinal=0;
+  const ordered=targets.map((target,index)=>({target,index})).sort((a,b)=>BigInt(a.target.start)<BigInt(b.target.start)?-1:1);
+  for(const {target,index} of ordered) {
+    const start=BigInt(target.start),end=BigInt(target.end),base=bases[index];
+    const align=time=>{const offset=BigInt(Math.round((time-seconds(start))*1e6))*TICKS/1000000n;return start+((offset+frameTicks/2n)/frameTicks)*frameTicks;};
+    for(const row of settle(turns,seconds(start),seconds(end),config.minHold || 3)) {
+      const frame=frames[index]?.[row.speaker];
+      if(row.speaker<0 || !frame) continue;
+      const a=align(row.start),b=row.end>=seconds(end) ? end:align(row.end);
+      if(b-a<frameTicks) continue;
+      if(Math.abs(frame.anchor.x-base.anchor.x)>.0001 || Math.abs(frame.anchor.y-base.anchor.y)>.0001 || Math.abs(base.rotation)>.0001 || Math.abs(frame.rotation)>.0001) throw new Error('Les calques exigent des clips sans rotation et un ancrage identique.');
+      const ratio=frame.scale/base.scale,scale=ratio*100;
+      if(!Number.isFinite(ratio) || ratio<=0) throw new Error('Échelle du cadrage invalide.');
+      // Center the chosen speaker once. This anchor and position remain static.
+      const anchor={x:base.position.x+(.5-frame.position.x)/ratio,y:base.position.y+(.5-frame.position.y)/ratio};
+      let type=types[ordinal++%types.length];
+      const duration=BigInt(Math.max(1,Math.round(Math.max(1200,config.duration)*Number(TICKS)/1000/Number(frameTicks))))*frameTicks;
+      const keys=[];
+      if(b-a<duration+frameTicks*5n) type='jump';
+      if(type!=='jump') {
+        const soft=100*(wide.scale+(frame.scale-wide.scale)*.88)/base.scale;
+        const from=type==='in' ? soft:scale,to=type==='in' ? scale:soft;
+        const span=duration/frameTicks,steps=Number(span<12n ? span:12n);
+        for(let j=0;j<=steps;j++) {
+          const offset=span*BigInt(j)/BigInt(steps)*frameTicks,t=Number(offset)/Number(duration);
+          keys.push({time:String(offset),value:from+(to-from)*t*t*(3-2*t),linear:j<steps});
+        }
+      }
+      segments.push({start:String(a),end:String(b),index,speaker:row.speaker,name:names[row.speaker] || `Intervenant ${row.speaker+1}`,type,anchor,position:{x:.5,y:.5},scale,keys});
+    }
+  }
+  if(!segments.length) throw new Error('Aucune prise de parole assez longue pour créer un zoom.');
+  if(segments.length>1000 || segments.reduce((sum,row)=>sum+row.keys.length,0)>12000) throw new Error('Trop de zooms. Traite une sélection plus courte.');
+  return segments;
+}
+module.exports={plan,settle,layerPlan};

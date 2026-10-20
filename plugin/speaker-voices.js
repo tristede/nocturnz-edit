@@ -414,8 +414,9 @@
     if(layers) {say('Création du calque automatique…');layerModel=await layerAdapter.ensure(current.project,current.frameSize,current.timebase,api);await save();}
     if(layers && bases.some((base)=>Math.abs(base.rotation)>.0001 || Math.abs(base.anchor.x-wide.anchor.x)>.0001 || Math.abs(base.anchor.y-wide.anchor.y)>.0001)) throw new Error('Les calques demandent des clips sans rotation et avec le même ancrage que le plan large.');
     const config=movement(),frames=await cutFrames(current);
-    const changes=require('./speaker-movement.cjs').plan(current.targets,result.turns,wide,frames,current.timebase,config);
-    if(changes.reduce((sum,points)=>sum+points.length,0)>12000) throw new Error('Plus de 12 000 images clés. Traite une sélection plus courte.');
+    const planner=require('./speaker-movement.cjs');
+    const changes=layers ? planner.layerPlan(current.targets,result.turns,wide,frames,bases,current.timebase,config,people.map(person=>person.name)):planner.plan(current.targets,result.turns,wide,frames,current.timebase,config);
+    if(!layers && changes.reduce((sum,points)=>sum+points.length,0)>12000) throw new Error('Plus de 12 000 images clés. Traite une sélection plus courte.');
     // Recheck after potentially long face analysis, before any sequence is created.
     if(signature(await selection())!==analysisSignature) throw new Error('La sélection a changé pendant le recalage. Relance l’analyse.');
     const latestAudio=analysisAudio.mode==='mixed' ? await audioRows(analysisAudio.tracks[0],0,current):[...await audioRows(analysisAudio.tracks[0],0,current),...await audioRows(analysisAudio.tracks[1],1,current)];

@@ -108,55 +108,50 @@ function withHost(host) {
     for(let i=1;i<order.length;i++) if(BigInt(order[i].target.start)<BigInt(order[i-1].target.end)) throw new Error('Les clips se chevauchent : traite une seule piste vidéo.');
     if(!(await host.VideoFilterFactory.getMatchNames()).includes('AE.ADBE Geometry2')) throw new Error('L’effet Transformation n’est pas installé.');
     const layers=[];
-    for(const {target,index} of order) {
+    for(const segment of changes) {
       await assertCopy(project,draft);
-      commit(project,()=>[host.SequenceEditor.getEditor(draft.sequence).createInsertProjectItemAction(source,tick(target.start),count,-1,true)],'Nocturnz/Edit — Ajouter le calque zoom');
+      commit(project,()=>[host.SequenceEditor.getEditor(draft.sequence).createInsertProjectItemAction(source,tick(segment.start),count,-1,true)],'Nocturnz/Edit — Ajouter le calque zoom');
       const track=await draft.sequence.getVideoTrack(count),matches=[];
-      for(const item of await track.getTrackItems(1,false)) if(String((await item.getStartTime()).ticks)===target.start && await item.isAdjustmentLayer()) matches.push(item);
+      for(const item of await track.getTrackItems(1,false)) if(String((await item.getStartTime()).ticks)===segment.start && await item.isAdjustmentLayer()) matches.push(item);
       if(matches.length!==1) throw new Error('Calque inséré non identifié. Aucun effet appliqué aux clips.');
-      const layer=matches[0];
-      const chain=await layer.getComponentChain();let pendingComponent;
+      const layer=matches[0],chain=await layer.getComponentChain();let pendingComponent;
       project.lockedAccess(()=>{pendingComponent=host.VideoFilterFactory.createComponent('AE.ADBE Geometry2');});
       const component=await pendingComponent;
-      commit(project,()=>[layer.createSetEndAction(tick(target.end)),layer.createSetNameAction('Nocturnz · Zoom'),
-        chain.createAppendComponentAction(component)], 'Nocturnz/Edit — Préparer le calque');
-      if(String((await layer.getEndTime()).ticks)!==target.end) throw new Error('Durée du calque non confirmée.');
-      layers.push({layer,index});
+      const label={in:'Zoom in',out:'Zoom out',jump:'Jump'}[segment.type];
+      commit(project,()=>[layer.createSetEndAction(tick(segment.end)),layer.createSetNameAction(`Nocturnz · ${segment.name} · ${label}`),
+        chain.createAppendComponentAction(component)],'Nocturnz/Edit — Préparer le calque');
+      if(String((await layer.getEndTime()).ticks)!==segment.end) throw new Error('Durée du calque non confirmée.');
+      layers.push({layer,segment});
     }
     const prepared=[];
-    for(const {layer,index} of layers) {
-      const {params,units,anchorUnits}=await transform(layer),base=bases[index],sourceIn=BigInt(targets[index].sourceIn),layerIn=BigInt((await layer.getInPoint()).ticks);
-      const values={};
-      for(const name of ['scale','position','anchor','rotation']) {
-        values[name]=[];
-        for(const [time,point] of changes[index]) {
-          const frame=point.value;
-          if(Math.abs(frame.anchor.x-base.anchor.x)>.0001 || Math.abs(frame.anchor.y-base.anchor.y)>.0001 || Math.abs(base.rotation)>.0001) throw new Error('Les calques exigent un ancrage identique et des clips sans rotation.');
-          const value=name==='scale' ? 100*frame.scale/base.scale:name==='position' ? {x:frame.position.x*units.x,y:frame.position.y*units.y}:name==='anchor' ? {x:base.position.x*anchorUnits.x,y:base.position.y*anchorUnits.y}:frame.rotation;
-          values[name].push({time:String(layerIn+BigInt(time)-sourceIn),value,linear:point.linear});
-        }
-      }
-      prepared.push({params,values});
+    for(const {layer,segment} of layers) {
+      const {params,units,anchorUnits}=await transform(layer),layerIn=BigInt((await layer.getInPoint()).ticks);
+      prepared.push({params,segment,position:{x:segment.position.x*units.x,y:segment.position.y*units.y},
+        anchor:{x:segment.anchor.x*anchorUnits.x,y:segment.anchor.y*anchorUnits.y},
+        keys:segment.keys.map(point=>({...point,time:String(layerIn+BigInt(point.time))}))});
     }
     await assertCopy(project,draft);
     commit(project,()=>{
       const actions=[draft.projectItem.createSetNameAction(draft.name.replace('Zooms','Zooms calques'))];
-      for(const {params,values} of prepared) {
+      for(const {params,segment,position,anchor,keys} of prepared) {
         actions.push(params.uniform.createSetValueAction(params.uniform.createKeyframe(true),true));
-        for(const name of ['scale','position','anchor','rotation']) {
-          const param=params[name];actions.push(param.createSetTimeVaryingAction(true));
-          for(const point of values[name]) {
-            const value=['position','anchor'].includes(name) ? new host.PointF(point.value.x,point.value.y):point.value;
-            const keyframe=param.createKeyframe(value);keyframe.position=tick(point.time);
-            actions.push(param.createAddKeyframeAction(keyframe),param.createSetInterpolationAtKeyframeAction(keyframe.position,point.linear ? host.Constants.InterpolationMode.LINEAR:host.Constants.InterpolationMode.HOLD,true));
-          }
+        for(const [name,value] of [['position',new host.PointF(position.x,position.y)],['anchor',new host.PointF(anchor.x,anchor.y)],['rotation',0]]) {
+          actions.push(params[name].createSetTimeVaryingAction(false),params[name].createSetValueAction(params[name].createKeyframe(value),true));
+        }
+        actions.push(params.scale.createSetTimeVaryingAction(keys.length>0));
+        if(!keys.length) actions.push(params.scale.createSetValueAction(params.scale.createKeyframe(segment.scale),true));
+        for(const point of keys) {
+          const keyframe=params.scale.createKeyframe(point.value);keyframe.position=tick(point.time);
+          actions.push(params.scale.createAddKeyframeAction(keyframe),params.scale.createSetInterpolationAtKeyframeAction(keyframe.position,point.linear ? host.Constants.InterpolationMode.LINEAR:host.Constants.InterpolationMode.HOLD,true));
         }
       }
       return actions;
     },'Nocturnz/Edit — Zooms sur calques');
-    // A completed copy alone is not a completed zoom operation.
-    for(const {params} of prepared) {
-      if(!await params.scale.isTimeVarying() || !(await params.scale.getKeyframeListAsTickTimes()).length) throw new Error('Le calque existe mais Premiere n’a pas confirmé ses images clés.');
+    for(const {params,keys,segment} of prepared) {
+      for(const name of ['position','anchor','rotation']) if(await params[name].isTimeVarying()) throw new Error('Premiere n’a pas confirmé le cadrage fixe du calque.');
+      if(keys.length) {
+        if(!await params.scale.isTimeVarying() || !(await params.scale.getKeyframeListAsTickTimes()).length) throw new Error('Le calque existe mais Premiere n’a pas confirmé ses images clés.');
+      } else if(Math.abs(Number((await params.scale.getStartValue()).value)-segment.scale)>.01) throw new Error('Premiere n’a pas confirmé l’échelle du Jump.');
     }
     return layers.length;
   }
