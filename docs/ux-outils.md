@@ -67,3 +67,8 @@ Composants : `voice-stage`, `voice-crop`, `voice-thumb`, `voice-listen-panel`. I
 - Rythme calme par défaut, sans nouveau panneau de paramètres : tenue 3 s, interjections courtes ignorées, mouvements discrets ; durée 1,2 / 2 / 3 s dans les options avancées.
 - Sélecteur explicite « Appliquer sur » : calques d’effets bêta ou clips de la copie.
 - Action secondaire « Utiliser le calque vierge sélectionné » et état associé, visibles uniquement en mode calques. La sélection vidéo est rétablie après association.
+
+
+### Calque automatique et images distinctes
+
+Le modèle est fourni par l’extension ; aucune action de choix de calque côté utilisateur. Les vignettes sont des sélecteurs de personne avec leurs propres images de référence. Une seule zone est manipulée à la fois. La tête de lecture et la barre d’image fournissent deux moyens de choisir l’instant sans obliger les intervenants à apparaître ensemble. Les instants sont sauvegardés et les vignettes réextraites ; une image manquante est indiquée dans la vignette elle-même.

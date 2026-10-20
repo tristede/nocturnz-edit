@@ -186,6 +186,7 @@ h3 { font-size:12px; font-weight:550; margin:7px 0; }
 #zoom-controls .zoom-modes { padding-bottom:8px; margin-bottom:10px; }
 .voice-change-source { text-align:right; padding:5px 0; margin-bottom:6px; }
 .voice-preview-reset { text-align:right; margin-bottom:8px; }
+.voice-thumb-empty { position:absolute; top:42%; left:0; width:100%; text-align:center; color:var(--muted); font-size:11px; }
 .voice-motion-choice { display:flex; flex-direction:column; margin:12px 0; color:var(--muted); font-size:11px; }
 .voice-motion-choice select { margin-top:6px; }
 .voice-motion-mix { display:flex; flex-wrap:wrap; margin:0 0 14px; }

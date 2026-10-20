@@ -92,7 +92,7 @@
   }
   async function save() {
     if(!setup || !uxp) return;
-    const name=filename(setup),text=JSON.stringify({version:1,source:setup.source,people,wide,mode:$('voice-mode').value,
+    const name=filename(setup),text=JSON.stringify({version:1,source:setup.source,people:people.map(({previewImage,...person})=>person),wide,mode:$('voice-mode').value,
       mixedTrack:$('voice-track').value,micTracks:[0,1].map((index)=>$(`voice-mic-${index}`)?.value),
       movement:movement(),reframeCuts:$('voice-reframe-cuts').checked,output:$('voice-output').value,layerModel});
     saves=saves.catch(()=>{}).then(async()=>{const folder=await uxp.storage.localFileSystem.getDataFolder();const file=await folder.createFile(name,{overwrite:true});await file.write(text);});
@@ -120,7 +120,7 @@
       try {const folder=await uxp.storage.localFileSystem.getDataFolder();const file=await folder.getEntry(filename(setup));const text=await file.read();if(text.length<100000) data=JSON.parse(text);} catch(_) {}
       if(data?.version===1 && data.source===setup.source && Array.isArray(data.people) && data.people.length===2) {
         people=data.people.map((person,index)=>({name:String(person.name || `Intervenant ${index+1}`).slice(0,80),frame:validFrame(person.frame) ? person.frame:null,
-          crop:person.crop,reference:person.reference && typeof person.reference.path==='string' && Number.isFinite(person.reference.start) && Number.isFinite(person.reference.end) ? person.reference:null}));
+          crop:person.crop,preview:person.preview && Number.isFinite(person.preview.time) && Number.isFinite(person.preview.timeline) && person.preview.path===setup.source ? person.preview:null,reference:person.reference && typeof person.reference.path==='string' && Number.isFinite(person.reference.start) && Number.isFinite(person.reference.end) ? person.reference:null}));
         if(validFrame(data.wide)) {wide=data.wide;savedWide=true;}
         if(['in','out','jump','alternate'].includes(data.movement?.motion)) $('voice-motion').value=data.movement.motion;
         for(const input of document.querySelectorAll('[data-voice-motion]')) input.checked=data.movement?.types ? data.movement.types.includes(input.dataset.voiceMotion):true;
@@ -128,7 +128,6 @@
         $('voice-reframe-cuts').checked=data.reframeCuts===true;
         layerModel=data.layerModel || null;$('voice-output').value=data.output==='clips' ? 'clips':'layers';
       }
-      layerUI();
       $('voice-motion-mix').hidden=$('voice-motion').value!=='alternate';
       if(!savedWide) wide=null;
       samples=[];poster=null;$('voice-visual').hidden=true;stopListening();$('voice-listen-panel').hidden=true;
@@ -137,8 +136,11 @@
     } else {options($('voice-track'),count,$('voice-track').value);renderPeople(count);}
     const times=setup.targets.flatMap((target)=>[sec(target.start),sec(target.end)]);
     $('voice-preview-time').min=String(Math.min(...times));$('voice-preview-time').max=String(Math.max(...times));
-    if(changed) $('voice-preview-time').value=String(sec(setup.targets[0].start)+Math.min(2,(sec(setup.targets[0].end)-sec(setup.targets[0].start))/2));
+    if(changed) {activePerson=0;$('voice-preview-time').value=String(people[0].preview?.timeline ?? sec(setup.targets[0].start)+Math.min(2,(sec(setup.targets[0].end)-sec(setup.targets[0].start))/2));}
     await refreshPreview();$('voice-visual').hidden=false;$('voice-load').textContent='Changer la vidéo';$('voice-load').className='text-action voice-change-source';
+    for(const person of people) if(person.preview && !person.previewImage) {
+      const image=await api('zooms/preview',{path:person.preview.path,time:person.preview.time,size:setup.frameSize,frame:wide});person.previewImage=image.image;
+    }
     drawEditor();say('');
   }
   async function ensure() {
@@ -190,10 +192,12 @@
     for(const index of [0,1]) {
       syncFrame(index);const crop=cropFor(index),box=document.querySelector(`.voice-crop[data-person="${index}"]`);
       box.style.left=`${100*(crop.x-crop.r/2)}%`;box.style.top=`${100*(crop.y-crop.r/2)}%`;box.style.width=`${100*crop.r}%`;box.style.height=`${100*crop.r}%`;
-      box.classList.toggle('is-active',index===activePerson);box.setAttribute('aria-pressed',String(index===activePerson));box.querySelector('span').textContent=people[index].name;
+      box.hidden=index!==activePerson;box.classList.toggle('is-active',index===activePerson);box.setAttribute('aria-pressed',String(index===activePerson));box.querySelector('span').textContent=people[index].name;
       const card=$('voice-person-'+index);if(card) card.classList.toggle('is-active',index===activePerson);
       const image=$('voice-thumb-'+index);
-      if(image && poster) {image.src=poster;image.style.width=`${100/crop.r}%`;image.style.height=`${100/crop.r}%`;image.style.left=`${-100*(crop.x-crop.r/2)/crop.r}%`;image.style.top=`${-100*(crop.y-crop.r/2)/crop.r}%`;}
+      if(image) image.hidden=!people[index].previewImage;
+      const empty=$('voice-thumb-empty-'+index);if(empty) empty.hidden=Boolean(people[index].previewImage);
+      if(image && people[index].previewImage) {image.src=people[index].previewImage;image.style.width=`${100/crop.r}%`;image.style.height=`${100/crop.r}%`;image.style.left=`${-100*(crop.x-crop.r/2)/crop.r}%`;image.style.top=`${-100*(crop.y-crop.r/2)/crop.r}%`;}
       const badge=$('voice-ready-'+index);if(badge) badge.textContent=people[index].reference ? '✓ Voix associée':'Voix à associer';
       $('voice-assign-'+index).textContent=people[index].name;
     }
@@ -218,7 +222,8 @@
     let response;try {response=await Promise.race([request,timeout]);} finally {clearTimeout(timer);}
     if(serial!==previewSerial || current!==setup) return;
     poster=response.image;posterTime=sec(target.sourceIn)+time-sec(target.start);wide=response.frame;$('voice-poster').src=poster;
-    $('voice-preview-clock').textContent=clock(time);drawEditor();say('');
+    people[activePerson].preview={path:target.path,time:posterTime,timeline:time};people[activePerson].previewImage=poster;
+    $('voice-preview-clock').textContent=clock(time);drawEditor();await save();say('');
   }
   async function resetPreview() {
     if(!setup) return;
@@ -232,20 +237,20 @@
     return {motion:$('voice-motion').value,duration:Number($('voice-motion-duration').value),
       types:[...document.querySelectorAll('[data-voice-motion]')].filter((input)=>input.checked).map((input)=>input.dataset.voiceMotion)};
   }
-  function layerUI() {
-    $('voice-layer-controls').hidden=$('voice-output').value!=='layers';
-    $('voice-layer-status').textContent=layerModel ? 'Calque modèle associé':'Calque modèle à choisir';
+  async function selectPerson(index) {
+    const previous=activePerson,previousTime=$('voice-preview-time').value;
+    activePerson=index;
+    if(people[index].preview) $('voice-preview-time').value=String(people[index].preview.timeline);
+    try {await refreshPreview();drawEditor();}
+    catch(error) {activePerson=previous;$('voice-preview-time').value=previousTime;drawEditor();throw error;}
   }
-  async function captureLayer() {
-    if(!setup) throw new Error('Charge d’abord la vidéo à cadrer.');
+  async function previewPlayhead() {
+    if(!setup) return;
     const project=await host.Project.getActiveProject(),sequence=project && await project.getActiveSequence();
-    if(!project || id(project)!==id(setup.project) || !sequence) throw new Error('Reviens au projet de la vidéo.');
-    layerModel=await require('./zoom-layers.cjs').withHost(host).capture(project,sequence);
-    if(layerModel.width!==setup.frameSize.width || layerModel.height!==setup.frameSize.height) {layerModel=null;throw new Error('Le calque doit avoir les dimensions de la séquence vidéo.');}
-    await save();layerUI();
-    await project.openSequence(setup.sequence);await project.setActiveSequence(setup.sequence);
-    host.TrackItemSelection.createEmptySelection((selected)=>{for(const target of setup.targets) selected.addItem(target.item,true);setup.sequence.setSelection(selected);});
-    say('Calque modèle associé. La sélection vidéo est rétablie.');
+    if(!sequence || id(sequence)!==id(setup.sequence)) throw new Error('Reviens à la séquence source.');
+    const moment=sec((await sequence.getPlayerPosition()).ticks);
+    if(!setup.targets.some((target)=>sec(target.start)<=moment && moment<sec(target.end))) throw new Error('Place la tête de lecture dans un clip vidéo sélectionné.');
+    $('voice-preview-time').value=String(moment);await refreshPreview();
   }
   async function cutFrames(current) {
     const frames=current.targets.map(()=>people.map((person)=>person.frame));faceSummary='';
@@ -255,14 +260,14 @@
     try {
       const detect=(target,time)=>api('zooms/faces',{path:target.path,time,size:current.frameSize,frame:wide});
       say('Repérage des visages…');
-      const reference=(await detect({path:current.source},posterTime)).faces;
+      const reference=await Promise.all(people.map(async(person)=>(await detect({path:current.source},person.preview?.time ?? posterTime)).faces));
       const crops=[0,1].map((index)=>({...cropFor(index)}));
-      const anchors=crops.map((crop)=>{
-        const inside=reference.filter((face)=>Math.abs(face.x-crop.x)<crop.r/2 && Math.abs(face.y-crop.y)<crop.r/2);
+      const anchors=crops.map((crop,index)=>{
+        const inside=reference[index].filter((face)=>Math.abs(face.x-crop.x)<crop.r/2 && Math.abs(face.y-crop.y)<crop.r/2);
         // Two visible faces inside one crop are ambiguous. Keep the manual frame.
         return inside.length===1 ? inside[0]:null;
       });
-      if(anchors[0]===anchors[1]) anchors.fill(null);
+      if(anchors[0] && anchors[1] && Math.hypot(anchors[0].x-anchors[1].x,anchors[0].y-anchors[1].y)<.03) anchors.fill(null);
       let adjusted=0,fallback=0;
       const cache=new Map();
       for(let index=0;index<current.targets.length;index++) {
@@ -303,9 +308,9 @@
       const card=document.createElement('section');card.className='voice-person';card.id='voice-person-'+index;
       const thumb=document.createElement('div');thumb.className='voice-thumb';thumb.setAttribute('role','button');thumb.setAttribute('tabindex','0');thumb.setAttribute('aria-label',`Régler le cadrage de ${person.name}`);
       const image=document.createElement('img');image.id='voice-thumb-'+index;image.alt=`Aperçu du cadrage ${index+1}`;image.draggable=false;thumb.appendChild(image);
-      bind(thumb,()=>{if(!busy) {activePerson=index;drawEditor();}},false);card.appendChild(thumb);
+      const empty=document.createElement('span');empty.id='voice-thumb-empty-'+index;empty.className='voice-thumb-empty';empty.textContent='Choisir son image';thumb.appendChild(empty);
+      bind(thumb,()=>selectPerson(index));card.appendChild(thumb);
       const name=document.createElement('input');name.type='text';name.value=person.name;name.maxLength=80;name.setAttribute('aria-label',`Nom de l’intervenant ${index+1}`);
-      name.addEventListener('focus',()=>{activePerson=index;drawEditor();});
       name.addEventListener('input',()=>{person.name=name.value.slice(0,80);drawEditor();save().catch((error)=>say(error.message,true));});card.appendChild(name);
       if(mixed) {const badge=document.createElement('span');badge.className='voice-ready';badge.id='voice-ready-'+index;card.appendChild(badge);}
       else {
@@ -376,8 +381,9 @@
     await restoreSourceSelection();
     await ensure();invalidate();
     const config=movement();if(config.motion==='alternate' && !config.types.length) throw new Error('Choisis au moins un type de zoom.');
-    if($('voice-output').value==='layers') await require('./zoom-layers.cjs').withHost(host).resolve(setup.project,layerModel,setup.frameSize);
+    if($('voice-output').value==='layers') {say('Création du calque automatique…');layerModel=await require('./zoom-layers.cjs').withHost(host).ensure(setup.project,setup.frameSize,setup.timebase,api);await save();}
     if(!people.every((person)=>validFrame(person.frame)) || !validFrame(wide)) throw new Error('Place les deux cadres sur l’image avant de lancer.');
+    if(!people.every((person)=>person.preview)) throw new Error('Choisis une image pour chaque intervenant en cliquant sur sa vignette.');
     const current=await selection(),mode=$('voice-mode').value;
     let audio;
     if(mode==='mixed') {
@@ -405,7 +411,7 @@
     for(const person of [...people,{frame:wide}]) if(!validFrame(person.frame) || person.frame.frameSize.width!==current.frameSize.width || person.frame.frameSize.height!==current.frameSize.height) throw new Error('Les dimensions ont changé. Reprends les cadrages.');
     const bases=await Promise.all(current.targets.map((target)=>frame(target.item,current.frameSize)));
     const layers=$('voice-output').value==='layers',layerAdapter=layers ? require('./zoom-layers.cjs').withHost(host):null;
-    if(layers) await layerAdapter.resolve(current.project,layerModel,current.frameSize);
+    if(layers) {say('Création du calque automatique…');layerModel=await layerAdapter.ensure(current.project,current.frameSize,current.timebase,api);await save();}
     if(layers && bases.some((base)=>Math.abs(base.rotation)>.0001 || Math.abs(base.anchor.x-wide.anchor.x)>.0001 || Math.abs(base.anchor.y-wide.anchor.y)>.0001)) throw new Error('Les calques demandent des clips sans rotation et avec le même ancrage que le plan large.');
     const config=movement(),frames=await cutFrames(current);
     const changes=require('./speaker-movement.cjs').plan(current.targets,result.turns,wide,frames,current.timebase,config);
@@ -500,7 +506,7 @@
   $('voice-listener').addEventListener('play',()=>{if(!sampleMedia || $('voice-listener').src!==sampleMedia) return;heard=true;disabled(busy);$('voice-listen').textContent='↻ Réécouter';});
   $('voice-listener').addEventListener('error',()=>{if(!sampleMedia) return;heard=false;disabled(busy);say('Lecture audio impossible. Relance l’écoute de l’extrait.',true);sampleMedia=null;});
   bind($('voice-reset-preview'),resetPreview);
-  bind($('voice-layer-model'),captureLayer);
+  bind($('voice-preview-playhead'),previewPlayhead);
   bind($('voice-load'),load);bind($('voice-identify'),identify);bind($('voice-listen'),listen);
   for(const index of [0,1]) bind($('voice-assign-'+index),()=>assign(index),false);
   bind($('voice-skip'),()=>{if(busy || !samples.length) return;sampleIndex=(sampleIndex+1)%samples.length;renderSample();},false);
@@ -511,7 +517,7 @@
   $('voice-mode').addEventListener('change',()=>{invalidate();stopListening();$('voice-listen-panel').hidden=true;renderPeople(setup ? $('voice-track').children.length:0);save().catch((error)=>say(error.message,true));});
   $('voice-track').addEventListener('change',()=>{invalidate();stopListening();samples=[];$('voice-listen-panel').hidden=true;people.forEach((person)=>{person.reference=null;});renderPeople($('voice-track').children.length);save().catch((error)=>say(error.message,true));});
   $('voice-motion').addEventListener('change',()=>{$('voice-motion-mix').hidden=$('voice-motion').value!=='alternate';save().catch((error)=>say(error.message,true));});
-  $('voice-output').addEventListener('change',()=>{layerUI();save().catch((error)=>say(error.message,true));});
+  $('voice-output').addEventListener('change',()=>{save().catch((error)=>say(error.message,true));});
   for(const input of [...document.querySelectorAll('[data-voice-motion]'),$('voice-motion-duration'),$('voice-reframe-cuts')]) input.addEventListener('change',()=>save().catch((error)=>say(error.message,true)));
   $('voice-poster').addEventListener('error',()=>{if(poster) say('Affichage interrompu. Clique sur Recharger l’aperçu.',true);});
   renderPeople();

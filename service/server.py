@@ -130,6 +130,9 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError('Objet JSON requis.')
             if self.path == '/api/v1/zooms/preview':
                 self.reply(200, zoom_preview(payload,'frame'))
+            elif self.path == '/api/v1/zooms/layer-template':
+                from service.zoom_layer_template import prepare
+                self.reply(200, prepare(payload))
             elif self.path == '/api/v1/zooms/faces':
                 self.reply(200, zoom_preview(payload,'faces'))
             elif self.path == '/api/v1/zooms/listen':

@@ -26,22 +26,44 @@ function withHost(host) {
       }
     }
   }
-  async function capture(project,sequence) {
-    const selection=await sequence.getSelection(),items=selection ? await selection.getTrackItems():[],layers=[];
-    for(const item of items) if(await item.isAdjustmentLayer()) layers.push(item);
-    if(layers.length!==1) throw new Error('Sélectionne un seul calque d’effets vierge dans la timeline.');
-    await validate(layers[0]);const size=await sequence.getFrameSize();
-    return {id:key(await layers[0].getProjectItem()),width:size.width,height:size.height};
-  }
   async function resolve(project,model,size) {
-    if(!model || model.width!==size.width || model.height!==size.height) throw new Error('Choisis un calque modèle aux dimensions de la séquence.');
-    for(const sequence of await project.getSequences()) for(let t=0;t<await sequence.getVideoTrackCount();t++) {
+    if(!model || model.width!==size.width || model.height!==size.height) throw new Error('Le calque automatique n’est pas prêt pour ces dimensions.');
+    for(const sequence of (await project.getSequences()).filter((item)=>item.name.startsWith('Nocturnz · Calque auto '))) for(let t=0;t<await sequence.getVideoTrackCount();t++) {
       for(const item of await (await sequence.getVideoTrack(t)).getTrackItems(1,false)) {
         if(key(await item.getProjectItem())!==model.id || !await item.isAdjustmentLayer()) continue;
         await validate(item);return host.ProjectItem.cast(await item.getProjectItem());
       }
     }
-    throw new Error('Calque modèle introuvable. Sélectionne-le à nouveau.');
+    throw new Error('Calque automatique introuvable. Relance la génération.');
+  }
+  async function ensure(project,size,timebase,api) {
+    const name=`Nocturnz · Calque auto ${size.width}×${size.height} · ${timebase}`;
+    async function find() {
+      for(const sequence of await project.getSequences()) {
+        if(sequence.name!==name) continue;
+        const dimensions=await sequence.getFrameSize();
+        if(dimensions.width!==size.width || dimensions.height!==size.height || String(await sequence.getTimebase())!==String(timebase)) continue;
+        for(let t=0;t<await sequence.getVideoTrackCount();t++) for(const item of await (await sequence.getVideoTrack(t)).getTrackItems(1,false)) {
+          if(!await item.isAdjustmentLayer()) continue;
+          await validate(item);return {id:key(await item.getProjectItem()),width:size.width,height:size.height};
+        }
+      }
+      return null;
+    }
+    let model=await find();if(model) return model;
+    const active=await project.getActiveSequence(),selected=active && await active.getSelection(),items=selected ? await selected.getTrackItems():[];
+    const record=await api('zooms/layer-template',{width:size.width,height:size.height,timebase:String(timebase)});
+    try {
+      if(!await project.importSequences(record.path,[host.Guid.fromString(record.sequenceId)])) throw new Error('Premiere n’a pas importé le calque automatique.');
+      model=await find();
+    } finally {
+      if(active) {
+        await project.openSequence(active);await project.setActiveSequence(active);
+        host.TrackItemSelection.createEmptySelection((selection)=>{for(const item of items) selection.addItem(item,true);active.setSelection(selection);});
+      }
+    }
+    if(!model) throw new Error('Le calque automatique importé n’a pas été reconnu.');
+    return model;
   }
   async function transform(item) {
     const chain=await item.getComponentChain();let component=null;
@@ -98,6 +120,6 @@ function withHost(host) {
     await assertCopy(project,draft);commit(project,actions,'Nocturnz/Edit — Zooms sur calques');
     return layers.length;
   }
-  return {capture,resolve,apply};
+  return {resolve,ensure,apply};
 }
 module.exports={withHost};

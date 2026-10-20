@@ -107,3 +107,8 @@ Capture utilisateur : reconnaissance terminée, puis `media.getId is not a funct
 ## 20 octobre 2026 — Correction du rythme et branchement calques bêta
 
 Le résultat voix local explique le pompage : alternance de courts segments neutres et parlés, retour au plan large et relance des mouvements. Le planificateur filtre maintenant ces changements (pauses jusqu’à 1,8 s, tenue 3 s), réduit l’amplitude et fixe une transition minimale de 1,2 s ; les segments trop courts restent fixes. Le mode calques réutilise un vrai calque vierge associé une fois, insère des instances sur une piste supérieure dans une copie et anime l’effet Transformation ; les clips restent intacts. Pas de création automatique du média calque via l’API documentée trouvée. Parcours calques non encore validé dans l’hôte. Syntaxe contrôlée ; détails et limites dans docs/zooms.md.
+
+
+## 20 octobre 2026 — Calque intégré et références visuelles séparées
+
+Suppression de l’étape manuelle de modèle : un projet natif créé dans un projet vide de Premiere, nettoyé des chemins et médias utilisateur, est intégré. Le service génère le .prproj dimensionné/cadencé et le panneau importe sa seule séquence technique puis réutilise le média calque. La sélection et la séquence actives sont restaurées. Le modèle natif d’origine a été créé et sauvegardé dans l’hôte ; import et génération complète après adaptation restent à valider. Chaque personne conserve une image indépendante et peut prendre celle à la tête de lecture. Contrôles de syntaxe/diff uniquement ; aucune suite de tests ajoutée/exécutée. Références AutoCut documentées dans docs/zooms.md ; aucun mécanisme interne concurrent supposé.

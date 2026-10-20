@@ -153,6 +153,7 @@
                   <div class="voice-crop" data-person="1" role="button" tabindex="0" aria-label="Déplacer le cadrage de l’intervenant 2"><span></span><div class="voice-crop-handle" data-resize="1"></div></div>
                 </div>
                 <div class="voice-image-time"><input id="voice-preview-time" type="range" min="0" max="1" step="0.1" value="0" aria-label="Choisir l’image du rush"><output id="voice-preview-clock"></output></div>
+                <div class="text-action" id="voice-preview-playhead" role="button" tabindex="0">Prendre l’image à la tête de lecture</div>
                 <div id="voice-people" class="voice-people-grid"></div>
                 <div class="control-label-row"><label for="voice-crop-zoom" id="voice-crop-title">Zoom</label><output id="voice-crop-value">150 %</output></div>
                 <input class="zoom-range" id="voice-crop-zoom" type="range" min="100" max="400" step="1" value="150" aria-label="Taille du cadrage sélectionné">
@@ -171,7 +172,7 @@
                 <div class="disclosure" role="button" tabindex="0" data-disclosure="voice-advanced" aria-expanded="false">Options avancées<span>+</span></div>
                 <div id="voice-advanced" hidden><label class="voice-motion-choice">Transition<select id="voice-motion-duration"><option value="1200" selected>Douce · 1,2 s</option><option value="2000">Lente · 2 s</option><option value="3000">Très lente · 3 s</option></select></label><label class="voice-face-choice"><input id="voice-reframe-cuts" type="checkbox">Recaler les visages à chaque cut · bêta</label></div>
                 <label class="voice-motion-choice">Appliquer sur<select id="voice-output"><option value="layers" selected>Calques d’effets · bêta</option><option value="clips">Clips de la copie</option></select></label>
-                <div id="voice-layer-controls"><div class="text-action" role="button" tabindex="0" id="voice-layer-model">Utiliser le calque vierge sélectionné</div><p class="muted" id="voice-layer-status">Calque modèle à choisir</p></div>
+
                 <div class="button button-primary" id="voice-analyze" role="button" tabindex="0">Créer les zooms</div>
               </section>
               <div class="button button-secondary" id="voice-cancel" role="button" tabindex="0" hidden>Annuler</div>
