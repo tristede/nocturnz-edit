@@ -14,7 +14,7 @@ Analyse et XML ont été testés avec le binaire réel et un audio de validation
 
 ## Installer le moteur et lancer le service
 
-**Zoom interlocuteur / Libellés timeline** : lecture des couleurs, capture, conservation et application fixe d’un cadrage par couleur/source vérifiées dans Premiere Beta 27 sur une mire isolée avec l’ancien parcours direct. Le nouveau parcours sur copie, les animations et Annuler restent à valider dans l’hôte; ce mode demeure grisé. Le mode Voix reste à développer. Voir [Zooms](docs/zooms.md).
+**Zoom interlocuteur / Libellés timeline** : lecture des couleurs, capture, conservation et application fixe d’un cadrage par couleur/source vérifiées dans Premiere Beta 27 sur une mire isolée avec l’ancien parcours direct. Le nouveau parcours sur copie, les animations et Annuler restent à valider dans l’hôte; ce mode demeure grisé. Le mode Voix propose désormais deux fiches intervenant, une piste mélangée avec références vocales ou deux pistes micros séparées, puis des cadrages automatiques sur copie ; cette nouvelle tranche reste à valider dans Premiere. Installation : `npm run setup:speakers`. Voir [Zooms](docs/zooms.md).
 
 ```sh
 npm run setup:engine

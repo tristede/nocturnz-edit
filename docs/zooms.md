@@ -55,7 +55,23 @@ Avant capture et application, le panneau relit le fichier, compare son SHA-256, 
 
 ### Voix
 
-Choix présent mais grisé en développement. Aucun traitement vocal n’est exécuté lors de l’utilisation des libellés. La détection des locuteurs et leur association aux cadrages restent à brancher.
+Le mode Voix est désormais implémenté avec deux modes audio ; sa validation complète dans Premiere reste à effectuer. Le mode Libellés continue à fonctionner indépendamment, sans analyse vocale.
+
+1. Sélectionner la vidéo des deux intervenants dans la timeline. Ouvrir **Zooms → Interlocuteur → Voix** ; **Reprendre la sélection Premiere** charge les pistes et les réglages conservés.
+2. Nommer les deux personnes. Cadrer l’une dans Premiere et **Mémoriser son cadrage**, puis faire pareil pour l’autre. **Mémoriser le plan large** définit le cadrage de repli ; le cadrage initial est conservé par défaut.
+3. **Piste mélangée** : choisir la piste de dialogue. Placer le curseur sur une réplique de trois secondes d’une personne seule, puis **Repérer sa voix au curseur** sur sa fiche. Répéter pour l’autre personne. Aucun microphone système n’est enregistré : seuls les médias locaux du montage sont lus.
+4. **Deux micros séparés** : associer A1/A2 (ou d’autres pistes distinctes) aux deux fiches ; aucune réplique de référence nécessaire. Un fichier stéréo contenant les deux micros sur des canaux distincts doit être préparé comme sources mono séparées pour ce parcours.
+5. **Détecter les prises de parole**, puis **Créer les zooms automatiques**. Une liste repliée permet de réattribuer les intervalles à une personne ou au plan large avant application.
+
+Le moteur mixte utilise Silero VAD puis des embeddings WeSpeaker ResNet34-LM via sherpa-onnx, comparés aux deux références, sans LLM ni service cloud. Le modèle est téléchargé séparément et vérifié par SHA-256. Il est entraîné sur VoxCeleb et n’est pas validé ici sur la voix française d’Adam. Des voix proches, du bruit et des conversations simultanées peuvent provoquer des erreurs. Les décisions insuffisamment confiantes utilisent le plan large ; ce n’est pas une garantie de détection des chevauchements de voix.
+
+Le mode deux micros compare l’énergie de la parole sur les pistes, avec normalisation des niveaux et décision neutre si les deux scores sont proches. La diaphonie et une musique dominante peuvent affecter le résultat.
+
+L’analyse respecte les points d’entrée/sortie et positions des clips audio de la timeline. Les cibles vidéo doivent appartenir à une même source caméra par traitement et être à vitesse normale ; les clips composés ou déjà animés sont refusés. Les pistes ne sont pas analysées comme un mixeur Premiere : les effets, niveaux et routages de sortie Premiere ne sont pas rendus ; les fichiers source et leurs coupes sont utilisés. La première piste audio embarquée de chaque fichier est décodée.
+
+L’application ajoute des images clés **HOLD** de position, échelle, ancrage et rotation sur une copie native de la séquence. Le cadrage change quand l’intervenant change, sans réencoder la vidéo, sans couper/modifier l’audio et sans modifier la séquence originale. Les réglages des deux personnes et les références temporelles sont conservés dans les données privées du plugin, par projet/source. L’analyse vocale et ses décisions restent un résultat de tâche local. L’audio et la sélection sont vérifiés de nouveau avant application ; les paramètres animés existants sont refusés.
+
+Installation : `npm run setup:modules`, puis `npm run setup:speakers`. La seconde installation ajoute sherpa-onnx 1.13.8 et un modèle ONNX de 26,5 Mo ; elle ne lit aucun média. Les contrôles effectués pour cette tranche sont installation, empreinte, syntaxe JavaScript et compilation Python ; pas d’essai de reconnaissance ni d’application native annoncé.
 
 ### Format du projet
 

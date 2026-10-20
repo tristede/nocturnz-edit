@@ -122,10 +122,10 @@
           </section>
           <section id="zoom-speaker-pane" hidden>
             <div class="speaker-sources" aria-label="Source de l’interlocuteur">
-              <div class="is-active" role="button" tabindex="0" data-speaker-source="labels" aria-pressed="true"><img src="icons/zoom-labels.svg" alt="" width="28" height="28"><span>Libellés timeline</span></div>
-              <div role="button" tabindex="0" data-speaker-source="voice" aria-pressed="false"><img src="icons/zoom-voice.svg" alt="" width="28" height="28"><span>Voix</span></div>
+              <div role="button" tabindex="0" data-speaker-source="labels" aria-pressed="false"><img src="icons/zoom-labels.svg" alt="" width="28" height="28"><span>Libellés timeline</span></div>
+              <div class="is-active" role="button" tabindex="0" data-speaker-source="voice" aria-pressed="true"><img src="icons/zoom-voice.svg" alt="" width="28" height="28"><span>Voix</span></div>
             </div>
-            <section id="speaker-labels-pane">
+            <section id="speaker-labels-pane" hidden>
               <div class="button button-secondary" id="speaker-read-labels" role="button" tabindex="0">Lire les libellés enregistrés</div>
               <p class="source-name" id="speaker-label-source">Projet enregistré</p>
               <div id="speaker-label-rows"></div>
@@ -143,8 +143,23 @@
                 <div class="button button-primary" id="speaker-apply" role="button" tabindex="0">Créer la version cadrée</div>
               </section>
             </section>
-            <p class="pending-state" id="speaker-voice-pending" role="status" hidden>Voix · en développement</p>
-            <p class="tool-status" id="speaker-label-status" role="status" aria-live="polite"></p>
+            <section id="speaker-voice-pending">
+              <div class="zoom-fields"><label>Audio<select id="voice-mode"><option value="mixed" selected>Piste mélangée</option><option value="mics">Deux micros séparés</option></select></label></div>
+              <div class="text-action" id="voice-load" role="button" tabindex="0">Reprendre la sélection Premiere</div>
+              <div class="zoom-fields" id="voice-mixed-track"><label>Piste voix<select id="voice-track"></select></label></div>
+              <div id="voice-people"></div>
+              <div class="text-action" id="voice-wide" role="button" tabindex="0">Mémoriser le plan large</div>
+              <div class="button button-primary" id="voice-analyze" role="button" tabindex="0">Détecter les prises de parole</div>
+              <div class="button button-secondary" id="voice-cancel" role="button" tabindex="0" hidden>Annuler</div>
+              <p class="tool-status" id="voice-status" role="status" aria-live="polite"></p>
+              <section id="voice-result" hidden>
+                <p class="muted" id="voice-summary"></p>
+                <div class="button button-primary" id="voice-apply" role="button" tabindex="0">Créer les zooms automatiques</div>
+                <div class="disclosure" role="button" tabindex="0" data-disclosure="voice-review" aria-expanded="false">Ajuster les intervenants<span>+</span></div>
+                <div id="voice-review" hidden><div class="review-actions"><div id="voice-previous" role="button" tabindex="0">Précédent</div><span id="voice-page"></span><div id="voice-next" role="button" tabindex="0">Suivant</div></div><div id="voice-turns"></div></div>
+              </section>
+            </section>
+            <p class="tool-status" id="speaker-label-status" role="status" aria-live="polite" hidden></p>
           </section>
           <section id="zoom-shared-settings">
           <div class="control-label-row"><label for="zoom-increase">Intensité</label><output id="zoom-value" for="zoom-increase">10 %</output></div>
@@ -182,6 +197,7 @@
   <script src="module-catalog.js"></script>
   <script src="premiere-transcript.js"></script>
   <script src="module-tools.js"></script>
+  <script src="speaker-voices.js"></script>
   <script src="ui-controls.js"></script>
   <script src="image-paste.js"></script>
 </body>

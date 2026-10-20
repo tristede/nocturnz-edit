@@ -72,6 +72,11 @@ def run(module, paths, options, directory):
     directory.mkdir(parents=True, exist_ok=True)
     source = paths[0] if paths else None
     progress(2, module)
+    if module == 'speakerzoom':
+        from service.speaker_analysis import analyze_speakers
+        result = analyze_speakers(options, progress)
+        write_json(directory / 'intervenants.json', result)
+        return result
     if module == 'reviewcuts':
         from opencut.export.premiere import export_premiere_xml_from_cuts
         return export_premiere_xml_from_cuts(source, options['cuts'], str(directory / 'montage-revise.xml'),

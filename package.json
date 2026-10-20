@@ -9,6 +9,7 @@
     "setup:modules": "python3 scripts/install-modules.py",
     "sync:catalog": "python3 scripts/install-modules.py --catalog-only",
     "service": "python3 service/server.py",
-    "setup:clipboard": "python3 scripts/install-clipboard.py"
+    "setup:clipboard": "python3 scripts/install-clipboard.py",
+    "setup:speakers": "python3 scripts/install-speakers.py"
   }
 }

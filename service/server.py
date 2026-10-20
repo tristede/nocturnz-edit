@@ -20,7 +20,7 @@ def health_payload():
     engine = engine_info()
     return {
         'name': 'Nocturnz/Edit Local Service', 'version': '0.5.0', 'status': 'ready',
-        'capabilities': ['saved-timeline-labels', 'caption-editor-render', 'premiere-source-transcript'] + (['clipboard-image'] if sys.platform == 'darwin' and (ROOT / '.runtime/bin/nocturnz-clipboard').is_file() else []) + (['silence-analysis', 'silence-review', 'premiere-xml-export'] if engine['available'] else []),
+        'capabilities': ['saved-timeline-labels', 'caption-editor-render', 'premiere-source-transcript', 'two-speaker-zoom-analysis'] + (['clipboard-image'] if sys.platform == 'darwin' and (ROOT / '.runtime/bin/nocturnz-clipboard').is_file() else []) + (['silence-analysis', 'silence-review', 'premiere-xml-export'] if engine['available'] else []),
         'mediaProcessing': engine['available'], 'engines': [engine],
     }
 
@@ -93,7 +93,9 @@ class Handler(BaseHTTPRequestHandler):
             payload = json.loads(self.rfile.read(length))
             if not isinstance(payload, dict):
                 raise ValueError('Objet JSON requis.')
-            if self.path == '/api/v1/captions/from-premiere':
+            if self.path == '/api/v1/zooms/speakers/analyze':
+                self.reply(202, self.server.module_jobs.create_speaker_zoom(payload))
+            elif self.path == '/api/v1/captions/from-premiere':
                 self.reply(202, self.server.module_jobs.from_premiere_transcript(payload))
             elif self.path == '/api/v1/clipboard/image':
                 self.reply(201, paste_image())

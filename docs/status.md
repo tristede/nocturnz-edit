@@ -1,5 +1,14 @@
 # État des fonctions
 
+## Priorité Zoom intervenants — 20 octobre 2026
+
+- Deux fiches : nom, cadrage, référence de voix ou piste micro. Mode audio mélangé actuel et deux micros séparés pour les futurs projets. Libellés timeline toujours indépendants.
+- Analyse locale de la parole/identité, liste de décisions corrigeable, application par images clés sur une copie native de la séquence. Vérification de la sélection et de l’audio avant application.
+- sherpa-onnx 1.13.8 installé, modèle WeSpeaker local de 26,5 Mo téléchargé et empreinte vérifiée. Installation reproductible par `npm run setup:speakers`.
+- Syntaxe JavaScript et compilation Python contrôlées. Aucune reconnaissance réelle ou application native de cette nouvelle tranche validée ; tuiles maintenues atténuées. Voir [Zooms](zooms.md).
+- Le chantier Silences a été mis de côté à la demande d’Adam pour traiter cette priorité ; aucune résolution du problème de coupes n’est annoncée dans cette tranche.
+
+
 ## Tranche UX et collage — 20 octobre 2026
 
 - Options avancées repliées pour les quinze adaptateurs ; paramètres principaux ciblés par outil.

@@ -12,7 +12,7 @@
   ];
   let host = null;
   try { host = require('premierepro'); } catch (_) {}
-  let mode = 'presets', preset = presets[0], busy = false;
+  let mode = 'speaker', preset = presets[0], busy = false;
 
   function bind(element, action) {
     element.addEventListener('click', action);
