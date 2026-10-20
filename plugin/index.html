@@ -157,7 +157,7 @@
                 <div id="voice-people" class="voice-people-grid"></div>
                 <div class="control-label-row"><label for="voice-crop-zoom" id="voice-crop-title">Zoom</label><output id="voice-crop-value">150 %</output></div>
                 <input class="zoom-range" id="voice-crop-zoom" type="range" min="100" max="400" step="1" value="150" aria-label="Taille du cadrage sélectionné">
-                <div class="quick-values voice-crop-presets"><div role="button" tabindex="0" data-crop-size="1">Large</div><div role="button" tabindex="0" data-crop-size="0.66">Portrait</div><div role="button" tabindex="0" data-crop-size="0.5">Serré</div></div>
+                <div class="quick-values voice-crop-presets"><div role="button" tabindex="0" data-crop-size="1">Large</div><div role="button" tabindex="0" data-crop-size="0.8">Portrait</div><div role="button" tabindex="0" data-crop-size="0.66">Serré</div></div>
                 <div class="voice-audio-choice"><label>Voix<select id="voice-mode"><option value="mixed" selected>Les deux ensemble</option><option value="mics">Un micro par personne</option></select></label><label id="voice-mixed-track">Piste<select id="voice-track"></select></label></div>
                 <div class="button button-secondary" id="voice-identify" role="button" tabindex="0">Identifier les deux voix</div>
                 <section class="voice-listen-panel" id="voice-listen-panel" hidden>
@@ -170,7 +170,7 @@
                 <label class="voice-motion-choice">Mouvement<select id="voice-motion"><option value="alternate">Alterner</option><option value="in">Zoom in</option><option value="out">Zoom out</option><option value="jump" selected>Jump · sans animation</option></select></label>
                 <div id="voice-motion-mix" class="voice-motion-mix" hidden><label><input type="checkbox" data-voice-motion="in" checked>Zoom in</label><label><input type="checkbox" data-voice-motion="out" checked>Zoom out</label><label><input type="checkbox" data-voice-motion="jump" checked>Jump</label></div>
                 <div class="disclosure" role="button" tabindex="0" data-disclosure="voice-advanced" aria-expanded="false">Options avancées<span>+</span></div>
-                <div id="voice-advanced" hidden><label class="voice-motion-choice">Transition<select id="voice-motion-duration"><option value="1200" selected>Douce · 1,2 s</option><option value="2000">Lente · 2 s</option><option value="3000">Très lente · 3 s</option></select></label><label class="voice-face-choice"><input id="voice-reframe-cuts" type="checkbox">Recaler les visages à chaque cut · bêta</label></div>
+                <div id="voice-advanced" hidden><label class="voice-motion-choice">Transition<select id="voice-motion-duration"><option value="2000" selected>Douce · 2 s</option><option value="3000">Très lente · 3 s</option></select></label><label class="voice-face-choice"><input id="voice-reframe-cuts" type="checkbox">Recaler les visages à chaque cut · bêta</label></div>
                 <label class="voice-motion-choice">Appliquer sur<select id="voice-output"><option value="layers" selected>Calques d’effets · bêta</option><option value="clips">Clips de la copie</option></select></label>
 
                 <div class="button button-primary" id="voice-analyze" role="button" tabindex="0">Créer les zooms</div>

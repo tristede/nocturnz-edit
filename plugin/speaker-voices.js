@@ -70,6 +70,11 @@
     if(!host) throw new Error('Ouvre le panneau dans Premiere.');
     const project=await host.Project.getActiveProject(),sequence=project && await project.getActiveSequence();
     if(!sequence) throw new Error('Ouvre une séquence puis sélectionne la vidéo des intervenants.');
+    // A generated copy is not a clean input: stacking its existing adjustment
+    // layers would multiply the apparent zoom, even with the Large preset.
+    for(let t=0;t<await sequence.getVideoTrackCount();t++) for(const item of await (await sequence.getVideoTrack(t)).getTrackItems(1,false)) {
+      if(await item.isAdjustmentLayer() && /^Nocturnz · (?:Zoom$|.* · (?:Zoom in|Zoom out|Jump)$)/.test(await item.getName())) throw new Error('Cette séquence contient déjà des zooms Nocturnz. Reviens à la séquence source pour régénérer.');
+    }
     const selected=await sequence.getSelection(),targets=[];
     for(const item of selected ? await selected.getTrackItems():[]) {
       if(!await motion(item)) continue;
@@ -124,7 +129,7 @@
         if(validFrame(data.wide)) {wide=data.wide;savedWide=true;}
         if(['in','out','jump','alternate'].includes(data.movement?.motion)) $('voice-motion').value=data.movement.motion;
         for(const input of document.querySelectorAll('[data-voice-motion]')) input.checked=data.movement?.types ? data.movement.types.includes(input.dataset.voiceMotion):true;
-        $('voice-motion-duration').value=String([1200,2000,3000].includes(data.movement?.duration) ? data.movement.duration:1200);
+        $('voice-motion-duration').value=String([1200,2000,3000].includes(data.movement?.duration) ? Math.max(2000,data.movement.duration):2000);
         $('voice-reframe-cuts').checked=data.reframeCuts===true;
         layerModel=data.layerModel || null;$('voice-output').value=data.output==='clips' ? 'clips':'layers';
       }
@@ -171,7 +176,7 @@
       const r=wide.scale/person.frame.scale;
       crop={r,x:wide.position.x+(.5-person.frame.position.x)*r,y:wide.position.y+(.5-person.frame.position.y)*r};
     }
-    if(!crop || ![crop.r,crop.x,crop.y].every(Number.isFinite)) crop={r:.6,x:index ? .7:.3,y:.5};
+    if(!crop || ![crop.r,crop.x,crop.y].every(Number.isFinite)) crop={r:.83,x:index ? .7:.3,y:.5};
     crop.r=clamp(crop.r,.25,1);crop.x=clamp(crop.x,crop.r/2,1-crop.r/2);crop.y=clamp(crop.y,crop.r/2,1-crop.r/2);
     person.crop=crop;return crop;
   }
@@ -203,6 +208,10 @@
     }
     $('voice-crop-title').textContent=`Zoom · ${people[activePerson].name}`;
     $('voice-crop-zoom').value=String(Math.round(100/cropFor(activePerson).r));$('voice-crop-value').textContent=$('voice-crop-zoom').value+' %';
+    for(const button of document.querySelectorAll('[data-crop-size]')) {
+      const selected=Math.abs(Number(button.dataset.cropSize)-cropFor(activePerson).r)<.005;
+      button.classList.toggle('is-active',selected);button.setAttribute('aria-pressed',String(selected));
+    }
     $('voice-identify').textContent=people.every((person)=>person.reference) ? 'Modifier les voix':'Identifier les deux voix';
     stageSize();
   }

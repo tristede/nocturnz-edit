@@ -149,3 +149,14 @@ Le mode Voix → Calques crée désormais un calque séparé pour chaque prise d
 Position, point d’ancrage et rotation sont statiques sur chaque calque. Le point d’ancrage est calculé dans le composite source pour que le centre du cadrage personnel reste au centre de l’image pendant le mouvement. Seule l’échelle reçoit les clés In/Out ; Jump reçoit une échelle statique. Les prises trop courtes pour une animation complète deviennent des Jump. Les clips de la copie conservent également des positions et ancrages constants pendant chaque mouvement.
 
 Cette révision a reçu des contrôles de syntaxe et a été rechargée dans Premiere via UXP Developer Tools. Le découpage et son rendu natif restent à observer ; la réussite native de la section précédente concernait l’ancien calque long. La duplication obligatoire et les protections de la séquence source sont conservées.
+
+
+### Couverture du canvas et douceur — 20 octobre 2026
+
+Correction de la conversion des calques : leur échelle est le rapport cadrage personnel / plan large d’aperçu, car Transformation traite le composite de la séquence. L’ancienne division par l’échelle Trajectoire du fichier mélangeait deux référentiels. Large vaut maintenant exactement 100 % d’effet ; Portrait et Serré deviennent 125 % et environ 152 %. Les cadrages personnalisés sauvegardés restent conservés. Le cadrage initial par défaut passe d’environ 167 % à 120 %.
+
+Le point d’ancrage fixe est borné aux limites qui couvrent le canvas à la plus petite échelle du mouvement. Les autres échelles le couvrent donc également. Cette protection empêche l’effet d’exposer l’extérieur du composite ; elle ne reconstruit pas des pixels absents ou des bandes déjà dans le montage source. Le centre demandé peut être rapproché du centre du canvas pour respecter cette couverture.
+
+In/Out durent par défaut 2 s, avec une courbe quintique échantillonnée à chaque image. Une intervention courte réduit cette durée au lieu de devenir automatiquement un Jump. Le premier segment reconnu peut commencer dès 0,35 s de durée, au lieu d’être éliminé par le seuil éditorial de 1,8 s. Les passages non reconnus restent au plan large : aucune voix n’est inventée pour remplir le début. La sélection d’une séquence avec des calques zoom Nocturnz existants est refusée pour éviter les effets cumulés ; régénérer depuis la source.
+
+Contrôles de syntaxe effectués ; aucun test automatisé ni nouvelle validation visuelle du rendu dans Premiere pour cette révision.

@@ -20,13 +20,14 @@ function settle(turns,start,end,minHold=3) {
   for(let i=1;i<rows.length-1;i++) if(rows[i].speaker===-1 && rows[i].end-rows[i].start<=1.8 && rows[i-1].speaker===rows[i+1].speaker) rows[i].speaker=rows[i-1].speaker;
   const joined=[];
   for(const row of rows) {const last=joined[joined.length-1];if(last && last.speaker===row.speaker) last.end=row.end;else joined.push({...row});}
-  const output=[];let speaker=-1,lastChange=start-minHold;
+  const output=[];let speaker=-1,lastChange=start-minHold,hasSpeaker=false;
   const push=(a,b,value)=>{if(b<=a) return;const last=output[output.length-1];if(last && last.speaker===value) last.end=b;else output.push({start:a,end:b,speaker:value});};
   for(const row of joined) {
-    if(row.speaker===speaker || row.end-row.start<1.8) {push(row.start,row.end,speaker);continue;}
+    const minimum=!hasSpeaker && row.speaker>=0 ? .35:1.8;
+    if(row.speaker===speaker || row.end-row.start<minimum) {push(row.start,row.end,speaker);continue;}
     const change=Math.max(row.start,lastChange+minHold);
-    if(row.end-change<1.8) {push(row.start,row.end,speaker);continue;}
-    push(row.start,change,speaker);speaker=row.speaker;lastChange=change;push(change,row.end,speaker);
+    if(row.end-change<minimum) {push(row.start,row.end,speaker);continue;}
+    push(row.start,change,speaker);speaker=row.speaker;if(speaker>=0) hasSpeaker=true;lastChange=change;push(change,row.end,speaker);
   }
   return output;
 }
@@ -93,21 +94,30 @@ function layerPlan(targets,turns,wide,frames,bases,timebase,config,names) {
       const a=align(row.start),b=row.end>=seconds(end) ? end:align(row.end);
       if(b-a<frameTicks) continue;
       if(Math.abs(frame.anchor.x-base.anchor.x)>.0001 || Math.abs(frame.anchor.y-base.anchor.y)>.0001 || Math.abs(base.rotation)>.0001 || Math.abs(frame.rotation)>.0001) throw new Error('Les calques exigent des clips sans rotation et un ancrage identique.');
-      const ratio=frame.scale/base.scale,scale=ratio*100;
+      // Adjustment layers transform the displayed canvas, not the camera pixels.
+      // Large (frame === wide) must therefore be exactly 100%, regardless of
+      // source resolution, Motion scale or Premiere's media scaling mode.
+      const ratio=Math.max(1,frame.scale/wide.scale),scale=ratio*100;
       if(!Number.isFinite(ratio) || ratio<=0) throw new Error('Échelle du cadrage invalide.');
-      // Center the chosen speaker once. This anchor and position remain static.
-      const anchor={x:base.position.x+(.5-frame.position.x)/ratio,y:base.position.y+(.5-frame.position.y)/ratio};
-      let type=types[ordinal++%types.length];
-      const duration=BigInt(Math.max(1,Math.round(Math.max(1200,config.duration)*Number(TICKS)/1000/Number(frameTicks))))*frameTicks;
-      const keys=[];
-      if(b-a<duration+frameTicks*5n) type='jump';
-      if(type!=='jump') {
-        const soft=100*(wide.scale+(frame.scale-wide.scale)*.88)/base.scale;
+      const soft=100*(1+(ratio-1)*.88);
+      const clamp=(v,lo,hi)=>Math.max(lo,Math.min(hi,v));
+      // Keep the entire viewport within the input canvas at the SMALLEST scale.
+      // With a fixed centered output position, this also covers all larger keys.
+      const radius=50/soft;
+      const anchor={x:clamp(wide.position.x+(.5-frame.position.x)/ratio,radius,1-radius),
+        y:clamp(wide.position.y+(.5-frame.position.y)/ratio,radius,1-radius)};
+      const type=types[ordinal++%types.length],keys=[];
+      if(type!=='jump' && b-a>frameTicks*2n && ratio>1.00001) {
+        // Short interventions get a shorter eased move, never a surprise Jump.
+        const requested=BigInt(Math.max(1,Math.round(Math.max(2000,config.duration)*Number(TICKS)/1000/Number(frameTicks))))*frameTicks;
+        const available=b-a-frameTicks*2n,duration=requested<available ? requested:available;
         const from=type==='in' ? soft:scale,to=type==='in' ? scale:soft;
-        const span=duration/frameTicks,steps=Number(span<12n ? span:12n);
-        for(let j=0;j<=steps;j++) {
-          const offset=span*BigInt(j)/BigInt(steps)*frameTicks,t=Number(offset)/Number(duration);
-          keys.push({time:String(offset),value:from+(to-from)*t*t*(3-2*t),linear:j<steps});
+        const span=duration/frameTicks;
+        // Sample every frame; quintic easing has zero speed and acceleration at
+        // both ends. No 12-point polygon approximation on slow movements.
+        for(let j=0n;j<=span;j++) {
+          const offset=j*frameTicks,t=Number(j)/Number(span),ease=t*t*t*(t*(6*t-15)+10);
+          keys.push({time:String(offset),value:from+(to-from)*ease,linear:j<span});
         }
       }
       segments.push({start:String(a),end:String(b),index,speaker:row.speaker,name:names[row.speaker] || `Intervenant ${row.speaker+1}`,type,anchor,position:{x:.5,y:.5},scale,keys});
