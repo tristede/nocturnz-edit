@@ -80,6 +80,10 @@ class ModuleJobs:
         request['editedTranscript'] = draft
         return self._create(request)
 
+    def create_speaker_samples(self, payload):
+        from .speaker_analysis import validate_speaker_request
+        return self._create(validate_speaker_request(payload, samples=True))
+
     def create_speaker_zoom(self, payload):
         from .speaker_analysis import validate_speaker_request
         return self._create(validate_speaker_request(payload))

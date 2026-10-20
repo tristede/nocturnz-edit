@@ -6,7 +6,7 @@ from pathlib import Path
 
 MODEL_SHA256 = 'e9848563da86f263117134dfd7ad63c92355b37de492b55e325400c9d9c39012'
 
-def validate_speaker_request(payload):
+def validate_speaker_request(payload, samples=False):
     def number(value):
         if isinstance(value, bool) or not isinstance(value, (float, int)) or not math.isfinite(value) or not 0 <= value <= 86400:
             raise ValueError('Temps vocal invalide.')
@@ -43,7 +43,7 @@ def validate_speaker_request(payload):
     if mode == 'mics' and {item['speaker'] for item in audio} != {0,1}:
         raise ValueError('Associe une piste micro différente à chaque intervenant.')
     references = []
-    if mode == 'mixed':
+    if mode == 'mixed' and not samples:
         raw = payload.get('references')
         if not isinstance(raw, list) or len(raw) != 2:
             raise ValueError('Repère une réplique de chaque intervenant.')
@@ -54,8 +54,69 @@ def validate_speaker_request(payload):
             if not 2 <= b-a <= 10:
                 raise ValueError('Chaque référence doit contenir entre deux et dix secondes d’une voix seule.')
             references.append(dict(path=path(item.get('path')),start=a,end=b))
-    return dict(module='speakerzoom', paths=list(dict.fromkeys(item['path'] for item in audio)),
+    return dict(module='speakersamples' if samples else 'speakerzoom', paths=list(dict.fromkeys(item['path'] for item in audio)),
         options=dict(mode=mode,audio=audio,references=references,start=start,end=end))
+
+
+
+def embedding_model():
+    import numpy as np
+    import sherpa_onnx
+    root=Path(__file__).resolve().parents[1]
+    model=root/'.runtime/models/speakers/wespeaker_en_voxceleb_resnet34_LM.onnx'
+    if not model.is_file() or hashlib.sha256(model.read_bytes()).hexdigest()!=MODEL_SHA256:
+        raise ValueError('Installe le moteur vocal : npm run setup:speakers.')
+    extractor=sherpa_onnx.SpeakerEmbeddingExtractor(sherpa_onnx.SpeakerEmbeddingExtractorConfig(
+        model=str(model),num_threads=2,provider='cpu',debug=False))
+    def embedding(samples):
+        stream=extractor.create_stream()
+        stream.accept_waveform(sample_rate=16000,waveform=np.ascontiguousarray(samples,dtype=np.float32))
+        stream.input_finished()
+        if not extractor.is_ready(stream):
+            raise ValueError('Extrait trop court pour distinguer la voix.')
+        vector=np.asarray(extractor.compute(stream),dtype=np.float32)
+        return vector/max(float(np.linalg.norm(vector)),1e-9)
+    return embedding
+
+
+def suggest_references(options,progress):
+    import numpy as np
+    from faster_whisper.audio import decode_audio
+    from faster_whisper.vad import get_speech_timestamps,VadOptions
+    cache,voiced={},{}
+    candidates=[]
+    for item in options['audio']:
+        path=item['path']
+        if path not in cache:
+            progress(5,'Recherche de répliques à écouter…')
+            cache[path]=decode_audio(path,sampling_rate=16000)
+            voiced[path]=get_speech_timestamps(cache[path],VadOptions(min_speech_duration_ms=200,
+                min_silence_duration_ms=180,speech_pad_ms=100))
+        source_left=item['sourceIn']+max(0,options['start']-item['start'])
+        source_right=item['sourceIn']+min(item['end'],options['end'])-item['start']
+        for span in voiced[path]:
+            a=max(source_left,span['start']/16000)
+            b=min(source_right,span['end']/16000)
+            if b-a<2:
+                continue
+            count=min(256,max(1,int((b-a)/3)))
+            for start in np.linspace(a,max(a,b-3),count):
+                end=min(float(start)+3,b)
+                candidates.append(dict(path=path,start=float(start),end=end,
+                    timelineStart=item['start']+float(start)-item['sourceIn']))
+    if len(candidates)<2:
+        raise ValueError('Choisis une sélection plus longue avec une réplique de chaque personne.')
+    candidates.sort(key=lambda item:item['timelineStart'])
+    candidates=[candidates[int(i)] for i in np.linspace(0,len(candidates)-1,min(32,len(candidates)),dtype=int)]
+    embed=embedding_model();vectors=[]
+    for index,item in enumerate(candidates):
+        vectors.append(embed(cache[item['path']][int(item['start']*16000):int(item['end']*16000)]))
+        progress(10+int(80*(index+1)/len(candidates)),'Préparation des extraits des deux voix…')
+    first,second=min(((a,b) for a in range(len(vectors)) for b in range(a+1,len(vectors))),
+        key=lambda pair:float(vectors[pair[0]]@vectors[pair[1]]))
+    alternatives=[i for i in range(len(candidates)) if i not in (first,second)]
+    order=[first,second]+[alternatives[int(i)] for i in np.linspace(0,max(0,len(alternatives)-1),min(8,len(alternatives)),dtype=int)]
+    return dict(samples=[candidates[i] for i in order])
 
 
 def analyze_speakers(options, progress):
@@ -89,25 +150,7 @@ def analyze_speakers(options, progress):
 
     extractor, references = None, []
     if options['mode'] == 'mixed':
-        import sherpa_onnx
-        root = Path(__file__).resolve().parents[1]
-        model = root / '.runtime/models/speakers/wespeaker_en_voxceleb_resnet34_LM.onnx'
-        if not model.is_file():
-            raise ValueError('Installe les voix : npm run setup:speakers.')
-        if hashlib.sha256(model.read_bytes()).hexdigest() != MODEL_SHA256:
-            raise ValueError('Modèle vocal inattendu : relance npm run setup:speakers.')
-        extractor = sherpa_onnx.SpeakerEmbeddingExtractor(sherpa_onnx.SpeakerEmbeddingExtractorConfig(
-            model=str(model), num_threads=2, provider='cpu', debug=False))
-
-        def embedding(samples):
-            stream = extractor.create_stream()
-            stream.accept_waveform(sample_rate=rate,waveform=np.ascontiguousarray(samples))
-            stream.input_finished()
-            if not extractor.is_ready(stream):
-                raise ValueError('Réplique trop courte pour distinguer la voix.')
-            vector = np.asarray(extractor.compute(stream),dtype=np.float32)
-            return vector / max(float(np.linalg.norm(vector)),1e-9)
-
+        embedding = embedding_model()
         for item in options['references']:
             samples = load(item['path'])[int(item['start']*rate):int(item['end']*rate)]
             spans = get_speech_timestamps(samples,VadOptions(min_silence_duration_ms=200,speech_pad_ms=0))

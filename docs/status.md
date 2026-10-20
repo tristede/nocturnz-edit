@@ -1,5 +1,13 @@
 # État des fonctions
 
+## Éditeur visuel des intervenants — 20 octobre 2026
+
+- Remplacement de la capture manuelle Trajectoire par une image du rush, deux rectangles déplaçables/redimensionnables, des vignettes de sortie, des noms et un curseur de zoom.
+- Remplacement de « repérer au curseur » par des extraits audio proposés, un lecteur local et la question « Qui parle dans cet extrait ? ». Le mode deux micros garde ses associations de pistes.
+- Une action **Créer les zooms** enchaîne analyse et application sur copie. Retour à la source pour une version corrigée, sans éditer l’original.
+- Affichage réel de l’image et des vignettes observé dans Premiere Beta sur le projet isolé. Écoute et génération finale non validées ; aucun test automatisé ajouté/exécuté. Voir [Zooms](zooms.md).
+
+
 ## Priorité Zoom intervenants — 20 octobre 2026
 
 - Deux fiches : nom, cadrage, référence de voix ou piste micro. Mode audio mélangé actuel et deux micros séparés pour les futurs projets. Libellés timeline toujours indépendants.

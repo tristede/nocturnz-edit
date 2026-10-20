@@ -72,6 +72,11 @@ def run(module, paths, options, directory):
     directory.mkdir(parents=True, exist_ok=True)
     source = paths[0] if paths else None
     progress(2, module)
+    if module == 'speakersamples':
+        from service.speaker_analysis import suggest_references
+        result = suggest_references(options, progress)
+        write_json(directory / 'extraits-voix.json', result)
+        return result
     if module == 'speakerzoom':
         from service.speaker_analysis import analyze_speakers
         result = analyze_speakers(options, progress)

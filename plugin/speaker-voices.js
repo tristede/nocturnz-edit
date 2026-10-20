@@ -3,7 +3,8 @@
   const $=(id)=>document.getElementById(id),zoom=window.NocturnzZoom,TICKS=254016000000n;
   let host=null,uxp=null,setup=null,job=null,result=null,analysisSignature=null,analysisAudio=null,busy=false,page=0;
   let people=[{name:'Intervenant 1',frame:null,reference:null},{name:'Intervenant 2',frame:null,reference:null}],wide=null;
-  let saves=Promise.resolve();
+  let saves=Promise.resolve(),poster=null,activePerson=0,drag=null,previewSerial=0;
+  let samples=[],sampleIndex=0,heard=false,sampleMedia=null,listenSerial=0,generatedId=null,analysisSource=null;
   try {host=require('premierepro');uxp=require('uxp');} catch(_) {}
   const id=(value)=>String(value.guid),pathKey=(value)=>String(value).replace(/^\/{3,}/,'/').normalize('NFC');
   const say=(text,bad=false)=>{$('voice-status').textContent=text;$('voice-status').className='tool-status'+(bad ? ' error':'');};
@@ -12,6 +13,8 @@
     document.querySelectorAll('#speaker-voice-pending [role=button]').forEach((button)=>button.setAttribute('aria-disabled',String(value)));
     document.querySelectorAll('#speaker-voice-pending input,#speaker-voice-pending select').forEach((input)=>{input.disabled=value;});
     $('voice-cancel').hidden=!value || !job;
+    for(const index of [0,1]) $('voice-assign-'+index).setAttribute('aria-disabled',String(value || !heard));
+    $('voice-analyze').setAttribute('aria-disabled',String(value || !poster || ($('voice-mode').value==='mixed' && !people.every((person)=>person.reference))));
   }
   async function perform(action) {
     if(busy || !zoom.acquire()) return;
@@ -20,7 +23,7 @@
     finally {busy=false;disabled(false);$('voice-cancel').hidden=true;zoom.release();}
   }
   function bind(button,action,lock=true) {
-    const run=()=>lock ? perform(action):Promise.resolve().then(action).catch((error)=>say(error.message,true));
+    const run=()=>{if(button.getAttribute('aria-disabled')==='true') return;return lock ? perform(action):Promise.resolve().then(action).catch((error)=>say(error.message,true));};
     button.addEventListener('click',run);button.addEventListener('keydown',(event)=>{if(event.key==='Enter' || event.key===' ') {event.preventDefault();run();}});
   }
   async function api(path,payload) {
@@ -36,7 +39,8 @@
       const component=chain.getComponentAtIndex(i);if(!/motion/i.test(await component.getMatchName())) continue;
       for(let j=0;j<component.getParamCount();j++) {
         const param=component.getParam(j),name=param.displayName || '';
-        if(/^(uniform )?scale$|^échelle( uniforme)?$|^echelle( uniforme)?$/i.test(name)) params.scale=param;
+        if(/^scale$|^échelle$|^echelle$/i.test(name)) params.scale=param;
+        if(/^uniform scale$|^échelle uniforme$|^echelle uniforme$/i.test(name)) params.uniform=param;
         if(/^position$/i.test(name)) params.position=param;
         if(/^(anchor point|point d[’']ancrage)$/i.test(name)) params.anchor=param;
         if(/^rotation$/i.test(name)) params.rotation=param;
@@ -101,6 +105,7 @@
     const changed=!setup || filename(next)!==filename(setup);
     setup=next;result=null;analysisSignature=null;$('voice-result').hidden=true;
     const count=await setup.sequence.getAudioTrackCount();
+    let savedWide=false;
     if(changed) {
       people=[{name:'Intervenant 1',frame:null,reference:null},{name:'Intervenant 2',frame:null,reference:null}];
       wide=await frame(setup.targets[0].item,setup.frameSize);
@@ -109,27 +114,25 @@
       try {const folder=await uxp.storage.localFileSystem.getDataFolder();const file=await folder.getEntry(filename(setup));const text=await file.read();if(text.length<100000) data=JSON.parse(text);} catch(_) {}
       if(data?.version===1 && data.source===setup.source && Array.isArray(data.people) && data.people.length===2) {
         people=data.people.map((person,index)=>({name:String(person.name || `Intervenant ${index+1}`).slice(0,80),frame:validFrame(person.frame) ? person.frame:null,
-          reference:person.reference && typeof person.reference.path==='string' && Number.isFinite(person.reference.start) && Number.isFinite(person.reference.end) ? person.reference:null}));
-        if(validFrame(data.wide)) wide=data.wide;
+          crop:person.crop,reference:person.reference && typeof person.reference.path==='string' && Number.isFinite(person.reference.start) && Number.isFinite(person.reference.end) ? person.reference:null}));
+        if(validFrame(data.wide)) {wide=data.wide;savedWide=true;}
       }
+      if(!savedWide) wide=null;
+      samples=[];poster=null;$('voice-visual').hidden=true;stopListening();$('voice-listen-panel').hidden=true;
       options($('voice-track'),count,data?.mixedTrack || 0);
       renderPeople(count,data?.micTracks);
     } else {options($('voice-track'),count,$('voice-track').value);renderPeople(count);}
-    say(`${setup.targets.length} clip(s) · ${setup.source.split('/').pop()}`);
+    const times=setup.targets.flatMap((target)=>[sec(target.start),sec(target.end)]);
+    $('voice-preview-time').min=String(Math.min(...times));$('voice-preview-time').max=String(Math.max(...times));
+    if(changed) $('voice-preview-time').value=String(sec(setup.targets[0].start)+Math.min(2,(sec(setup.targets[0].end)-sec(setup.targets[0].start))/2));
+    await refreshPreview();$('voice-visual').hidden=false;$('voice-load').textContent='Changer la vidéo';$('voice-load').className='text-action voice-change-source';
+    drawEditor();say('');
   }
   async function ensure() {
     const current=await selection();
     if(!setup || filename(current)!==filename(setup)) await load();
     else setup=current;
     return setup;
-  }
-  async function capture(index) {
-    await ensure();
-    const current=await selection();
-    if(current.targets.length!==1) throw new Error('Sélectionne un seul clip cadré pour mémoriser ce plan.');
-    const value=await frame(current.targets[0].item,current.frameSize);
-    if(index===-1) wide=value;else people[index].frame=value;
-    await save();renderPeople(await setup.sequence.getAudioTrackCount());say(index===-1 ? 'Plan large mémorisé.':'Cadrage mémorisé.');
   }
   async function audioRows(track,speaker,current) {
     if(!Number.isInteger(track) || track<0 || track>=await current.sequence.getAudioTrackCount()) throw new Error('Choisis une piste audio.');
@@ -146,36 +149,129 @@
     if(!rows.length) throw new Error(`Aucune voix sur A${track+1} dans la plage vidéo sélectionnée.`);
     return rows;
   }
-  async function reference(index) {
-    await ensure();
-    const time=sec((await setup.sequence.getPlayerPosition()).ticks);
-    const rows=await audioRows(Number($('voice-track').value),0,setup);
-    const matches=rows.filter((row)=>row.start<=time && time<row.end);
-    if(matches.length!==1) throw new Error('Place le curseur sur une réplique seule, dans la sélection vidéo.');
-    const row=matches[0],end=Math.min(row.end,time+3),start=Math.max(row.start,end-3);
-    if(end-start<2) throw new Error('Choisis une réplique d’au moins deux secondes.');
-    invalidate();people[index].reference={path:row.path,start:row.sourceIn+start-row.start,end:row.sourceIn+end-row.start};
-    await save();renderPeople(await setup.sequence.getAudioTrackCount());say('Réplique de référence mémorisée.');
+  const clamp=(value,low,high)=>Math.max(low,Math.min(high,value));
+  function cropFor(index) {
+    const person=people[index];let crop=person.crop;
+    if(!crop && validFrame(person.frame) && validFrame(wide)) {
+      const r=wide.scale/person.frame.scale;
+      crop={r,x:wide.position.x+(.5-person.frame.position.x)*r,y:wide.position.y+(.5-person.frame.position.y)*r};
+    }
+    if(!crop || ![crop.r,crop.x,crop.y].every(Number.isFinite)) crop={r:.6,x:index ? .7:.3,y:.5};
+    crop.r=clamp(crop.r,.25,1);crop.x=clamp(crop.x,crop.r/2,1-crop.r/2);crop.y=clamp(crop.y,crop.r/2,1-crop.r/2);
+    person.crop=crop;return crop;
+  }
+  function syncFrame(index) {
+    if(!validFrame(wide)) return;
+    const crop=cropFor(index);
+    people[index].frame={...wide,scale:wide.scale/crop.r,position:{x:.5+(wide.position.x-crop.x)/crop.r,y:.5+(wide.position.y-crop.y)/crop.r},
+      anchor:{...wide.anchor},frameSize:{...wide.frameSize}};
+  }
+  function stageSize() {
+    if(!setup) return;
+    const stage=$('voice-stage'),width=stage.clientWidth || 300;
+    stage.style.height=`${Math.round(width*setup.frameSize.height/setup.frameSize.width)}px`;
+    document.querySelectorAll('.voice-thumb').forEach((thumb)=>{thumb.style.height=`${Math.round((thumb.clientWidth || 130)*setup.frameSize.height/setup.frameSize.width)}px`;});
+  }
+  function drawEditor() {
+    if(!validFrame(wide)) return;
+    for(const index of [0,1]) {
+      syncFrame(index);const crop=cropFor(index),box=document.querySelector(`.voice-crop[data-person="${index}"]`);
+      box.style.left=`${100*(crop.x-crop.r/2)}%`;box.style.top=`${100*(crop.y-crop.r/2)}%`;box.style.width=`${100*crop.r}%`;box.style.height=`${100*crop.r}%`;
+      box.classList.toggle('is-active',index===activePerson);box.setAttribute('aria-pressed',String(index===activePerson));box.querySelector('span').textContent=people[index].name;
+      const card=$('voice-person-'+index);if(card) card.classList.toggle('is-active',index===activePerson);
+      const image=$('voice-thumb-'+index);
+      if(image && poster) {image.src=poster;image.style.width=`${100/crop.r}%`;image.style.height=`${100/crop.r}%`;image.style.left=`${-100*(crop.x-crop.r/2)/crop.r}%`;image.style.top=`${-100*(crop.y-crop.r/2)/crop.r}%`;}
+      const badge=$('voice-ready-'+index);if(badge) badge.textContent=people[index].reference ? '✓ Voix associée':'Voix à associer';
+      $('voice-assign-'+index).textContent=people[index].name;
+    }
+    $('voice-crop-title').textContent=`Zoom · ${people[activePerson].name}`;
+    $('voice-crop-zoom').value=String(Math.round(100/cropFor(activePerson).r));$('voice-crop-value').textContent=$('voice-crop-zoom').value+' %';
+    $('voice-identify').textContent=people.every((person)=>person.reference) ? 'Modifier les voix':'Identifier les deux voix';
+    stageSize();
+  }
+  async function refreshPreview() {
+    if(!setup) return;
+    const serial=++previewSerial,current=setup;
+    let time=Number($('voice-preview-time').value);
+    let target=current.targets.find((item)=>sec(item.start)<=time && time<sec(item.end));
+    if(!target) {
+      target=[...current.targets].sort((a,b)=>Math.min(Math.abs(time-sec(a.start)),Math.abs(time-sec(a.end)))-Math.min(Math.abs(time-sec(b.start)),Math.abs(time-sec(b.end))))[0];
+      time=clamp(time,sec(target.start),Math.max(sec(target.start),sec(target.end)-sec(current.timebase)));$('voice-preview-time').value=String(time);
+    }
+    say('Chargement de l’image…');
+    const response=await api('zooms/preview',{path:target.path,time:sec(target.sourceIn)+time-sec(target.start),size:current.frameSize,frame:validFrame(wide) ? wide:null});
+    if(serial!==previewSerial || current!==setup) return;
+    poster=response.image;wide=response.frame;$('voice-poster').src=poster;
+    $('voice-preview-clock').textContent=clock(time);drawEditor();say('');
+  }
+  function clock(value) {const seconds=Math.floor(value);return `${String(Math.floor(seconds/60)).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')}`;}
+  function stopListening() {
+    listenSerial++;
+    try {$('voice-listener').pause();} catch(_) {}
+    heard=false;sampleMedia=null;$('voice-listen').textContent='▶ Écouter l’extrait';
   }
   function renderPeople(count=0,tracks) {
     tracks=tracks || [0,1].map((index)=>$(`voice-mic-${index}`)?.value ?? index);
     const holder=$('voice-people');while(holder.firstChild) holder.removeChild(holder.firstChild);
-    const mixed=$('voice-mode').value==='mixed';$('voice-mixed-track').hidden=!mixed;
+    const mixed=$('voice-mode').value==='mixed';$('voice-mixed-track').hidden=!mixed;$('voice-identify').hidden=!mixed;
     people.forEach((person,index)=>{
-      const card=document.createElement('section');card.className='voice-person';
+      const card=document.createElement('section');card.className='voice-person';card.id='voice-person-'+index;
+      const thumb=document.createElement('div');thumb.className='voice-thumb';thumb.setAttribute('role','button');thumb.setAttribute('tabindex','0');thumb.setAttribute('aria-label',`Régler le cadrage de ${person.name}`);
+      const image=document.createElement('img');image.id='voice-thumb-'+index;image.alt=`Aperçu du cadrage ${index+1}`;image.draggable=false;thumb.appendChild(image);
+      bind(thumb,()=>{if(!busy) {activePerson=index;drawEditor();}},false);card.appendChild(thumb);
       const name=document.createElement('input');name.type='text';name.value=person.name;name.maxLength=80;name.setAttribute('aria-label',`Nom de l’intervenant ${index+1}`);
-      name.addEventListener('input',()=>{person.name=name.value.slice(0,80);save().catch((error)=>say(error.message,true));});card.appendChild(name);
-      const framing=document.createElement('div');framing.className='button button-secondary';framing.setAttribute('role','button');framing.setAttribute('tabindex','0');framing.textContent=person.frame ? `Cadrage · ${person.frame.scale.toFixed(0)} %`:'Mémoriser son cadrage';bind(framing,()=>capture(index));card.appendChild(framing);
-      if(mixed) {
-        const button=document.createElement('div');button.className='text-action';button.setAttribute('role','button');button.setAttribute('tabindex','0');button.textContent=person.reference ? 'Voix repérée · reprendre au curseur':'Repérer sa voix au curseur';bind(button,()=>reference(index));card.appendChild(button);
-      } else {
+      name.addEventListener('focus',()=>{activePerson=index;drawEditor();});
+      name.addEventListener('input',()=>{person.name=name.value.slice(0,80);drawEditor();save().catch((error)=>say(error.message,true));});card.appendChild(name);
+      if(mixed) {const badge=document.createElement('span');badge.className='voice-ready';badge.id='voice-ready-'+index;card.appendChild(badge);}
+      else {
         const label=document.createElement('label');label.className='muted';label.textContent='Micro';
-        const select=document.createElement('select');select.id=`voice-mic-${index}`;select.setAttribute('aria-label',`Piste micro de ${person.name}`);options(select,count,tracks[index]);
+        const select=document.createElement('select');select.id=`voice-mic-${index}`;select.setAttribute('aria-label',`Micro de ${person.name}`);options(select,count,tracks[index]);
         select.addEventListener('change',()=>{invalidate();save().catch((error)=>say(error.message,true));});label.appendChild(select);card.appendChild(label);
       }
       holder.appendChild(card);
     });
-    disabled(busy);
+    drawEditor();disabled(busy);
+  }
+  async function waitJob(record) {
+    job=record.id;$('voice-cancel').hidden=false;
+    while(['queued','running','cancelling'].includes(record.status)) {
+      say(`${record.message || 'Analyse locale…'} · ${record.progress || 0} %`);
+      await new Promise((resolve)=>setTimeout(resolve,700));record=await api(`module-jobs/${job}`);
+    }
+    if(record.status!=='complete') throw new Error(record.error || 'Analyse annulée.');
+    return record.result;
+  }
+  async function identify() {
+    await ensure();stopListening();
+    const current=await selection(),audio=await audioRows(Number($('voice-track').value),0,current);
+    const response=await waitJob(await api('zooms/speakers/samples',{mode:'mixed',audio,
+      start:Math.min(...current.targets.map((target)=>sec(target.start))),end:Math.max(...current.targets.map((target)=>sec(target.end)))}));
+    samples=response.samples;sampleIndex=0;$('voice-listen-panel').hidden=false;renderSample();say('Écoute l’extrait, puis choisis la personne.');
+  }
+  function renderSample() {
+    stopListening();
+    $('voice-sample-count').textContent=`${sampleIndex+1}/${samples.length}`;
+    for(const index of [0,1]) {$('voice-assign-'+index).textContent=people[index].name;$('voice-assign-'+index).setAttribute('aria-disabled','true');}
+  }
+  async function listen() {
+    const sample=samples[sampleIndex];if(!sample) return;
+    const player=$('voice-listener'),serial=listenSerial;
+    if(!sampleMedia) {
+      const response=await api('zooms/listen',{path:sample.path,time:sample.start,duration:sample.end-sample.start});
+      if(serial!==listenSerial || $('voice-listen-panel').hidden || $('tool-view').hidden) return;
+      sampleMedia='http://localhost:8765'+response.media;player.src=sampleMedia;player.load();
+    } else {player.currentTime=0;}
+    if(typeof player.play!=='function') throw new Error('Le lecteur intégré n’est pas disponible dans cet hôte Premiere.');
+    await player.play();
+  }
+  async function assign(index) {
+    if(busy || !heard) return;
+    const sample=samples[sampleIndex];if(!sample) return;
+    invalidate();people[index].reference={path:sample.path,start:sample.start,end:sample.end};
+    stopListening();await save();drawEditor();
+    if(people.every((person)=>person.reference)) {$('voice-listen-panel').hidden=true;say('Les deux voix sont associées.');}
+    else {sampleIndex=(sampleIndex+1)%samples.length;renderSample();say('Écoute maintenant l’autre voix.');}
+    disabled(false);
   }
   function invalidate() {result=null;analysisSignature=null;analysisAudio=null;$('voice-result').hidden=true;}
   function renderTurns() {
@@ -192,39 +288,37 @@
     $('voice-previous').hidden=page===0;$('voice-next').hidden=(page+1)*30>=turns.length;
   }
   async function analyze() {
+    await restoreSourceSelection();
     await ensure();invalidate();
-    if(!people.every((person)=>validFrame(person.frame)) || !validFrame(wide)) throw new Error('Mémorise les deux cadrages avant de lancer.');
+    if(!people.every((person)=>validFrame(person.frame)) || !validFrame(wide)) throw new Error('Place les deux cadres sur l’image avant de lancer.');
     const current=await selection(),mode=$('voice-mode').value;
     let audio;
     if(mode==='mixed') {
-      if(!people.every((person)=>person.reference)) throw new Error('Repère une réplique de chaque intervenant au curseur.');
+      if(!people.every((person)=>person.reference)) throw new Error('Écoute les extraits et associe les deux voix.');
       audio=await audioRows(Number($('voice-track').value),0,current);
     } else {
       const tracks=[0,1].map((index)=>Number($(`voice-mic-${index}`).value));
       if(tracks[0]===tracks[1]) throw new Error('Choisis deux pistes micros différentes.');
       audio=[...await audioRows(tracks[0],0,current),...await audioRows(tracks[1],1,current)];
     }
-    analysisSignature=signature(current);
+    analysisSignature=signature(current);analysisSource=current;
     analysisAudio={signature:JSON.stringify(audio),mode,tracks:mode==='mixed' ? [Number($('voice-track').value)]:[0,1].map((index)=>Number($(`voice-mic-${index}`).value))};
     const payload={mode,audio,references:people.map((person)=>person.reference),start:Math.min(...current.targets.map((target)=>sec(target.start))),end:Math.max(...current.targets.map((target)=>sec(target.end)))};
-    let record=await api('zooms/speakers/analyze',payload);job=record.id;$('voice-cancel').hidden=false;
-    while(['queued','running','cancelling'].includes(record.status)) {
-      say(`${record.message || 'Analyse locale…'} · ${record.progress || 0} %`);
-      await new Promise((resolve)=>setTimeout(resolve,700));record=await api(`module-jobs/${job}`);
-    }
-    if(record.status!=='complete') throw new Error(record.error || 'Analyse annulée.');
-    result=record.result;page=0;renderTurns();$('voice-result').hidden=false;
+    const detected=await waitJob(await api('zooms/speakers/analyze',payload));
+    result=detected;page=0;renderTurns();$('voice-result').hidden=false;
     $('voice-summary').textContent=`${result.turns.filter((turn)=>turn.speaker!==-1).length} prises de parole · ${result.unknownSeconds.toFixed(1)} s en plan large`;
-    say('Prises de parole prêtes.');
+    await apply();
   }
   async function apply() {
     if(!result) throw new Error('Détecte les prises de parole.');
+    await restoreSourceSelection();
     const current=await selection();if(signature(current)!==analysisSignature) throw new Error('La sélection ou le montage a changé. Relance l’analyse.');
     const audio=analysisAudio.mode==='mixed' ? await audioRows(analysisAudio.tracks[0],0,current):[...await audioRows(analysisAudio.tracks[0],0,current),...await audioRows(analysisAudio.tracks[1],1,current)];
     if(JSON.stringify(audio)!==analysisAudio.signature) throw new Error('Le montage audio a changé. Relance l’analyse.');
     for(const person of [...people,{frame:wide}]) if(!validFrame(person.frame) || person.frame.frameSize.width!==current.frameSize.width || person.frame.frameSize.height!==current.frameSize.height) throw new Error('Les dimensions ont changé. Reprends les cadrages.');
     for(const target of current.targets) await frame(target.item,current.frameSize);
     const copier=require('./sequence-copy.cjs').withHost(host),draft=await copier.create(current.project,current.sequence,current.targets.map((target)=>target.item));
+    generatedId=id(draft.sequence);
     const params=await Promise.all(draft.items.map(motion));if(params.some((value)=>!value)) throw new Error('Trajectoire absente dans la copie.');
     const changes=current.targets.map((target)=>{
       const points=new Map(),sourceIn=BigInt(target.sourceIn),sourceOut=BigInt(target.sourceOut),frameTicks=BigInt(current.timebase);
@@ -245,6 +339,7 @@
     current.project.lockedAccess(()=>{
       const actions=[draft.projectItem.createSetNameAction(draft.name.replace('Zooms','Intervenants'))];
       for(let index=0;index<changes.length;index++) {
+        if(params[index].uniform) actions.push(params[index].uniform.createSetValueAction(params[index].uniform.createKeyframe(true),true));
         for(const name of ['scale','position','anchor','rotation']) {
           const param=params[index][name];actions.push(param.createSetTimeVaryingAction(true));
           for(const [ticks,value] of changes[index]) {
@@ -257,13 +352,72 @@
       committed=current.project.executeTransaction((compound)=>{for(const action of actions) if(!compound.addAction(action)) throw new Error('Une action de zoom a été refusée.');},'Nocturnz/Edit — Zooms des intervenants');
     });
     if(!committed) throw new Error('Application non confirmée. La séquence source reste intacte.');
-    say('Zooms automatiques appliqués dans la copie.');
+    generatedId=id(draft.sequence);say('Zooms créés dans une nouvelle séquence.');
   }
-  bind($('voice-load'),load);bind($('voice-wide'),()=>capture(-1));bind($('voice-analyze'),analyze);bind($('voice-apply'),apply);
+  async function restoreSourceSelection() {
+    if(!analysisSource) return;
+    const project=await host.Project.getActiveProject(),sequence=project && await project.getActiveSequence();
+    if(!project || id(project)!==id(analysisSource.project)) throw new Error('Reviens au projet analysé.');
+    if(sequence && id(sequence)===generatedId) {
+      if(!await project.openSequence(analysisSource.sequence) || !await project.setActiveSequence(analysisSource.sequence)) throw new Error('La séquence source ne peut pas être retrouvée.');
+      host.TrackItemSelection.createEmptySelection((selected)=>{for(const target of analysisSource.targets) selected.addItem(target.item,true);analysisSource.sequence.setSelection(selected);});
+    }
+  }
+  function editCrop(x,y,r) {
+    if(busy || !poster) return;
+    const crop=cropFor(activePerson);crop.r=clamp(r ?? crop.r,.25,1);
+    crop.x=clamp(x ?? crop.x,crop.r/2,1-crop.r/2);crop.y=clamp(y ?? crop.y,crop.r/2,1-crop.r/2);
+    drawEditor();
+  }
+  const stage=$('voice-stage');
+  stage.addEventListener('mousedown',(event)=>{
+    if(busy || !poster || (event.button!==undefined && event.button!==0)) return;
+    let node=event.target,index=null,resize=false;
+    while(node && node!==stage) {if(node.dataset?.resize!==undefined) resize=true;if(node.dataset?.person!==undefined) index=Number(node.dataset.person);node=node.parentNode;}
+    if(index!==null) activePerson=index;
+    const rect=stage.getBoundingClientRect(),x=(event.clientX-rect.left)/rect.width,y=(event.clientY-rect.top)/rect.height;
+    if(index===null) editCrop(x,y);
+    const crop=cropFor(activePerson);drag={rect,x,y,crop:{...crop},resize};drawEditor();event.preventDefault();
+  });
+  document.addEventListener('mousemove',(event)=>{
+    if(!drag || busy) return;
+    const x=(event.clientX-drag.rect.left)/drag.rect.width,y=(event.clientY-drag.rect.top)/drag.rect.height;
+    if(drag.resize) editCrop(drag.crop.x,drag.crop.y,drag.crop.r+2*(x-drag.x));
+    else editCrop(drag.crop.x+x-drag.x,drag.crop.y+y-drag.y);
+    event.preventDefault();
+  });
+  document.addEventListener('mouseup',()=>{if(drag) {drag=null;save().catch((error)=>say(error.message,true));}});
+  document.querySelectorAll('.voice-crop').forEach((box)=>box.addEventListener('keydown',(event)=>{
+    if(busy || !poster) return;
+    activePerson=Number(box.dataset.person);const crop=cropFor(activePerson),step=event.shiftKey ? .05:.01;
+    if(event.key==='ArrowLeft') editCrop(crop.x-step,crop.y);
+    else if(event.key==='ArrowRight') editCrop(crop.x+step,crop.y);
+    else if(event.key==='ArrowUp') editCrop(crop.x,crop.y-step);
+    else if(event.key==='ArrowDown') editCrop(crop.x,crop.y+step);
+    else if(event.key==='+' || event.key==='=') editCrop(crop.x,crop.y,crop.r-.03);
+    else if(event.key==='-') editCrop(crop.x,crop.y,crop.r+.03);
+    else if(event.key==='Enter' || event.key===' ') drawEditor();
+    else return;
+    event.preventDefault();save().catch((error)=>say(error.message,true));
+  }));
+  $('voice-crop-zoom').addEventListener('input',()=>editCrop(null,null,100/Number($('voice-crop-zoom').value)));
+  $('voice-crop-zoom').addEventListener('change',()=>save().catch((error)=>say(error.message,true)));
+  document.querySelectorAll('[data-crop-size]').forEach((button)=>bind(button,()=>{editCrop(null,null,Number(button.dataset.cropSize));return save();},false));
+  $('voice-preview-time').addEventListener('change',()=>perform(refreshPreview));
+  window.addEventListener('resize',stageSize);
+  document.querySelectorAll('[data-tool],[data-zoom-mode],[data-speaker-source]').forEach((button)=>button.addEventListener('click',()=>{stopListening();setTimeout(stageSize,0);}));
+  document.querySelectorAll('[data-home]').forEach((button)=>button.addEventListener('click',stopListening));
+  $('open-settings').addEventListener('click',stopListening);
+  $('voice-listener').addEventListener('play',()=>{if(!sampleMedia || $('voice-listener').src!==sampleMedia) return;heard=true;disabled(busy);$('voice-listen').textContent='↻ Réécouter';});
+  $('voice-listener').addEventListener('error',()=>{if(!sampleMedia) return;heard=false;disabled(busy);say('Lecture audio impossible. Relance l’écoute de l’extrait.',true);sampleMedia=null;});
+  bind($('voice-load'),load);bind($('voice-identify'),identify);bind($('voice-listen'),listen);
+  for(const index of [0,1]) bind($('voice-assign-'+index),()=>assign(index),false);
+  bind($('voice-skip'),()=>{if(busy || !samples.length) return;sampleIndex=(sampleIndex+1)%samples.length;renderSample();},false);
+  bind($('voice-analyze'),analyze);bind($('voice-apply'),apply);
   bind($('voice-cancel'),async()=>{if(job) await api(`module-jobs/${job}/cancel`,{});},false);
-  bind($('voice-previous'),()=>{if(page>0) {page--;renderTurns();}},false);
-  bind($('voice-next'),()=>{if(result && (page+1)*30<result.turns.length) {page++;renderTurns();}},false);
-  $('voice-mode').addEventListener('change',()=>{invalidate();renderPeople(setup ? $('voice-track').children.length:0);save().catch((error)=>say(error.message,true));});
-  $('voice-track').addEventListener('change',()=>{invalidate();people.forEach((person)=>{person.reference=null;});renderPeople($('voice-track').children.length);save().catch((error)=>say(error.message,true));});
+  bind($('voice-previous'),()=>{if(!busy && page>0) {page--;renderTurns();}},false);
+  bind($('voice-next'),()=>{if(!busy && result && (page+1)*30<result.turns.length) {page++;renderTurns();}},false);
+  $('voice-mode').addEventListener('change',()=>{invalidate();stopListening();$('voice-listen-panel').hidden=true;renderPeople(setup ? $('voice-track').children.length:0);save().catch((error)=>say(error.message,true));});
+  $('voice-track').addEventListener('change',()=>{invalidate();stopListening();samples=[];$('voice-listen-panel').hidden=true;people.forEach((person)=>{person.reference=null;});renderPeople($('voice-track').children.length);save().catch((error)=>say(error.message,true));});
   renderPeople();
 })();

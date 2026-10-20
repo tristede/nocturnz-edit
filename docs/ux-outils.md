@@ -44,3 +44,11 @@ Le traitement porte sur une source/plage, pas sur un montage multipiste existant
 ## Vérification de cette tranche
 
 Contrôles de syntaxe JavaScript/Python et compilation de l’auxiliaire Swift effectués. Aucune lecture du presse-papiers pour vérifier le helper, aucun nouveau test automatisé ajouté/exécuté. Les nouveaux parcours complets restent à valider dans Premiere ; ne pas confondre implémentation et validation native.
+
+## Zoom — éditeur visuel des deux personnes
+
+Les cadrages se règlent sur une image locale avec deux rectangles et leurs vignettes, sans action sur la timeline. Chaque rectangle garde le ratio de la séquence. Sélection par vignette ou rectangle, déplacement à la souris ou au clavier, redimensionnement par poignée, curseur ou presets de taille. Les noms sont éditables directement dans les deux cartes. Les pistes micros restent des réglages indépendants des cadrages.
+
+Le mode voix mélangées propose une étape d’écoute : bouton Écouter, question Qui parle ?, deux boutons portant les noms, option Autre extrait. Les boutons d’attribution deviennent actifs après un événement de lecture ; une erreur du lecteur retire cet état. Le modèle ne choisit pas le nom des personnes.
+
+Composants : `voice-stage`, `voice-crop`, `voice-thumb`, `voice-listen-panel`. Ils reprennent les couleurs et bordures de `panel.css`, avec un repère bleu pour le deuxième intervenant. États : chargement de l’image, cadre actif, contrôle désactivé, voix à associer/associée et erreur de lecture. L’ancienne capture depuis Trajectoire reste dans le mode Libellés, indépendant du nouvel éditeur Voix.

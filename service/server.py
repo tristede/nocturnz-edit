@@ -14,6 +14,7 @@ from service.timeline_labels import read_timeline_labels
 from service.module_catalog import catalog
 from service.module_jobs import ModuleJobs
 from service.clipboard_image import paste_image
+from service.zoom_preview import prepare as zoom_preview, MEDIA as PREVIEW_MEDIA
 
 
 def health_payload():
@@ -57,10 +58,13 @@ class Handler(BaseHTTPRequestHandler):
         return True
 
     def do_GET(self):
-        if not self.allowed(private=self.path not in ('/health', '/api/v1/capabilities')):
+        media_match=re.fullmatch(r'/api/v1/zooms/media/([0-9a-f]{32}\.mp4)',self.path)
+        if not self.allowed(private=not media_match and self.path not in ('/health', '/api/v1/capabilities')):
             return
         try:
-            if self.path in ('/health', '/api/v1/capabilities'):
+            if media_match:
+                self.preview_media(media_match.group(1))
+            elif self.path in ('/health', '/api/v1/capabilities'):
                 self.reply(200, health_payload())
             elif self.path == '/api/v1/modules':
                 self.reply(200, catalog())
@@ -80,6 +84,37 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, OSError, IndexError) as error:
             self.reply(400, {'error': str(error)})
 
+    def preview_media(self, name):
+        # Opaque, user-requested preview URL. No arbitrary filesystem path in GET.
+        path=PREVIEW_MEDIA/name
+        if not path.is_file():
+            self.reply(404,{'error':'Extrait expiré. Relance l’écoute.'})
+            return
+        size=path.stat().st_size
+        match=re.fullmatch(r'bytes=(\d+)-(\d*)',self.headers.get('Range',''))
+        start,end=0,size-1
+        if self.headers.get('Range'):
+            if not match:
+                self.send_error(416);return
+            start=int(match.group(1));end=min(size-1,int(match.group(2)) if match.group(2) else size-1)
+            if not 0<=start<=end<size:
+                self.send_error(416);return
+        self.send_response(206 if match else 200)
+        self.send_header('Content-Type','video/mp4')
+        self.send_header('Accept-Ranges','bytes')
+        self.send_header('Cache-Control','no-store')
+        self.send_header('X-Content-Type-Options','nosniff')
+        self.send_header('Cross-Origin-Resource-Policy','cross-origin')
+        if match:
+            self.send_header('Content-Range',f'bytes {start}-{end}/{size}')
+        self.send_header('Content-Length',str(end-start+1));self.end_headers()
+        with path.open('rb') as file:
+            file.seek(start);left=end-start+1
+            while left:
+                block=file.read(min(left,65536))
+                if not block: break
+                self.wfile.write(block);left-=len(block)
+
     def do_POST(self):
         if not self.allowed(private=True):
             return
@@ -93,7 +128,13 @@ class Handler(BaseHTTPRequestHandler):
             payload = json.loads(self.rfile.read(length))
             if not isinstance(payload, dict):
                 raise ValueError('Objet JSON requis.')
-            if self.path == '/api/v1/zooms/speakers/analyze':
+            if self.path == '/api/v1/zooms/preview':
+                self.reply(200, zoom_preview(payload,'frame'))
+            elif self.path == '/api/v1/zooms/listen':
+                self.reply(200, zoom_preview(payload,'listen'))
+            elif self.path == '/api/v1/zooms/speakers/samples':
+                self.reply(202, self.server.module_jobs.create_speaker_samples(payload))
+            elif self.path == '/api/v1/zooms/speakers/analyze':
                 self.reply(202, self.server.module_jobs.create_speaker_zoom(payload))
             elif self.path == '/api/v1/captions/from-premiere':
                 self.reply(202, self.server.module_jobs.from_premiere_transcript(payload))
