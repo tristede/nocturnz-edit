@@ -112,3 +112,16 @@ Le résultat voix local explique le pompage : alternance de courts segments neut
 ## 20 octobre 2026 — Calque intégré et références visuelles séparées
 
 Suppression de l’étape manuelle de modèle : un projet natif créé dans un projet vide de Premiere, nettoyé des chemins et médias utilisateur, est intégré. Le service génère le .prproj dimensionné/cadencé et le panneau importe sa seule séquence technique puis réutilise le média calque. La sélection et la séquence actives sont restaurées. Le modèle natif d’origine a été créé et sauvegardé dans l’hôte ; import et génération complète après adaptation restent à valider. Chaque personne conserve une image indépendante et peut prendre celle à la tête de lecture. Contrôles de syntaxe/diff uniquement ; aucune suite de tests ajoutée/exécutée. Références AutoCut documentées dans docs/zooms.md ; aucun mécanisme interne concurrent supposé.
+
+
+## 20 octobre 2026 — Verrouillage de l’insertion des calques
+
+Erreur lue dans Premiere : `Requires locked access`, après duplication et avant insertion de calque. Le copieur exécutait déjà sa duplication sous verrou, mais le mode calques construisait ses Actions avant `lockedAccess`. Le constructeur de transaction reçoit désormais une fonction exécutée sous verrou : insertion, bornes/nom, ajout de Transformation et images clés sont construits et exécutés sous cet accès. Les valeurs et lectures asynchrones sont préparées séparément. Les messages identifient la transaction refusée ; la réussite exige des clés d’échelle effectivement relues. Contrôle de syntaxe et de diff effectué.
+
+
+La reprise native a créé un vrai calque `Nocturnz · Zoom` sur V2, avec Transformation, puis révélé un second blocage de localisation : le SDK de Beta 27 FR renvoie `displayName=''` pour la case Échelle uniforme (index 2) et un espace pour la largeur (index 4). Lecture effectuée dans le débogueur sur le calque sélectionné : ancrage/position normalisés `{value:[0.5,0.5]}`, index 2 booléen `{value:true}`, échelles 100. Le repli sur le slot 2 est désormais conditionné au matchName Geometry2, à la signature des paramètres 0/1/3/7 et à un type booléen confirmé.
+
+La seconde inspection SDK a montré que le libellé du même slot d’échelle varie entre `Echelle` et `Hauteur d’échelle` selon l’état d’affichage de l’effet. La garde du repli booléen accepte désormais les mêmes alias que le lecteur d’échelle principal.
+
+
+**Application native confirmée après les deux correctifs** : depuis la sélection source d’Auto-Editor Media Group dans le projet isolé, l’extension a terminé avec « 1 calque(s) de zoom créés sur une nouvelle séquence ». La copie ouverte se nomme `Auto-Editor Media Group — Nocturnz Zooms calques 1`. Le calque violet `Nocturnz · Zoom` est visible sur V2, borné au clip sélectionné sur V1 ; le moniteur affiche effectivement le cadrage agrandi de l’intervenante à 00:00:27:15. La relecture runtime a confirmé l’animation d’échelle et des clés présentes avant d’afficher la réussite. Cela confirme ce parcours sur cette sélection dans Premiere Beta 27 FR, sans valider tous les formats, voix, cadences ou toute la lecture du montage. Aucune suite de tests automatisée ajoutée/exécutée.

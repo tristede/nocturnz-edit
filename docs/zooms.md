@@ -135,3 +135,8 @@ Chaque personne possède désormais son image de référence et son instant sour
 
 - [AutoCut VS AutoPod — La Caisse à Outils](https://www.youtube.com/watch?v=VIFudRcGKhQ) : page ouverte, titre identifié ; comparaison complète non analysée à ce stade.
 - [This Plugin Makes Premiere BETTER! — Premiere Basics](https://www.youtube.com/watch?v=MJTP-fj_S8Q&t=180s) : passage AutoZoom 3:00–4:16 lu via la transcription affichée ; réglages visibles à 3:13. Le parcours montre sélection/validation de la zone, rythme, déclencheurs cut/parole (options IA distinctes), cadre d’ancrage et zoom maximal, choix de styles, mouvement de caméra optionnel et destination au-dessus de V1. La vidéo ne démontre pas le mécanisme interne de création des calques ni la configuration de deux personnes sur une piste mixte. Ne pas confondre ces options avec des fonctionnalités Nocturnz déjà implémentées.
+
+
+### Reprise native des calques — 20 octobre 2026
+
+Le parcours d’application a été mené jusqu’à la réussite dans Premiere Beta 27 FR sur la sélection du projet isolé. Deux erreurs ont été corrigées : Actions construites hors `lockedAccess`, puis paramètre Échelle uniforme sans displayName SDK et libellé d’échelle variant entre Echelle/Hauteur d’échelle. Un vrai calque V2 avec Transformation et clés d’échelle a été créé ; le zoom est visible dans le moniteur à 00:00:27:15. Le plugin relit les clés pour confirmer la réussite. La qualité temporelle de toute la lecture et les autres formats restent hors de cette observation ciblée.
