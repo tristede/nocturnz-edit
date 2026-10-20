@@ -2,7 +2,8 @@
 function withHost(host) {
   const id = (value) => value.guid.toString().replace(/[{}]/g, '').toLowerCase();
   async function signature(item) {
-    const media = host.ClipProjectItem.cast(await item.getProjectItem());
+    const projectItem = host.ProjectItem.cast(await item.getProjectItem());
+    const media = host.ClipProjectItem.cast(projectItem);
     if (!media || await media.isSequence() || await media.isMulticamClip() || await media.isMergedClip()) {
       throw new Error('Clip composé non pris en charge pour cette copie.');
     }
@@ -10,7 +11,7 @@ function withHost(host) {
       item.getTrackIndex(), item.getName(), item.getStartTime(), item.getEndTime(),
       item.getInPoint(), item.getOutPoint(),
     ]);
-    return { track, key: JSON.stringify([track, name, media.getId(), String(start.ticks),
+    return { track, key: JSON.stringify([track, name, projectItem.getId(), String(start.ticks),
       String(end.ticks), String(sourceIn.ticks), String(sourceOut.ticks)]) };
   }
   async function assertActive(project, sequence) {
@@ -61,8 +62,8 @@ function withHost(host) {
     let suffix = 1, name;
     do { name = `${source.name} — Nocturnz Zooms ${suffix++}`; }
     while (before.some((sequence) => sequence.name === name));
-    const projectItem = await copy.getProjectItem();
-    const originalItem = await source.getProjectItem();
+    const projectItem = host.ProjectItem.cast(await copy.getProjectItem());
+    const originalItem = host.ProjectItem.cast(await source.getProjectItem());
     if (projectItem.getId() === originalItem.getId()) {
       throw new Error('Élément de copie non distinct de l’original. Aucun zoom appliqué.');
     }

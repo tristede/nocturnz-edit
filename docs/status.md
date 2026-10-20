@@ -97,3 +97,8 @@ Chaque adaptateur a terminé au moins un traitement source réel sur médias syn
 ## 20 octobre 2026 — Mouvements des zooms et recalage optionnel
 
 Implémentés : In / Out / Jump, alternance configurable dans Voix, alternance trois types dans Cuts, transitions lissées bornées aux clips et prises de parole, reset de l’aperçu avec conservation des réglages. Recalage local optionnel aux entrées des clips, détection frontale OpenCV et rapprochement visuel conservateur, cache privé, maintien du cadrage manuel si ambigu. Toujours application sur copie native ; vérification de la vidéo et de l’audio après préparation. Détails et limites dans docs/zooms.md. Contrôles de syntaxe et diff uniquement ; génération native et recalage de bout en bout restent à valider. Silences non traité dans cette tranche.
+
+
+## 20 octobre 2026 — Correctif duplication UXP
+
+Capture utilisateur : reconnaissance terminée, puis `media.getId is not a function`. `getId()` appartient à ProjectItem, pas à son adaptateur ClipProjectItem. Le copieur conserve désormais une vue ProjectItem pour les identifiants des médias et caste également les éléments des séquences source/copie avant la comparaison de protection. Les vérifications d'identité et l'application sur copie restent obligatoires. Syntaxe contrôlée ; application native après ce correctif non encore confirmée.
