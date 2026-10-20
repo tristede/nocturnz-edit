@@ -88,7 +88,7 @@ function layerPlan(targets,turns,wide,frames,bases,timebase,config,names) {
   for(const {target,index} of ordered) {
     const start=BigInt(target.start),end=BigInt(target.end),base=bases[index];
     const align=time=>{const offset=BigInt(Math.round((time-seconds(start))*1e6))*TICKS/1000000n;return start+((offset+frameTicks/2n)/frameTicks)*frameTicks;};
-    for(const row of settle(turns,seconds(start),seconds(end),config.minHold || 3)) {
+    for(const row of (config.includeShort ? turns.filter(row=>row.end>seconds(start) && row.start<seconds(end)).map(row=>({...row,start:Math.max(row.start,seconds(start)),end:Math.min(row.end,seconds(end))})):settle(turns,seconds(start),seconds(end),config.minHold || 3))) {
       const frame=frames[index]?.[row.speaker];
       if(row.speaker<0 || !frame) continue;
       const a=align(row.start),b=row.end>=seconds(end) ? end:align(row.end);

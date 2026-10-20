@@ -160,3 +160,16 @@ Le point d’ancrage fixe est borné aux limites qui couvrent le canvas à la pl
 In/Out durent par défaut 2 s, avec une courbe quintique échantillonnée à chaque image. Une intervention courte réduit cette durée au lieu de devenir automatiquement un Jump. Le premier segment reconnu peut commencer dès 0,35 s de durée, au lieu d’être éliminé par le seuil éditorial de 1,8 s. Les passages non reconnus restent au plan large : aucune voix n’est inventée pour remplir le début. La sélection d’une séquence avec des calques zoom Nocturnz existants est refusée pour éviter les effets cumulés ; régénérer depuis la source.
 
 Contrôles de syntaxe effectués ; aucun test automatisé ni nouvelle validation visuelle du rendu dans Premiere pour cette révision.
+
+
+### Parcours par défaut : Visages auto — 20 octobre 2026
+
+L’entrée Zoom affiche uniquement Visages auto, trois cartes de style et Créer les zooms. Le chargement de la sélection, le repérage des visages, le modèle de calque et la duplication sont automatiques. Les anciens parcours Presets, Aux cuts, Voix, Libellés, réglages manuels et destination sont dans un panneau Options avancées fermé par défaut.
+
+- Léger : grossissement de 12 %, mouvements In/Out de 3 s.
+- Vif : grossissement de 22 %, Jump immédiat.
+- Accentué : cadrage portrait calculé selon la taille du visage, limité entre 135 et 180 %, In/Out de 2 s.
+
+Le repérage local lit une image par clip, puis jusqu’à deux images supplémentaires si aucun visage n’est trouvé. Les deux plus grands visages sont retenus ; le ciblage alterne entre leurs positions gauche/droite aux cuts. Ce mode visuel ne détecte pas la personne qui parle. Le mode vocal reste disponible dans les options avancées avec son association voix/personne. Un clip sans visage reste au plan large, signalé dans le résultat. Les calques, la couverture du canvas, le cadrage fixe et la copie obligatoire utilisent le même adaptateur que le mode Voix.
+
+Syntaxe contrôlée. Ce nouveau parcours automatique n’a pas encore reçu de validation native complète dans Premiere.

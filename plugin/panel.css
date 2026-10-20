@@ -194,3 +194,14 @@ h3 { font-size:12px; font-weight:550; margin:7px 0; }
 .voice-motion-mix input,.voice-face-choice input { margin-right:6px; }
 .voice-face-choice { display:flex; align-items:center; margin:12px 0; font-size:11px; color:var(--muted); }
 .voice-people-grid .voice-person input { padding:7px 5px; margin-top:5px; border:1px solid var(--line); border-radius:4px; background-color:#120d1e; }
+
+/* Default zoom flow: automatic framing and three editorial styles. */
+.zoom-auto-heading { display:flex; align-items:center; gap:9px; color:var(--lilac); margin-bottom:18px; font-size:13px; }
+.zoom-auto-styles { display:flex; gap:8px; margin-bottom:20px; }
+.zoom-auto-styles [role=button] { flex:1; min-width:0; padding:19px 5px; display:flex; flex-direction:column; align-items:center; gap:9px; border:1px solid var(--line); border-radius:10px; color:var(--muted); cursor:pointer; background:rgba(134,89,201,.035); }
+.zoom-auto-styles [role=button]:hover { background:rgba(134,89,201,.1); }
+.zoom-auto-styles [role=button]:focus-visible { outline:2px solid var(--lilac); outline-offset:2px; }
+.zoom-auto-styles [role=button].is-active { border-color:rgba(203,179,236,.45); background:rgba(134,89,201,.15); color:var(--lilac); }
+.zoom-auto-styles strong { font-size:13px; }
+.zoom-auto-styles span { font-size:10px; }
+@media (max-width:280px) { .zoom-auto-styles { flex-wrap:wrap; } .zoom-auto-styles [role=button] { flex-basis:70px; } }

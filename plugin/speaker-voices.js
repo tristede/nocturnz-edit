@@ -6,7 +6,7 @@
   let saves=Promise.resolve(),poster=null,activePerson=0,drag=null,previewSerial=0;
   let samples=[],sampleIndex=0,heard=false,sampleMedia=null,listenSerial=0,generatedId=null,analysisSource=null;
   let posterTime=null,faceScanning=false,faceCancelled=false,faceSummary='';
-  let layerModel=null;
+  let layerModel=null,autoStyle='light';
   try {host=require('premierepro');uxp=require('uxp');} catch(_) {}
   const id=(value)=>String(value.guid),pathKey=(value)=>String(value).replace(/^\/{3,}/,'/').normalize('NFC');
   const say=(text,bad=false)=>{$('voice-status').textContent=text;$('voice-status').className='tool-status'+(bad ? ' error':'');};
@@ -15,6 +15,8 @@
     document.querySelectorAll('#speaker-voice-pending [role=button]').forEach((button)=>button.setAttribute('aria-disabled',String(value)));
     document.querySelectorAll('#speaker-voice-pending input,#speaker-voice-pending select').forEach((input)=>{input.disabled=value;});
     $('voice-cancel').hidden=!value || (!job && !faceScanning);
+    $('zoom-auto-create').setAttribute('aria-disabled',String(value));
+    document.querySelectorAll('[data-auto-style]').forEach(button=>button.setAttribute('aria-disabled',String(value)));
     $('voice-reset-preview').setAttribute('aria-disabled',String(value || !setup));
     for(const index of [0,1]) $('voice-assign-'+index).setAttribute('aria-disabled',String(value || !heard));
     $('voice-analyze').setAttribute('aria-disabled',String(value || !poster || ($('voice-mode').value==='mixed' && !people.every((person)=>person.reference))));
@@ -99,7 +101,7 @@
     if(!setup || !uxp) return;
     const name=filename(setup),text=JSON.stringify({version:1,source:setup.source,people:people.map(({previewImage,...person})=>person),wide,mode:$('voice-mode').value,
       mixedTrack:$('voice-track').value,micTracks:[0,1].map((index)=>$(`voice-mic-${index}`)?.value),
-      movement:movement(),reframeCuts:$('voice-reframe-cuts').checked,output:$('voice-output').value,layerModel});
+      autoStyle,movement:movement(),reframeCuts:$('voice-reframe-cuts').checked,output:$('voice-output').value,layerModel});
     saves=saves.catch(()=>{}).then(async()=>{const folder=await uxp.storage.localFileSystem.getDataFolder();const file=await folder.createFile(name,{overwrite:true});await file.write(text);});
     return saves;
   }
@@ -127,6 +129,8 @@
         people=data.people.map((person,index)=>({name:String(person.name || `Intervenant ${index+1}`).slice(0,80),frame:validFrame(person.frame) ? person.frame:null,
           crop:person.crop,preview:person.preview && Number.isFinite(person.preview.time) && Number.isFinite(person.preview.timeline) && person.preview.path===setup.source ? person.preview:null,reference:person.reference && typeof person.reference.path==='string' && Number.isFinite(person.reference.start) && Number.isFinite(person.reference.end) ? person.reference:null}));
         if(validFrame(data.wide)) {wide=data.wide;savedWide=true;}
+        // Keep the style the user just selected before pressing Create.
+
         if(['in','out','jump','alternate'].includes(data.movement?.motion)) $('voice-motion').value=data.movement.motion;
         for(const input of document.querySelectorAll('[data-voice-motion]')) input.checked=data.movement?.types ? data.movement.types.includes(input.dataset.voiceMotion):true;
         $('voice-motion-duration').value=String([1200,2000,3000].includes(data.movement?.duration) ? Math.max(2000,data.movement.duration):2000);
@@ -245,6 +249,49 @@
   function movement() {
     return {motion:$('voice-motion').value,duration:Number($('voice-motion-duration').value),
       types:[...document.querySelectorAll('[data-voice-motion]')].filter((input)=>input.checked).map((input)=>input.dataset.voiceMotion)};
+  }
+  async function autoZoom() {
+    const status=$('zoom-auto-status'),style=autoStyle;
+    const tell=(message,bad=false)=>{status.textContent=message;status.className='tool-status'+(bad ? ' error':'');};
+    try {
+      tell('Repérage des visages…');
+      await restoreSourceSelection();await load();
+      const current=await selection(),snapshot=signature(current);
+      const bases=await Promise.all(current.targets.map(target=>frame(target.item,current.frameSize)));
+      const frames=current.targets.map(()=>[null,null]),turns=[];
+      const ordered=current.targets.map((target,index)=>({target,index})).sort((a,b)=>sec(a.target.start)-sec(b.target.start));
+      let found=0,missed=0;
+      for(const {target,index} of ordered) {
+        tell(`Repérage des visages · ${found+missed+1}/${ordered.length}`);
+        const length=sec(target.sourceOut)-sec(target.sourceIn);let faces=[];
+        // At most three still frames per cut, no continuous video tracking.
+        for(const offset of [...new Set([Math.min(.15,length/2),length/2,Math.max(0,length-.15)])]) {
+          const response=await api('zooms/faces',{path:target.path,time:sec(target.sourceIn)+offset,size:current.frameSize,frame:wide});
+          faces=response.faces.filter(face=>[face.x,face.y,face.w,face.h].every(Number.isFinite) && face.w>0 && face.h>0);
+          if(faces.length) break;
+        }
+        if(!faces.length) {missed++;continue;}
+        // Visual alternation at cuts. Voice targeting remains a separate expert mode.
+        faces.sort((a,b)=>b.w*b.h-a.w*a.h);faces=faces.slice(0,2).sort((a,b)=>a.x-b.x);
+        const face=faces[found%faces.length];
+        const ratio=style==='portrait' ? clamp(.25/face.w,1.35,1.8):style==='lively' ? 1.22:1.12;
+        const r=1/ratio,x=clamp(face.x,r/2,1-r/2),y=clamp(face.y+face.h*.35,r/2,1-r/2);
+        frames[index][0]={...wide,scale:wide.scale*ratio,position:{x:.5+(wide.position.x-x)*ratio,y:.5+(wide.position.y-y)*ratio}};
+        turns.push({start:sec(target.start),end:sec(target.end),speaker:0});found++;
+      }
+      if(!found) throw new Error('Aucun visage repéré. Choisis une autre image dans Options avancées.');
+      const config={motion:style==='lively' ? 'jump':'alternate',types:['in','out'],duration:style==='light' ? 3000:2000,minHold:0.1,includeShort:true};
+      const segments=require('./speaker-movement.cjs').layerPlan(current.targets,turns,wide,frames,bases,current.timebase,config,['Visage auto']);
+      if(signature(await selection())!==snapshot) throw new Error('La sélection a changé. Relance la création.');
+      tell('Création des calques…');
+      const adapter=require('./zoom-layers.cjs').withHost(host),model=await adapter.ensure(current.project,current.frameSize,current.timebase,api);
+      const copier=require('./sequence-copy.cjs').withHost(host);
+      const draft=await copier.create(current.project,current.sequence,current.targets.map(target=>target.item));
+      analysisSource=current;generatedId=id(draft.sequence);
+      const count=await adapter.apply(current.project,draft,current.targets,segments,bases,model,current.frameSize,copier.assertCopy);
+      tell(`${count} zoom${count>1 ? 's':''} créé${count>1 ? 's':''} sur une copie.${missed ? ` ${missed} clip${missed>1 ? 's':''} sans visage : plan large.`:''}`);
+      await save();
+    } catch(error) {tell(error.message || String(error),true);}
   }
   async function selectPerson(index) {
     const previous=activePerson,previousTime=$('voice-preview-time').value;
@@ -520,6 +567,13 @@
   bind($('voice-load'),load);bind($('voice-identify'),identify);bind($('voice-listen'),listen);
   for(const index of [0,1]) bind($('voice-assign-'+index),()=>assign(index),false);
   bind($('voice-skip'),()=>{if(busy || !samples.length) return;sampleIndex=(sampleIndex+1)%samples.length;renderSample();},false);
+  bind($('zoom-auto-create'),autoZoom);
+  document.querySelectorAll('[data-auto-style]').forEach(button=>bind(button,()=>{
+    if(busy) return;
+    autoStyle=button.dataset.autoStyle;
+    document.querySelectorAll('[data-auto-style]').forEach(other=>{const selected=other===button;other.classList.toggle('is-active',selected);other.setAttribute('aria-pressed',String(selected));});
+    return save();
+  },false));
   bind($('voice-analyze'),analyze);bind($('voice-apply'),apply);
   bind($('voice-cancel'),async()=>{faceCancelled=true;if(job) await api(`module-jobs/${job}/cancel`,{});},false);
   bind($('voice-previous'),()=>{if(!busy && page>0) {page--;renderTurns();}},false);

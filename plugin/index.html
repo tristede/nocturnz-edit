@@ -109,6 +109,18 @@
           </section>
         </section>
         <section id="zoom-controls" hidden>
+          <section class="zoom-auto" aria-label="Zoom automatique par visage">
+            <div class="zoom-auto-heading"><img src="icons/recadrage.svg" alt="" width="22" height="22"><span>Visages auto</span></div>
+            <div class="zoom-auto-styles" aria-label="Style du zoom">
+              <div role="button" tabindex="0" data-auto-style="light" class="is-active" aria-pressed="true"><img src="icons/zoom-in.svg" alt="" width="26" height="26"><strong>Léger</strong><span>Lent</span></div>
+              <div role="button" tabindex="0" data-auto-style="lively" aria-pressed="false"><img src="icons/zooms.svg" alt="" width="26" height="26"><strong>Vif</strong><span>Rapide · Jump</span></div>
+              <div role="button" tabindex="0" data-auto-style="portrait" aria-pressed="false"><img src="icons/recadrage.svg" alt="" width="26" height="26"><strong>Accentué</strong><span>Portrait</span></div>
+            </div>
+            <div class="button button-primary" id="zoom-auto-create" role="button" tabindex="0">Créer les zooms</div>
+            <p class="tool-status" id="zoom-auto-status" role="status" aria-live="polite"></p>
+          </section>
+          <div class="disclosure" role="button" tabindex="0" data-disclosure="zoom-expert" aria-expanded="false">Options avancées<span>+</span></div>
+          <section id="zoom-expert" hidden>
           <div class="zoom-modes" aria-label="Mode de zoom">
             <div role="button" tabindex="0" data-zoom-mode="presets" class="is-active" aria-pressed="true">Presets</div>
             <div role="button" tabindex="0" data-zoom-mode="cuts" class="is-pending" aria-pressed="false">Aux cuts</div>
@@ -199,6 +211,7 @@
           <div class="button button-primary" id="apply-zoom" role="button" tabindex="0">Créer la version zoomée</div>
           </section>
           <p class="tool-status" id="zoom-status" role="status" aria-live="polite"></p>
+          </section>
         </section>
       </section>
       <section id="settings-view" hidden>
