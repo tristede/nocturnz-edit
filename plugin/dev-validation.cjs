@@ -2,12 +2,12 @@
 const ppro = require('premierepro');
 const { readPoint } = require('./point.cjs');
 
-async function context() {
+async function context(sequenceOverride) {
   const project = await ppro.Project.getActiveProject();
   if (!project || !project.path.endsWith('/validation-local/Nocturnz_Zooms_validation.prproj')) throw new Error('Validation réservée au projet de test isolé.');
   const fixtureRoot = project.path.slice(0, -'/validation-local/Nocturnz_Zooms_validation.prproj'.length);
-  const sequence = await project.getActiveSequence();
-  if (!sequence || sequence.name !== 'Nocturnz — Validation Zooms') throw new Error('Séquence de test inactive.');
+  const sequence = sequenceOverride || await project.getActiveSequence();
+  if (!sequence || !/^Nocturnz — Validation Zooms(?:$| )/.test(sequence.name)) throw new Error('Séquence de test inactive.');
   const track = await sequence.getVideoTrack(0);
   const items = await track.getTrackItems(1, false);
   if (items.length !== 3) throw new Error('La validation attend exactement trois clips.');
@@ -39,8 +39,8 @@ async function parameters(item) {
 }
 
 const unwrap = (value) => value && typeof value === 'object' && 'value' in value ? value.value : value;
-async function inspect() {
-  const { items } = await context(), report = [];
+async function inspect(sequenceOverride) {
+  const { items } = await context(sequenceOverride), report = [];
   for (const item of items) {
     const params = await parameters(item), row = {};
     for (const [name, param] of Object.entries(params)) {
@@ -87,4 +87,14 @@ async function frame(index, scale, x, y) {
   return inspect();
 }
 
-module.exports = { inspect, select, frame };
+async function inspectAll() {
+  const { project } = await context(), result = [];
+  for (const sequence of await project.getSequences()) {
+    if (/^Nocturnz — Validation Zooms(?:$| )/.test(sequence.name)) {
+      result.push({ name: sequence.name, guid: sequence.guid.toString(), frames: await inspect(sequence) });
+    }
+  }
+  return result;
+}
+
+module.exports = { inspect, inspectAll, select, frame };

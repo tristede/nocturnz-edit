@@ -35,13 +35,13 @@
     el('zoom-speaker-pane').hidden = mode !== 'speaker';
     el('zoom-shared-settings').hidden = mode === 'speaker';
     el('zoom-motion-fields').hidden = mode !== 'cuts' && !preset.motion;
-    el('apply-zoom').textContent = usesMotion() ? 'Animer la sélection' : 'Appliquer';
-    if (usesMotion()) say('À valider dans Premiere');
+    el('apply-zoom').textContent = 'Créer la version zoomée';
+    if (mode !== 'speaker') say('Création sur copie · à valider dans Premiere');
   }
   function usesMotion() { return mode === 'cuts' || (mode === 'presets' && Boolean(preset.motion)); }
   for (const item of presets) {
     const card = document.createElement('div');
-    card.className = `zoom-preset${item.motion ? ' is-pending' : ''}${item === preset ? ' is-active' : ''}`;
+    card.className = `zoom-preset is-pending${item === preset ? ' is-active' : ''}`;
     card.setAttribute('role', 'button'); card.setAttribute('tabindex', '0');
     card.setAttribute('aria-pressed', String(item === preset));
     card.dataset.zoomPreset = item.id;
@@ -163,7 +163,7 @@
           const raw = current && current.value;
           const scale = Number(raw && typeof raw === 'object' && 'value' in raw ? raw.value : raw);
           if (!Number.isFinite(scale) || scale <= 0) throw new Error('échelle illisible');
-          candidates.push({ param, scale, trackIndex, start: BigInt(start.ticks),
+          candidates.push({ item, scale, trackIndex, start: BigInt(start.ticks),
             sourceIn: BigInt(sourceIn.ticks), sourceOut: BigInt(sourceOut.ticks) });
         } catch (error) { skipped.push(`${name} : ${error.message}`); }
       }
@@ -174,20 +174,27 @@
         const motion = config.motion === 'alternate' ? (index % 2 === 0 ? 'in' : 'out') : config.motion;
         const keys = buildKeys(clip.scale, config.amount, clip.sourceIn, clip.sourceOut, frameTicks,
           config.duration, motion, config.easing);
-        changes.push({ param: clip.param, keys }); perTrack.set(clip.trackIndex, index + 1);
+        changes.push({ item: clip.item, keys }); perTrack.set(clip.trackIndex, index + 1);
       }
       if (!changes.length) throw new Error(`Aucun clip modifiable.${skipped.length ? ` ${skipped.join(' · ')}` : ''}`);
+      const copier = require('./sequence-copy.cjs').withHost(host);
+      const draft = await copier.create(project, sequence, changes.map((change) => change.item));
+      const parameters = await Promise.all(draft.items.map(scaleParameter));
+      if (parameters.some((param) => !param)) throw new Error('Trajectoire absente de la copie. Aucun zoom appliqué.');
+      await copier.assertCopy(project, draft);
       let committed = false;
       project.lockedAccess(() => {
         // Build all actions first: an invalid action must not leave half a plan queued.
         const actions = [];
-        for (const change of changes) {
-          actions.push(change.param.createSetTimeVaryingAction(true));
+        actions.push(draft.projectItem.createSetNameAction(draft.name));
+        for (let index = 0; index < changes.length; index += 1) {
+          const change = changes[index], param = parameters[index];
+          actions.push(param.createSetTimeVaryingAction(true));
           for (const point of change.keys) {
-            const key = change.param.createKeyframe(point.value);
+            const key = param.createKeyframe(point.value);
             key.position = host.TickTime.createWithTicks(point.ticks);
-            actions.push(change.param.createAddKeyframeAction(key));
-            actions.push(change.param.createSetInterpolationAtKeyframeAction(
+            actions.push(param.createAddKeyframeAction(key));
+            actions.push(param.createSetInterpolationAtKeyframeAction(
               key.position, host.Constants.InterpolationMode.LINEAR, true,
             ));
           }
@@ -199,12 +206,12 @@
         }, 'Nocturnz/Edit — Zoom animé');
       });
       if (!committed) throw new Error('Premiere n’a pas confirmé la transaction.');
-      say(`Animation envoyée à ${changes.length} clip(s).${skipped.length ? ` ${skipped.length} ignoré(s) : ${skipped.join(' · ')}.` : ''} Résultat à vérifier dans Premiere.`, 'success');
+      say(`${draft.name} · ${changes.length} clip(s) animé(s).${skipped.length ? ` ${skipped.length} ignoré(s) : ${skipped.join(' · ')}.` : ''}`, 'success');
     } catch (error) { say(error.message || 'Animation indisponible.', 'error'); }
     finally { busy = false; el('apply-zoom').setAttribute('aria-disabled', 'false'); }
   }
   window.NocturnzZoom = {
-    usesMotion, applyMotion, buildKeys, presets,
+    usesMotion, applyMotion, buildKeys, presets, scaleParameter,
     acquire() {
       if (busy || el('apply-zoom').getAttribute('aria-disabled') === 'true') return false;
       busy = true; el('apply-zoom').setAttribute('aria-disabled', 'true'); return true;

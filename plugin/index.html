@@ -17,7 +17,7 @@
             <div class="module-tile is-unfinished" role="button" tabindex="0" data-tool="captions" data-title="Sous-titres" aria-label="Sous-titres"><img src="icons/unfinished/captions.svg" alt="" width="38" height="38"><span>Sous-titres</span></div>
             <div class="module-tile is-unfinished" role="button" tabindex="0" data-tool="podcast" data-title="Podcast" aria-label="Podcast"><img src="icons/unfinished/podcast.svg" alt="" width="38" height="38"><span>Podcast</span></div>
             <div class="module-tile is-unfinished" role="button" tabindex="0" data-tool="cadrages" data-title="Cadrages" aria-label="Cadrages"><img src="icons/unfinished/cadrages.svg" alt="" width="38" height="38"><span>Cadrages</span></div>
-            <div class="module-tile" role="button" tabindex="0" data-tool="zooms" data-title="Zooms" aria-label="Zooms"><img src="icons/zooms.svg" alt="" width="38" height="38"><span>Zooms</span></div>
+            <div class="module-tile is-unfinished" role="button" tabindex="0" data-tool="zooms" data-title="Zooms" aria-label="Zooms"><img src="icons/zooms.svg" alt="" width="38" height="38"><span>Zooms</span></div>
             <div class="module-tile is-unfinished" role="button" tabindex="0" data-tool="recadrage" data-title="Recadrage" aria-label="Recadrage"><img src="icons/unfinished/recadrage.svg" alt="" width="38" height="38"><span>Recadrage</span></div>
             <div class="module-tile is-unfinished" role="button" tabindex="0" data-tool="shorts" data-title="Shorts" aria-label="Shorts"><img src="icons/unfinished/shorts.svg" alt="" width="38" height="38"><span>Shorts</span></div>
             <div class="module-tile is-unfinished" role="button" tabindex="0" data-tool="chapitres" data-title="Chapitres" aria-label="Chapitres"><img src="icons/unfinished/chapitres.svg" alt="" width="38" height="38"><span>Chapitres</span></div>
@@ -88,8 +88,8 @@
                   <label>Durée<select id="speaker-duration"><option value="0" selected>Tout le clip</option><option value="300">0,3 s</option><option value="600">0,6 s</option><option value="1200">1,2 s</option><option value="2400">2,4 s</option></select></label>
                   <label>Courbe<select id="speaker-easing"><option value="smooth" selected>Douce</option><option value="linear">Linéaire</option></select></label>
                 </div>
-                <div class="zoom-scope">Clips vidéo sélectionnés · libellés enregistrés</div>
-                <div class="button button-primary" id="speaker-apply" role="button" tabindex="0">Appliquer les cadrages</div>
+                <div class="zoom-scope">Nouvelle séquence · clips sélectionnés</div>
+                <div class="button button-primary" id="speaker-apply" role="button" tabindex="0">Créer la version cadrée</div>
               </section>
             </section>
             <p class="pending-state" id="speaker-voice-pending" role="status" hidden>Voix · en développement</p>
@@ -104,8 +104,8 @@
             <label>Durée<select id="zoom-duration"><option value="0" selected>Tout le clip</option><option value="300">0,3 s</option><option value="600">0,6 s</option><option value="1200">1,2 s</option><option value="2400">2,4 s</option></select></label>
             <label>Courbe<select id="zoom-easing"><option value="smooth" selected>Douce</option><option value="linear">Linéaire</option></select></label>
           </div>
-          <div class="zoom-scope">Clips vidéo sélectionnés</div>
-          <div class="button button-primary" id="apply-zoom" role="button" tabindex="0">Appliquer</div>
+          <div class="zoom-scope">Nouvelle séquence · clips sélectionnés</div>
+          <div class="button button-primary" id="apply-zoom" role="button" tabindex="0">Créer la version zoomée</div>
           </section>
           <p class="tool-status" id="zoom-status" role="status" aria-live="polite"></p>
         </section>

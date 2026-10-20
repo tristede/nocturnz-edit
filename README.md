@@ -4,7 +4,7 @@ Extension open source pour le montage dans Adobe Premiere Pro. Elle rejoint la s
 
 ## État
 
-L’accueil présente 17 modules SVG + titre. Les modules inachevés sont grisés et restent consultables. Le zoom relatif est opérationnel; son application à un clip a été vérifiée dans Premiere, mais le retour de valeur après annulation reste à confirmer.
+L’accueil présente 17 modules SVG + titre. Les modules inachevés sont grisés et restent consultables. Tous les zooms créent désormais une copie de la séquence avant modification; ce nouveau parcours reste à valider dans Premiere et le module est grisé. L’ancien parcours direct a été exécuté sur un clip réel puis sur une mire isolée; il a été remplacé pour préserver la séquence source.
 
 Le module **Silences** réutilise le moteur local auto-editor 29.3.1 : sélection d’un fichier ou d’une source dans Premiere, seuil sonore, piste audio, durée minimale, marges avant/après, analyse asynchrone et annulation, révision des coupes, XML révisé à enregistrer ou à importer comme nouvelle séquence source. Les tâches sont conservées sur disque; une tâche interrompue par un redémarrage est signalée et peut être relancée.
 
@@ -14,7 +14,7 @@ Analyse et XML ont été testés avec le binaire réel et un audio de validation
 
 ## Installer le moteur et lancer le service
 
-**Zoom interlocuteur / Libellés timeline** : lecture des couleurs, capture et conservation d’un cadrage par couleur/source vérifiées dans Premiere Beta 27 sur une mire isolée. Application fixe/animée et Annuler restent à valider dans l’hôte; ce mode demeure grisé. Le mode Voix reste à développer. Voir [Zooms](docs/zooms.md).
+**Zoom interlocuteur / Libellés timeline** : lecture des couleurs, capture, conservation et application fixe d’un cadrage par couleur/source vérifiées dans Premiere Beta 27 sur une mire isolée avec l’ancien parcours direct. Le nouveau parcours sur copie, les animations et Annuler restent à valider dans l’hôte; ce mode demeure grisé. Le mode Voix reste à développer. Voir [Zooms](docs/zooms.md).
 
 ```sh
 npm run setup:engine

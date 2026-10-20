@@ -255,16 +255,22 @@
         const keys = preset.motion ? zoom.buildKeys(frame.scale, amount, BigInt(info.sourceInTicks),
           BigInt(info.sourceOutTicks), BigInt(current.timebase), duration, preset.motion, easing) : null;
         if (keys && !await params.scale.areKeyframesSupported()) throw new Error('animation indisponible');
-        changes.push({ params, frame, keys });
+        changes.push({ item, frame, keys });
       } catch (error) { skipped.push(`${name} : ${error.message}`); }
     }
     if (!changes.length) throw new Error(`Aucun cadrage applicable. ${skipped.join(' · ')}`);
     // Re-check active context after the async parameter reads.
     checkContext(await nativeContext(), snapshot);
+    const copier = require('./sequence-copy.cjs').withHost(host);
+    const draft = await copier.create(current.project, current.sequence, changes.map((change) => change.item));
+    const parameters = await Promise.all(draft.items.map(motionParameters));
+    await copier.assertCopy(current.project, draft);
     let committed = false;
     current.project.lockedAccess(() => {
       const actions = [];
-      for (const { params, frame, keys } of changes) {
+      actions.push(draft.projectItem.createSetNameAction(draft.name));
+      for (let index = 0; index < changes.length; index += 1) {
+        const { frame, keys } = changes[index], params = parameters[index];
         for (const key of ['position', 'anchor']) {
           const point = new host.PointF(frame[key].x, frame[key].y);
           actions.push(params[key].createSetValueAction(params[key].createKeyframe(point), true));
@@ -287,7 +293,7 @@
       }, 'Nocturnz/Edit — Cadrages par libellé');
     });
     if (!committed) throw new Error('Premiere n’a pas confirmé la transaction.');
-    say(`${changes.length} cadrage(s) envoyé(s). Résultat à vérifier dans Premiere.${skipped.length ? ` ${skipped.length} ignoré(s) : ${skipped.join(' · ')}` : ''}`);
+    say(`${draft.name} · ${changes.length} cadrage(s) appliqué(s).${skipped.length ? ` ${skipped.length} ignoré(s) : ${skipped.join(' · ')}` : ''}`);
   }
   for (const item of zoom.presets) {
     const option = document.createElement('option'); option.value = item.id; option.textContent = item.title;

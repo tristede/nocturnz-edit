@@ -37,7 +37,7 @@ Première tranche Silences implémentée avec auto-editor 29.3.1 : analyse d’u
 
 - Association manuelle voix/cadrage A/B/large, puis assistance facultative.
 - Podcast multicam, interruptions, rythme, zooms progressifs et ancres.
-- Zooms : presets et animation In/Out aux cuts implémentés, validation Premiere à faire. Zoom interlocuteur par libellés de timeline enregistré implémenté; lecture, capture et mémorisation vérifiées dans Premiere Beta 27 sur mire isolée. Application et Annuler restent à valider; détection des voix à développer. Voir `docs/zooms.md`.
+- Zooms : presets et animation In/Out aux cuts implémentés. Libellés : lecture, capture, mémorisation et ancien parcours direct fixe vérifiés dans Premiere Beta 27 sur mire isolée. Tous les parcours utilisent désormais une duplication obligatoire pour préserver la source; duplication/application/Annuler restent à valider dans l’hôte. Détection des voix à développer. Voir `docs/zooms.md`.
 - Recadrage vertical/carré, suivi facultatif, split-screen.
 
 ## E — couverture complète

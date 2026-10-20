@@ -51,3 +51,11 @@ Interlocuteur reste grisé jusqu’à validation Premiere. Le mode **Libellés t
 - Corrections de compatibilité UXP : points sous forme de tableau encapsulé, chemins POSIX à trois barres, suppression des anciennes lignes sans `replaceChildren`, attributs SVG explicites et sélection initiale des menus.
 - Application non confirmée : le premier essai a été refusé avant mutation (« Preset inconnu »). La valeur par défaut est corrigée dans le code; le verrouillage du Mac a empêché de recharger et de vérifier cette correction, l’application et Annuler. Ces étapes et les animations restent à faire dans l’hôte.
 - Tests automatiques : 12 tests Node et 17 tests Python (dont six nouveaux sur les libellés/palettes); le protocole natif et le générateur de mire sont documentés séparément.
+
+## Conservation de l’original — reprise du 20 octobre
+
+- L’application fixe directe a été vérifiée après correction du sélecteur : le troisième clip Rose est passé de 100 à 125 %, position de (0,5 ; 0,5) à (0,35 ; 0,5); les deux autres clips sont restés identiques. Annuler a été déclenché, mais ses valeurs n’ont pas pu être relues avant la réinitialisation d’UXP Developer Tools.
+- À la demande d’Adam, ce parcours direct a été remplacé : chaque application des trois parcours de zoom passe désormais par une copie native obligatoire et relit les paramètres de cette copie. L’original n’est jamais une cible de modification. Pas de calque d’effets.
+- Nom distinct `… — Nocturnz Zooms N`, ouverture et sélection dans la copie; aucun repli sur la source si le clonage ou la correspondance échoue. Aucun enregistrement automatique.
+- 17 tests Node et 17 tests Python passent, dont cinq nouveaux tests simulés du parcours de copie (identité distincte, échec/ambiguïté, correspondance des clips, sélection, changement de séquence active). Ils ne constituent pas une validation native du clonage.
+- Duplication/application/Annuler restent à vérifier dans Premiere; le Mac s’est à nouveau verrouillé. Le module Zooms et tous ses presets sont atténués jusqu’à cette validation.

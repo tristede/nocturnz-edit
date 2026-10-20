@@ -1,5 +1,13 @@
 # Zooms
 
+## Conservation de la séquence source
+
+Depuis la demande du 20 octobre, chaque application (Fixe, Presets animés, Aux cuts et Libellés) commence par une duplication native de la séquence complète. La copie reçoit un nom distinct, par exemple `Montage — Nocturnz Zooms 1`, et s’ouvre dans la timeline. Seuls les clips correspondant à la sélection de départ y reçoivent les zooms via Trajectoire. Aucun calque d’effets n’est créé, aucun média n’est réencodé et aucune sauvegarde automatique n’est déclenchée.
+
+Les paramètres à modifier sont relus sur les clips de la copie; les paramètres de la séquence source ne sont jamais utilisés comme cibles d’actions. La correspondance vérifie piste, élément média, nom et bornes source/timeline. Une duplication refusée, plusieurs nouvelles séquences, un élément de projet non distinct ou une correspondance ambiguë bloquent l’application. Il n’existe aucun repli sur une modification de l’original. Une copie déjà créée peut rester dans le projet en cas d’échec ultérieur, sans zoom appliqué.
+
+Duplication et application sont deux transactions distinctes : Annuler après une application retire les zooms et le renommage de la copie, puis une autre annulation peut retirer la duplication. Le parcours sur copie est testé avec un hôte simulé, mais sa validation native reste à effectuer. Le module reste grisé. Les séquences imbriquées ne sont pas parcourues pour en modifier les clips internes.
+
 ## Interface et code ajoutés
 
 - **Presets** : Fixe (zoom relatif existant), Lent in, Lent out, Punch in, Punch out, Aller-retour.
@@ -31,7 +39,7 @@ Parcours :
 1. Enregistrer les couleurs dans Premiere, ouvrir Zooms → Interlocuteur → Libellés timeline, puis lire les libellés enregistrés.
 2. Cadrer un clip dans Premiere, le sélectionner, puis **Capturer le cadrage sélectionné** sous sa couleur. Un nom d’interlocuteur peut être associé à la couleur.
 3. Capturer un cadrage pour chaque source vidéo utilisée par cette couleur. Les prises d’une autre source ne reçoivent pas un cadrage capturé sur un fichier différent.
-4. Sélectionner les clips à traiter, choisir Fixe ou un preset animé, puis **Appliquer les cadrages**.
+4. Sélectionner les clips à traiter, choisir Fixe ou un preset animé, puis **Créer la version cadrée**. La sélection est retrouvée dans une nouvelle copie de la séquence; les actions s’appliquent à cette copie.
 
 La capture lit position, point d’ancrage, échelle et rotation de Trajectoire. Le mode Fixe reprend exactement le cadrage capturé; l’intensité supplémentaire est réservée aux presets animés. Les cadrages et noms sont conservés dans le dossier de données privé du plugin, par projet/séquence/couleur/source. Aucun média n’est envoyé sur un serveur distant. Les captures deviennent inapplicables si les dimensions de la séquence changent.
 
@@ -41,7 +49,9 @@ Avant capture et application, le panneau relit le fichier, compare son SHA-256, 
 
 **Validation native du 20 octobre 2026 — Premiere Beta 27.0.0** : projet isolé de trois occurrences d’une mire PNG, 1920 × 1080 à 25 i/s. Le panneau lit Rose sur deux occurrences et Mangue sur la troisième, toutes issues du même média. La connexion locale, la résolution des noms/couleurs, la capture d’un cadrage à 125 % avec position normalisée (0,35 ; 0,5), puis sa conservation après rechargement du plugin ont été vérifiées. Le SDK renvoie les points sous `{value: [x, y]}`; leur lecture est désormais compatible avec cette représentation. Le rafraîchissement de la liste conserve exactement deux lignes.
 
-**Restant** : l’application a été bloquée avant toute mutation par un preset sans valeur initiale dans le sélecteur UXP. La sélection initiale a été corrigée dans le code, mais cette correction, l’application et Annuler ne sont pas encore validés dans l’hôte : le Mac s’est verrouillé avant la reprise. Le mode demeure grisé. Le protocole et la mire reproductible sont dans `docs/premiere-validation.md`. Six tests Python sur le lecteur et la palette, et trois tests Node sur les points, passent indépendamment de l’hôte.
+**Reprise native** : le sélecteur initial Fixe a été vérifié. L’ancien parcours direct a appliqué le cadrage Rose au troisième clip : échelle 100 → 125 %, position (0,5 ; 0,5) → (0,35 ; 0,5); le premier clip et le clip Mangue sont restés inchangés. Annuler a été déclenché dans le menu Édition, mais le débogueur s’est réinitialisé avant la relecture des valeurs : le retour n’est pas confirmé.
+
+**Restant** : le parcours direct a ensuite été remplacé par une duplication obligatoire à la demande d’Adam. Ce nouveau parcours et Annuler, ainsi que les animations, restent à valider dans l’hôte : le Mac s’est à nouveau verrouillé. Le mode demeure grisé. Le protocole et la mire reproductible sont dans `docs/premiere-validation.md`. Les tests du lecteur, des points et de la protection par copie sont rapportés séparément dans `docs/status.md`.
 
 ### Voix
 

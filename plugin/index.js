@@ -180,7 +180,7 @@ async function applyRelativeZoom() {
         skipped += 1;
         continue;
       }
-      changes.push({ param: scaleParam, value: calculateRelativeScale(baseScale, increase) });
+      changes.push({ item, value: calculateRelativeScale(baseScale, increase) });
     }
 
     if (!changes.length) {
@@ -189,14 +189,22 @@ async function applyRelativeZoom() {
       return;
     }
 
+    stage = 'duplication de la séquence';
+    const copier = require('./sequence-copy.cjs').withHost(premiere);
+    const draft = await copier.create(project, sequence, changes.map((change) => change.item));
+    const parameters = await Promise.all(draft.items.map(window.NocturnzZoom.scaleParameter));
+    if (parameters.some((param) => !param)) throw new Error('Trajectoire absente de la copie. Aucun zoom appliqué.');
+    await copier.assertCopy(project, draft);
     let added = 0;
     let success = false;
     stage = 'création de la transaction Premiere';
     project.lockedAccess(() => {
       success = project.executeTransaction((compoundAction) => {
-        for (const change of changes) {
-          const keyframe = change.param.createKeyframe(change.value);
-          const action = change.param.createSetValueAction(keyframe, true);
+        if (!compoundAction.addAction(draft.projectItem.createSetNameAction(draft.name))) throw new Error('Nommage de la copie refusé.');
+        for (let index = 0; index < changes.length; index += 1) {
+          const param = parameters[index];
+          const keyframe = param.createKeyframe(changes[index].value);
+          const action = param.createSetValueAction(keyframe, true);
           if (compoundAction.addAction(action)) added += 1;
         }
       }, 'Nocturnz/Edit — Zoom relatif');
@@ -204,7 +212,7 @@ async function applyRelativeZoom() {
     if (!success || added !== changes.length) throw new Error('Premiere n’a pas confirmé toutes les actions. Aucun résultat n’est annoncé.');
 
     zoomStatus.classList.add('success');
-    zoomStatus.textContent = `Zoom relatif appliqué à ${added} clip${added > 1 ? 's' : ''} · ${increase}% ajouté à l’échelle existante.${skipped ? ` ${skipped} ignoré(s).` : ''} Annulable avec ⌘Z.`;
+    zoomStatus.textContent = `${draft.name} · ${added} clip(s) zoomé(s).${skipped ? ` ${skipped} ignoré(s).` : ''}`;
   } catch (error) {
     zoomStatus.classList.add('error');
     zoomStatus.textContent = `${error.message || 'Le zoom n’a pas pu être appliqué.'} · Étape : ${stage}.`;

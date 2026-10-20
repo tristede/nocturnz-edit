@@ -30,8 +30,8 @@ Dans la console de débogage UXP, `var zv = require('./dev-validation.cjs')` don
 
 1. Préparer le cadrage du premier clip, le sélectionner et le capturer sous Rose dans le panneau.
 2. Recharger le panneau, relire les libellés et vérifier que le cadrage est conservé.
-3. Sélectionner le troisième clip, appliquer le cadrage Fixe, puis comparer position/échelle/ancrage/rotation via `zv.inspect()`.
-4. Utiliser Annuler dans Premiere et relire les trois clips : seul le troisième doit revenir à son cadrage précédent.
+3. Sélectionner le troisième clip puis **Créer la version cadrée** avec Fixe. Vérifier qu’une nouvelle séquence s’ouvre avec un GUID différent et un nom `… — Nocturnz Zooms N`. Comparer les deux séquences via `zv.inspectAll()` : seule la troisième occurrence de la copie doit recevoir le cadrage, la source doit rester identique.
+4. Utiliser Annuler dans Premiere et relire les deux séquences : la copie revient à son cadrage précédent; la source reste identique. Le renommage est annulé avec l’application, puis une autre annulation retire la duplication.
 5. Répéter avec un preset animé puis Aux cuts sur les deux derniers clips. Relever les ticks et valeurs des images clés, vérifier le rendu et Annuler.
 
 Le client UXP utilise `http://localhost:8765`; le serveur reste lié à `127.0.0.1`. Après modification des permissions réseau du manifeste, décharger puis recharger le plugin dans UXP Developer Tools.
