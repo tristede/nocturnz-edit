@@ -59,3 +59,9 @@ Interlocuteur reste grisé jusqu’à validation Premiere. Le mode **Libellés t
 - Nom distinct `… — Nocturnz Zooms N`, ouverture et sélection dans la copie; aucun repli sur la source si le clonage ou la correspondance échoue. Aucun enregistrement automatique.
 - 17 tests Node et 17 tests Python passent, dont cinq nouveaux tests simulés du parcours de copie (identité distincte, échec/ambiguïté, correspondance des clips, sélection, changement de séquence active). Ils ne constituent pas une validation native du clonage.
 - Duplication/application/Annuler restent à vérifier dans Premiere; le Mac s’est à nouveau verrouillé. Le module Zooms et tous ses presets sont atténués jusqu’à cette validation.
+
+## Raccordement des quinze modules supplémentaires — 2026-10-20
+
+Les 15 modules auparavant sans commandes ont des formulaires et des adaptateurs réels : transcription, hésitations, répétitions, sous-titres, podcast, cadrages, recadrage, shorts, chapitres, B-roll, audio, musique, censure, recettes et lots. Le service 0.4.0 est démarré avec une file persistante, annulation des workers, liste des tâches et récupération des résultats. Le panneau propose la révision des coupes et un éditeur de mots horodatés. L’installation est reproductible via `npm run setup:modules`.
+
+Chaque adaptateur a terminé au moins un traitement source réel sur médias synthétiques; plusieurs variantes et le XML de coupes révisées ont également terminé. FFmpeg/FFprobe sont compilés localement et acceptés par les contrôles amont; Whisper tiny/base/small sont installés. Aucun nouveau résultat sur un montage réel d’Adam n’est revendiqué. Le parcours UXP et les imports des nouveaux modules restent à vérifier; la suite automatisée historique n’a pas été relancée pour cette tranche. Périmètre exact, sorties et limitations dans `docs/modules.md`.

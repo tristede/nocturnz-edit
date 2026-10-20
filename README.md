@@ -18,6 +18,7 @@ Analyse et XML ont été testés avec le binaire réel et un audio de validation
 
 ```sh
 npm run setup:engine
+npm run setup:modules
 npm run service
 ```
 
@@ -43,7 +44,7 @@ La navigation peut s’ouvrir hors de Premiere; le choix de fichiers par UXP et 
 
 ## Développement
 
-Les sources de **six dépôts du brief** sont maintenant conservées dans [vendor](vendor/README.md), avec versions, licences et empreintes. Les 17 modules ont une correspondance vers les fichiers amont. Cette copie prépare leur reprise; les adaptations UXP et les dépendances ne sont pas encore branchées. `auto-zoom-premiere` reste une référence sans code copié, faute de licence identifiable.
+Les sources de **six dépôts du brief** sont conservées dans [vendor](vendor/README.md), avec versions, licences et empreintes. Les 15 modules supplémentaires sont maintenant reliés au panneau, aux fonctions OpenCut et à une file de tâches isolées; leurs traitements source ont été exécutés sur médias synthétiques. Ils proposent réglages, progression, annulation, révision des coupes et import des sorties. Leur parcours UXP/import reste à valider; les tuiles restent atténuées. Voir [Modules raccordés et limites](docs/modules.md). `auto-zoom-premiere` reste une référence sans code copié, faute de licence identifiable.
 
 ```sh
 npm test
@@ -57,6 +58,7 @@ npm test
 - [Composants et licences](THIRD-PARTY.md)
 - [Protocole de validation Premiere](docs/premiere-validation.md)
 - [Zooms : modes, presets et interlocuteurs](docs/zooms.md)
+- [Modules : fonctions, installation et limites](docs/modules.md)
 
 ## Licence
 

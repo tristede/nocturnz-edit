@@ -11,12 +11,14 @@ if __package__ in (None, ''):
 from service.auto_editor import ROOT, engine_info
 from service.jobs import Jobs
 from service.timeline_labels import read_timeline_labels
+from service.module_catalog import catalog
+from service.module_jobs import ModuleJobs
 
 
 def health_payload():
     engine = engine_info()
     return {
-        'name': 'Nocturnz/Edit Local Service', 'version': '0.3.0', 'status': 'ready',
+        'name': 'Nocturnz/Edit Local Service', 'version': '0.4.0', 'status': 'ready',
         'capabilities': ['saved-timeline-labels'] + (['silence-analysis', 'silence-review', 'premiere-xml-export'] if engine['available'] else []),
         'mediaProcessing': engine['available'], 'engines': [engine],
     }
@@ -59,12 +61,23 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if self.path in ('/health', '/api/v1/capabilities'):
                 self.reply(200, health_payload())
+            elif self.path == '/api/v1/modules':
+                self.reply(200, catalog())
+            elif self.path == '/api/v1/module-jobs':
+                self.reply(200, {'jobs': self.server.module_jobs.list()})
+            elif re.fullmatch(r'/api/v1/module-jobs/[0-9a-f]{32}', self.path):
+                self.reply(200, self.server.module_jobs.get(self.path.rsplit('/', 1)[1]))
+            elif re.fullmatch(r'/api/v1/module-jobs/[0-9a-f]{32}/artifacts/\d+', self.path):
+                parts = self.path.split('/')
+                self.reply(200, self.server.module_jobs.artifact(parts[4], parts[6]))
             elif re.fullmatch(r'/api/v1/jobs/[0-9a-f]{32}', self.path):
                 self.reply(200, self.server.jobs.get(self.path.rsplit('/', 1)[1]))
             else:
                 self.reply(404, {'error': 'Route inconnue.'})
         except KeyError:
             self.reply(404, {'error': 'Tâche inconnue.'})
+        except (ValueError, OSError, IndexError) as error:
+            self.reply(400, {'error': str(error)})
 
     def do_POST(self):
         if not self.allowed(private=True):
@@ -80,6 +93,12 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError('Objet JSON requis.')
             if self.path == '/api/v1/zooms/labels/read':
                 self.reply(200, read_timeline_labels(payload))
+            elif re.fullmatch(r'/api/v1/modules/[a-z]+/run', self.path):
+                self.reply(202, self.server.module_jobs.create(self.path.split('/')[4], payload))
+            elif re.fullmatch(r'/api/v1/module-jobs/[0-9a-f]{32}/cancel', self.path):
+                self.reply(200, self.server.module_jobs.cancel(self.path.split('/')[4]))
+            elif re.fullmatch(r'/api/v1/module-jobs/[0-9a-f]{32}/review', self.path):
+                self.reply(202, self.server.module_jobs.review(self.path.split('/')[4], payload))
             elif self.path == '/api/v1/silences/analyze':
                 if not engine_info()['available']:
                     self.reply(503, {'error': 'Moteur absent : lance python3 scripts/install-engine.py.'})
@@ -108,6 +127,7 @@ def make_server(port=8765, job_root=None):
     server = ThreadingHTTPServer(('127.0.0.1', port), Handler)
     server.daemon_threads = True
     server.jobs = Jobs(job_root or ROOT / '.runtime' / 'jobs')
+    server.module_jobs = ModuleJobs(Path(job_root) / 'modules' if job_root else ROOT / '.runtime/module-jobs')
     return server
 
 
@@ -121,4 +141,5 @@ if __name__ == '__main__':
         pass
     finally:
         server.jobs.close()
+        server.module_jobs.close()
         server.server_close()

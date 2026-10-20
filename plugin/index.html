@@ -33,6 +33,33 @@
         <div class="back-link" role="button" tabindex="0" data-home><img src="icons/back.svg" alt="" width="16" height="16"><span>Outils</span></div>
         <div class="tool-page-heading"><img id="tool-icon" src="icons/zooms.svg" alt="" width="34" height="34"><h1 id="tool-title">Zooms</h1></div>
         <p class="pending-state" id="pending-state" role="status">À développer</p>
+        <section id="module-controls" hidden>
+          <div class="source-actions">
+            <div class="button button-secondary" id="module-file" role="button" tabindex="0">Fichiers</div>
+            <div class="button button-secondary" id="module-selection" role="button" tabindex="0">Sélection Premiere</div>
+          </div>
+          <div class="source-name" id="module-source">Média source</div>
+          <div class="silence-fields" id="module-fields"></div>
+          <div class="zoom-scope">Médias source entiers · résultats séparés</div>
+          <div class="button button-primary" id="module-run" role="button" tabindex="0">Lancer</div>
+          <div class="button button-secondary" id="module-cancel" role="button" tabindex="0" hidden>Annuler le traitement</div>
+          <progress id="module-progress" max="100" value="0" hidden></progress>
+          <p class="tool-status" id="module-status" role="status" aria-live="polite"></p>
+          <section id="module-review" hidden><h2>Coupes proposées</h2>
+            <div class="review-actions"><div id="module-cuts-previous" role="button" tabindex="0">Précédent</div><span id="module-cuts-page"></span><div id="module-cuts-next" role="button" tabindex="0">Suivant</div></div>
+            <div id="module-cuts"></div>
+            <div class="button button-primary" id="module-review-export" role="button" tabindex="0">Créer le XML des coupes cochées</div>
+          </section>
+          <section id="module-results" hidden><div class="results-heading"><h2>Résultats</h2></div><div id="module-artifacts"></div>
+            <section id="module-transcript-editor" hidden>
+              <div class="review-actions"><div id="module-transcript-previous" role="button" tabindex="0">Précédent</div><span id="module-transcript-page"></span><div id="module-transcript-next" role="button" tabindex="0">Suivant</div></div>
+              <div id="module-transcript-segments"></div>
+            </section>
+            <textarea id="module-result-text" aria-label="Résultat texte" rows="10" hidden></textarea>
+            <div class="button button-secondary" id="module-save-text" role="button" tabindex="0" hidden>Enregistrer</div>
+          </section>
+          <label class="module-history-label">Tâches récentes<select id="module-history"><option value="" selected>Choisir une tâche</option></select></label>
+        </section>
         <section id="silence-controls" hidden>
           <div class="source-actions"><div class="button button-secondary" id="silence-selection" role="button" tabindex="0">Sélection Premiere</div><div class="button button-secondary" id="silence-file" role="button" tabindex="0">Fichier</div></div>
           <p class="source-name" id="silence-source">—</p>
@@ -128,5 +155,7 @@
   <script src="zoom-motion.js"></script>
   <script src="speaker-labels.js"></script>
   <script src="index.js"></script>
+  <script src="module-catalog.js"></script>
+  <script src="module-tools.js"></script>
 </body>
 </html>

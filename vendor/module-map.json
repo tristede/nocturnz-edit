@@ -14,40 +14,60 @@
     },
     {
       "id": "hesitations",
-      "upstreamStatus": "source-imported-adapter-pending",
+      "upstreamStatus": "source-imported-adapter-connected",
       "entryPoints": [
         "vendor/sources/opencut/opencut/core/fillers.py"
-      ]
+      ],
+      "nocturnzAdapter": {
+        "worker": "service/module_worker.py",
+        "route": "/api/v1/modules/hesitations/run",
+        "nativeValidated": false
+      }
     },
     {
       "id": "repetitions",
-      "upstreamStatus": "source-imported-adapter-pending",
+      "upstreamStatus": "source-imported-adapter-connected",
       "entryPoints": [
         "vendor/sources/opencut/opencut/core/repeat_detect.py"
-      ]
+      ],
+      "nocturnzAdapter": {
+        "worker": "service/module_worker.py",
+        "route": "/api/v1/modules/repetitions/run",
+        "nativeValidated": false
+      }
     },
     {
       "id": "transcription",
-      "upstreamStatus": "source-imported-adapter-pending",
+      "upstreamStatus": "source-imported-adapter-connected",
       "entryPoints": [
         "vendor/sources/opencut/opencut/core/asr_router.py",
         "vendor/sources/opencut/opencut/core/transcript_edit.py",
         "vendor/sources/opencut/opencut/core/crisper_whisper.py",
         "vendor/sources/premiere-director/panel/src/asr/whisper.ts"
-      ]
+      ],
+      "nocturnzAdapter": {
+        "worker": "service/module_worker.py",
+        "route": "/api/v1/modules/transcription/run",
+        "nativeValidated": false
+      }
     },
     {
       "id": "captions",
-      "upstreamStatus": "source-imported-adapter-pending",
+      "upstreamStatus": "source-imported-adapter-connected",
       "entryPoints": [
         "vendor/sources/opencut/opencut/core/captions.py",
         "vendor/sources/opencut/opencut/core/animated_captions.py",
         "vendor/sources/opencut/opencut/core/styled_captions.py"
-      ]
+      ],
+      "nocturnzAdapter": {
+        "worker": "service/module_worker.py",
+        "route": "/api/v1/modules/captions/run",
+        "nativeValidated": false
+      }
     },
     {
       "id": "podcast",
-      "upstreamStatus": "source-imported-adapter-pending",
+      "upstreamStatus": "source-imported-adapter-connected",
       "entryPoints": [
         "vendor/sources/opencut/opencut/core/multicam.py",
         "vendor/sources/opencut/opencut/core/podcast_suite.py",
@@ -56,15 +76,25 @@
         "vendor/sources/podclip/client/analyzer.js",
         "vendor/sources/podclip/host/host.jsx",
         "vendor/sources/premiere-director/panel/src/director/engine.ts"
-      ]
+      ],
+      "nocturnzAdapter": {
+        "worker": "service/module_worker.py",
+        "route": "/api/v1/modules/podcast/run",
+        "nativeValidated": false
+      }
     },
     {
       "id": "cadrages",
-      "upstreamStatus": "source-imported-adapter-pending",
+      "upstreamStatus": "source-imported-adapter-connected",
       "entryPoints": [
         "vendor/sources/opencut/opencut/core/multicam_grid.py",
         "vendor/sources/opencut/opencut/core/split_screen.py"
-      ]
+      ],
+      "nocturnzAdapter": {
+        "worker": "service/module_worker.py",
+        "route": "/api/v1/modules/cadrages/run",
+        "nativeValidated": false
+      }
     },
     {
       "id": "zooms",
@@ -76,77 +106,122 @@
     },
     {
       "id": "recadrage",
-      "upstreamStatus": "source-imported-adapter-pending",
+      "upstreamStatus": "source-imported-adapter-connected",
       "entryPoints": [
         "vendor/sources/opencut/opencut/core/smart_reframe.py",
         "vendor/sources/opencut/opencut/core/face_reframe.py"
-      ]
+      ],
+      "nocturnzAdapter": {
+        "worker": "service/module_worker.py",
+        "route": "/api/v1/modules/recadrage/run",
+        "nativeValidated": false
+      }
     },
     {
       "id": "shorts",
-      "upstreamStatus": "source-imported-adapter-pending",
+      "upstreamStatus": "source-imported-adapter-connected",
       "entryPoints": [
         "vendor/sources/opencut/opencut/core/shorts_pipeline.py",
         "vendor/sources/opencut/opencut/core/highlights.py"
-      ]
+      ],
+      "nocturnzAdapter": {
+        "worker": "service/module_worker.py",
+        "route": "/api/v1/modules/shorts/run",
+        "nativeValidated": false
+      }
     },
     {
       "id": "chapitres",
-      "upstreamStatus": "source-imported-adapter-pending",
+      "upstreamStatus": "source-imported-adapter-connected",
       "entryPoints": [
         "vendor/sources/opencut/opencut/core/chapter_gen.py",
         "vendor/sources/opencut/opencut/core/stream_chapters.py"
-      ]
+      ],
+      "nocturnzAdapter": {
+        "worker": "service/module_worker.py",
+        "route": "/api/v1/modules/chapitres/run",
+        "nativeValidated": false
+      }
     },
     {
       "id": "broll",
-      "upstreamStatus": "source-imported-adapter-pending",
+      "upstreamStatus": "source-imported-adapter-connected",
       "entryPoints": [
         "vendor/sources/opencut/opencut/core/broll_suggest.py",
         "vendor/sources/opencut/opencut/core/broll_insert.py",
         "vendor/sources/opencut/opencut/core/footage_search.py"
-      ]
+      ],
+      "nocturnzAdapter": {
+        "worker": "service/module_worker.py",
+        "route": "/api/v1/modules/broll/run",
+        "nativeValidated": false
+      }
     },
     {
       "id": "audio",
-      "upstreamStatus": "source-imported-adapter-pending",
+      "upstreamStatus": "source-imported-adapter-connected",
       "entryPoints": [
         "vendor/sources/opencut/opencut/core/audio.py",
         "vendor/sources/opencut/opencut/core/audio_enhance.py",
         "vendor/sources/opencut/opencut/core/audio_duck.py"
-      ]
+      ],
+      "nocturnzAdapter": {
+        "worker": "service/module_worker.py",
+        "route": "/api/v1/modules/audio/run",
+        "nativeValidated": false
+      }
     },
     {
       "id": "musique",
-      "upstreamStatus": "source-imported-adapter-pending",
+      "upstreamStatus": "source-imported-adapter-connected",
       "entryPoints": [
         "vendor/sources/opencut/opencut/core/music_gen.py",
         "vendor/sources/opencut/opencut/core/music_remix.py"
-      ]
+      ],
+      "nocturnzAdapter": {
+        "worker": "service/module_worker.py",
+        "route": "/api/v1/modules/musique/run",
+        "nativeValidated": false
+      }
     },
     {
       "id": "censure",
-      "upstreamStatus": "source-imported-adapter-pending",
+      "upstreamStatus": "source-imported-adapter-connected",
       "entryPoints": [
         "vendor/sources/opencut/opencut/core/profanity_censor.py",
         "vendor/sources/opencut/opencut/core/redaction.py"
-      ]
+      ],
+      "nocturnzAdapter": {
+        "worker": "service/module_worker.py",
+        "route": "/api/v1/modules/censure/run",
+        "nativeValidated": false
+      }
     },
     {
       "id": "recettes",
-      "upstreamStatus": "source-imported-adapter-pending",
+      "upstreamStatus": "source-imported-adapter-connected",
       "entryPoints": [
         "vendor/sources/opencut/opencut/core/workflow.py",
         "vendor/sources/opencut/opencut/core/macro_recorder.py"
-      ]
+      ],
+      "nocturnzAdapter": {
+        "worker": "service/module_worker.py",
+        "route": "/api/v1/modules/recettes/run",
+        "nativeValidated": false
+      }
     },
     {
       "id": "lots",
-      "upstreamStatus": "source-imported-adapter-pending",
+      "upstreamStatus": "source-imported-adapter-connected",
       "entryPoints": [
         "vendor/sources/opencut/opencut/core/batch_process.py",
         "vendor/sources/opencut/opencut/core/batch_executor.py"
-      ]
+      ],
+      "nocturnzAdapter": {
+        "worker": "service/module_worker.py",
+        "route": "/api/v1/modules/lots/run",
+        "nativeValidated": false
+      }
     }
   ]
 }

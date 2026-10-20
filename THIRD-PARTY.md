@@ -20,7 +20,7 @@ Le moteur est téléchargé séparément dans `.runtime/bin/`, ignoré par Git. 
 
 Six dépôts sont copiés dans [vendor/sources](vendor/sources), avec leurs licences et notices originales : OpenCut (MIT), auto-editor 29.3.1 (Unlicense), OpenPodCut (GPL-3.0-or-later), podclip-public-release (MIT et notices tierces), premiere-director (MIT et bibliothèques tierces) et jumpcut (GPL-3.0). Les commits exacts et empreintes de chaque fichier figurent dans [vendor/manifest.json](vendor/manifest.json).
 
-Il s’agit de sources conservées, sans branchement automatique au panneau ni exécution des installateurs amont. Les sources GPL gardent leur licence; une copie complète du texte est disponible dans [third_party/GPL-3.0.txt](third_party/GPL-3.0.txt). La licence MIT de Nocturnz ne s’applique pas à ces copies. Les notices imbriquées restent applicables.
+Les fonctions OpenCut nécessaires aux quinze nouveaux adaptateurs sont désormais importées depuis le snapshot conservé, dans des workers séparés. Les autres snapshots restent des sources de référence; leurs installateurs amont n’ont pas été exécutés. Les sources GPL gardent leur licence; une copie complète du texte est disponible dans [third_party/GPL-3.0.txt](third_party/GPL-3.0.txt). La licence MIT de Nocturnz ne s’applique pas à ces copies. Les notices imbriquées restent applicables.
 
 Les binaires FFmpeg de Podclip et leur archive source, le binaire de signature OpenPodCut, les distributions Jumpcut, les médias et modèles ne sont pas redistribués ici. Les instructions et notices correspondantes restent conservées; cette sélection est détaillée fichier par fichier dans le manifeste.
 
@@ -36,8 +36,12 @@ Le lecteur original `service/timeline_labels.py` reprend les chemins du graphe d
 
 ### Adobe et environnements
 
-Adobe Premiere et UXP Developer Tool sont propriétaires et ne sont pas redistribués. Node.js et Python sont des environnements externes. Aucune dépendance Python tierce n’est requise par le service Nocturnz.
+Adobe Premiere et UXP Developer Tool sont propriétaires et ne sont pas redistribués. Node.js et Python sont des environnements externes. Le serveur HTTP utilise la bibliothèque standard; ses nouveaux workers média utilisent les dépendances de `requirements-modules.txt`, installées dans un environnement privé.
 
 ## Modèles et médias
 
-Aucun modèle d’IA ni média tiers n’est fourni. L’analyse des silences utilise le niveau sonore, pas un modèle de reconnaissance vocale. Les fichiers de test générés sont locaux et ignorés par Git.
+Aucun modèle d’IA ni média tiers n’est redistribué dans Git. L’analyse des silences utilise le niveau sonore. `scripts/install-modules.py` télécharge séparément les modèles Systran faster-whisper tiny/base/small, avec leurs cartes de modèles et notices disponibles, aux révisions consignées dans `opencut/core/asr_provenance.py`. Le traitement se fait localement; ces modèles ont leurs propres conditions amont. Les médias synthétiques générés sont locaux et ignorés par Git.
+
+### Runtime média des nouveaux adaptateurs
+
+Sur Mac, l’installateur compile FFmpeg avec libx264 et zlib dans `.runtime/toolchain`, à partir de commits figés; les sources, notices et logs restent dans `.runtime/`. Le build FFmpeg annonce GPL version 2 ou ultérieure. Ces exécutables ne sont pas redistribués dans le dépôt et leur licence n’est pas remplacée par la licence MIT de Nocturnz. Les dépendances Python conservent leurs métadonnées et licences dans l’environnement installé. Le détail technique et le périmètre des adaptateurs sont dans [docs/modules.md](docs/modules.md).

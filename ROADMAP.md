@@ -18,7 +18,8 @@ Le périmètre final comprend le nettoyage des silences, hésitations et répét
 
 - [x] Importer les sources réutilisables des dépôts du brief avec versions, licences et inventaire (six dépôts; auto-zoom-premiere exclu faute de licence).
 - [x] Repérer les points d’entrée amont correspondant aux 17 modules.
-- [ ] Brancher progressivement ces modules au service et au panneau UXP, en respectant leurs licences et dépendances.
+- [x] Brancher les 15 modules supplémentaires au service et au panneau UXP, via des adaptateurs sur les sources OpenCut et des sorties source séparées. Dépendances installées et traitements synthétiques exécutés; voir `docs/modules.md` pour le périmètre réellement raccordé.
+- [ ] Valider dans Premiere les nouveaux formulaires et imports, puis étendre les adaptateurs source au montage complet.
 
 - Service local authentifié sur loopback, gestion des tâches, progression, annulation et reprise.
 - Plan de montage versionné, temps source/temps séquence, cache partagé, validation avant application.
