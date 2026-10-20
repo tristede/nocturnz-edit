@@ -102,3 +102,8 @@ Implémentés : In / Out / Jump, alternance configurable dans Voix, alternance t
 ## 20 octobre 2026 — Correctif duplication UXP
 
 Capture utilisateur : reconnaissance terminée, puis `media.getId is not a function`. `getId()` appartient à ProjectItem, pas à son adaptateur ClipProjectItem. Le copieur conserve désormais une vue ProjectItem pour les identifiants des médias et caste également les éléments des séquences source/copie avant la comparaison de protection. Les vérifications d'identité et l'application sur copie restent obligatoires. Syntaxe contrôlée ; application native après ce correctif non encore confirmée.
+
+
+## 20 octobre 2026 — Correction du rythme et branchement calques bêta
+
+Le résultat voix local explique le pompage : alternance de courts segments neutres et parlés, retour au plan large et relance des mouvements. Le planificateur filtre maintenant ces changements (pauses jusqu’à 1,8 s, tenue 3 s), réduit l’amplitude et fixe une transition minimale de 1,2 s ; les segments trop courts restent fixes. Le mode calques réutilise un vrai calque vierge associé une fois, insère des instances sur une piste supérieure dans une copie et anime l’effet Transformation ; les clips restent intacts. Pas de création automatique du média calque via l’API documentée trouvée. Parcours calques non encore validé dans l’hôte. Syntaxe contrôlée ; détails et limites dans docs/zooms.md.

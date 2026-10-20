@@ -60,3 +60,10 @@ Composants : `voice-stage`, `voice-crop`, `voice-thumb`, `voice-listen-panel`. I
 - Un sélecteur Mouvement ; les cases In / Out / Jump apparaissent uniquement pour Alterner.
 - Durée et recalage des visages aux cuts dans Options avancées, recalage marqué bêta et désactivé initialement.
 - Composants existants (sélecteur, disclosure, text-action), couleurs et texte issus des tokens Nocturnz ; pas de nouvelle carte explicative.
+
+
+### Sortie zooms et rythme
+
+- Rythme calme par défaut, sans nouveau panneau de paramètres : tenue 3 s, interjections courtes ignorées, mouvements discrets ; durée 1,2 / 2 / 3 s dans les options avancées.
+- Sélecteur explicite « Appliquer sur » : calques d’effets bêta ou clips de la copie.
+- Action secondaire « Utiliser le calque vierge sélectionné » et état associé, visibles uniquement en mode calques. La sélection vidéo est rétablie après association.

@@ -79,7 +79,7 @@ Installation : `npm run setup:modules`, puis `npm run setup:speakers`. La second
 
 ### Mouvements et recalage aux cuts — 20 octobre 2026
 
-Dans Voix, **Mouvement** propose Zoom in, Zoom out, Jump (sans animation), ou Alterner. Le mode Alterner affiche trois cases : seuls les types cochés sont joués, dans l’ordre In → Out → Jump. L’alternance avance à chaque segment attribué à une personne, dans l’ordre chronologique des clips sélectionnés ; un silence/segment neutre reste au plan large. Chaque cut réinitialise le mouvement. In part du plan large vers le cadrage personnel ; Out effectue le trajet inverse ; Jump pose immédiatement le cadrage personnel. Les transitions sont bornées au segment et à la dernière image disponible. Les clés de fin sont maintenues jusqu’au segment suivant. La durée (0,3 / 0,6 / 1,2 s) est rangée dans Options avancées. Le mode Cuts propose aussi l’alternance In/Out/Jump.
+Dans Voix, **Mouvement** propose Zoom in, Zoom out, Jump (sans animation), ou Alterner. Le mode Alterner affiche trois cases : seuls les types cochés sont joués, dans l’ordre In → Out → Jump. L’alternance avance à chaque segment attribué à une personne, dans l’ordre chronologique des clips sélectionnés ; un silence/segment neutre reste au plan large. Chaque cut réinitialise le mouvement. In et Out jouent un mouvement discret autour du cadrage personnel (12 % de la différence avec le plan large), dans les deux directions ; Jump pose immédiatement le cadrage personnel. Le mouvement ne repart plus du plan large à chaque prise de parole. Les transitions sont bornées au segment et à la dernière image disponible. Les clés de fin sont maintenues jusqu’au segment suivant. La durée (1,2 / 2 / 3 s) est rangée dans Options avancées. Le mode Cuts propose aussi l’alternance In/Out/Jump.
 
 **Recharger l’aperçu** reste hors de la zone vidéo : il recharge l’image choisie et reconstruit les vignettes sans effacer les noms, cadrages, références vocales ou décisions d’analyse. La requête d’aperçu expire côté panneau après 45 s ; une réponse devenue obsolète ne remplace pas le nouvel aperçu.
 
@@ -103,3 +103,21 @@ Les chemins du graphe `.prproj` ont été identifiés à partir du code MIT [Pou
 - [Adobe — ProjectItem et libellés du chutier](https://developer.adobe.com/premiere-pro/uxp/ppro-reference/classes/projectitem)
 
 Les sources amont disponibles restent inchangées dans `vendor/`; le nouveau code du panneau est original Nocturnz.
+
+
+### Rythme et calques d’effets — correction du 20 octobre 2026
+
+Diagnostic sur le dernier résultat local observé : de 22,08 à 46,64 s, neuf segments bruts dont quatre prises de parole ; entre 26 et 34 s, des prises de 1 à 2,5 s alternaient avec des segments neutres de 0,5 à 1,5 s. Le retour systématique au plan large et les transitions de 0,6 s expliquaient les changements trop fréquents. La séquence générée a été observée ouverte dans Premiere ; aucune évaluation vidéo complète n’est revendiquée.
+
+La planification fusionne les pauses neutres jusqu’à 1,8 s lorsque la même personne revient, ignore les changements trop courts et impose une tenue de 3 s entre changements de cadrage dans un clip. Les courts segments incertains gardent le cadre précédent ; les passages neutres durables peuvent reprendre le plan large. Les mouvements durent au moins 1,2 s et deviennent fixes si le segment ne permet pas une animation entière plus quatre images de tenue. Ce filtrage de montage ne modifie pas les décisions vocales brutes affichées dans l’éditeur.
+
+**Appliquer sur → Calques d’effets · bêta** : sélectionner une fois un calque vierge dans une timeline du même projet, puis **Utiliser le calque vierge sélectionné**. La sélection vidéo d’origine est rétablie. Le modèle est conservé par identifiant et dimensions avec la configuration. Il doit rester présent sur une timeline, vierge d’effets ajoutés et d’animation, avec sa Trajectoire par défaut. Sa source générée est réutilisée ; aucun fichier image n’est substitué à un vrai calque d’effets. La création directe d’un nouveau média « calque d’effets » n’a pas été trouvée dans l’API UXP documentée consultée : ce parcours nécessite le modèle existant.
+
+Le mode calques duplique la séquence, insère un calque par clip sélectionné sur une nouvelle piste supérieure, borne chaque calque au clip correspondant, ajoute `AE.ADBE Geometry2` (Transformation), puis pose les clés sur cet effet. La Trajectoire des clips vidéo reste intacte. Le calcul utilise le cadrage natif statique de chaque source pour convertir les valeurs désirées vers la transformation du composite. Les sources tournées ou dont l’ancrage diffère du plan large sont refusées, ainsi que les sélections vidéo se chevauchant. Les calques agissent sur le composite des pistes inférieures, y compris les titres si ceux-ci sont dessous. Une erreur ne déclenche jamais de repli silencieux vers les clips. Des calques partiellement préparés peuvent rester sur la copie si Premiere refuse une étape ; la source reste intacte.
+
+**Clips de la copie** reste un choix explicite. La génération antérieure en Trajectoire a été observée réussie dans l’hôte via son message et la séquence ouverte. Les changements de rythme et la génération par calques ont reçu des contrôles de syntaxe uniquement et restent à valider visuellement. Aucun test automatisé ajouté/exécuté.
+
+API consultées :
+- https://developer.adobe.com/premiere-pro/uxp/ppro-reference/classes/sequenceeditor
+- https://developer.adobe.com/premiere-pro/uxp/ppro-reference/classes/videofilterfactory
+- https://developer.adobe.com/premiere-pro/uxp/ppro-reference/classes/videocliptrackitem

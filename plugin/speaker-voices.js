@@ -6,6 +6,7 @@
   let saves=Promise.resolve(),poster=null,activePerson=0,drag=null,previewSerial=0;
   let samples=[],sampleIndex=0,heard=false,sampleMedia=null,listenSerial=0,generatedId=null,analysisSource=null;
   let posterTime=null,faceScanning=false,faceCancelled=false,faceSummary='';
+  let layerModel=null;
   try {host=require('premierepro');uxp=require('uxp');} catch(_) {}
   const id=(value)=>String(value.guid),pathKey=(value)=>String(value).replace(/^\/{3,}/,'/').normalize('NFC');
   const say=(text,bad=false)=>{$('voice-status').textContent=text;$('voice-status').className='tool-status'+(bad ? ' error':'');};
@@ -93,7 +94,7 @@
     if(!setup || !uxp) return;
     const name=filename(setup),text=JSON.stringify({version:1,source:setup.source,people,wide,mode:$('voice-mode').value,
       mixedTrack:$('voice-track').value,micTracks:[0,1].map((index)=>$(`voice-mic-${index}`)?.value),
-      movement:movement(),reframeCuts:$('voice-reframe-cuts').checked});
+      movement:movement(),reframeCuts:$('voice-reframe-cuts').checked,output:$('voice-output').value,layerModel});
     saves=saves.catch(()=>{}).then(async()=>{const folder=await uxp.storage.localFileSystem.getDataFolder();const file=await folder.createFile(name,{overwrite:true});await file.write(text);});
     return saves;
   }
@@ -111,6 +112,7 @@
     const count=await setup.sequence.getAudioTrackCount();
     let savedWide=false;
     if(changed) {
+      layerModel=null;
       people=[{name:'Intervenant 1',frame:null,reference:null},{name:'Intervenant 2',frame:null,reference:null}];
       wide=await frame(setup.targets[0].item,setup.frameSize);
       await saves.catch(()=>{});
@@ -122,9 +124,11 @@
         if(validFrame(data.wide)) {wide=data.wide;savedWide=true;}
         if(['in','out','jump','alternate'].includes(data.movement?.motion)) $('voice-motion').value=data.movement.motion;
         for(const input of document.querySelectorAll('[data-voice-motion]')) input.checked=data.movement?.types ? data.movement.types.includes(input.dataset.voiceMotion):true;
-        if([300,600,1200].includes(data.movement?.duration)) $('voice-motion-duration').value=String(data.movement.duration);
+        $('voice-motion-duration').value=String([1200,2000,3000].includes(data.movement?.duration) ? data.movement.duration:1200);
         $('voice-reframe-cuts').checked=data.reframeCuts===true;
+        layerModel=data.layerModel || null;$('voice-output').value=data.output==='clips' ? 'clips':'layers';
       }
+      layerUI();
       $('voice-motion-mix').hidden=$('voice-motion').value!=='alternate';
       if(!savedWide) wide=null;
       samples=[];poster=null;$('voice-visual').hidden=true;stopListening();$('voice-listen-panel').hidden=true;
@@ -227,6 +231,21 @@
   function movement() {
     return {motion:$('voice-motion').value,duration:Number($('voice-motion-duration').value),
       types:[...document.querySelectorAll('[data-voice-motion]')].filter((input)=>input.checked).map((input)=>input.dataset.voiceMotion)};
+  }
+  function layerUI() {
+    $('voice-layer-controls').hidden=$('voice-output').value!=='layers';
+    $('voice-layer-status').textContent=layerModel ? 'Calque modèle associé':'Calque modèle à choisir';
+  }
+  async function captureLayer() {
+    if(!setup) throw new Error('Charge d’abord la vidéo à cadrer.');
+    const project=await host.Project.getActiveProject(),sequence=project && await project.getActiveSequence();
+    if(!project || id(project)!==id(setup.project) || !sequence) throw new Error('Reviens au projet de la vidéo.');
+    layerModel=await require('./zoom-layers.cjs').withHost(host).capture(project,sequence);
+    if(layerModel.width!==setup.frameSize.width || layerModel.height!==setup.frameSize.height) {layerModel=null;throw new Error('Le calque doit avoir les dimensions de la séquence vidéo.');}
+    await save();layerUI();
+    await project.openSequence(setup.sequence);await project.setActiveSequence(setup.sequence);
+    host.TrackItemSelection.createEmptySelection((selected)=>{for(const target of setup.targets) selected.addItem(target.item,true);setup.sequence.setSelection(selected);});
+    say('Calque modèle associé. La sélection vidéo est rétablie.');
   }
   async function cutFrames(current) {
     const frames=current.targets.map(()=>people.map((person)=>person.frame));faceSummary='';
@@ -357,6 +376,7 @@
     await restoreSourceSelection();
     await ensure();invalidate();
     const config=movement();if(config.motion==='alternate' && !config.types.length) throw new Error('Choisis au moins un type de zoom.');
+    if($('voice-output').value==='layers') await require('./zoom-layers.cjs').withHost(host).resolve(setup.project,layerModel,setup.frameSize);
     if(!people.every((person)=>validFrame(person.frame)) || !validFrame(wide)) throw new Error('Place les deux cadres sur l’image avant de lancer.');
     const current=await selection(),mode=$('voice-mode').value;
     let audio;
@@ -383,7 +403,10 @@
     const audio=analysisAudio.mode==='mixed' ? await audioRows(analysisAudio.tracks[0],0,current):[...await audioRows(analysisAudio.tracks[0],0,current),...await audioRows(analysisAudio.tracks[1],1,current)];
     if(JSON.stringify(audio)!==analysisAudio.signature) throw new Error('Le montage audio a changé. Relance l’analyse.');
     for(const person of [...people,{frame:wide}]) if(!validFrame(person.frame) || person.frame.frameSize.width!==current.frameSize.width || person.frame.frameSize.height!==current.frameSize.height) throw new Error('Les dimensions ont changé. Reprends les cadrages.');
-    for(const target of current.targets) await frame(target.item,current.frameSize);
+    const bases=await Promise.all(current.targets.map((target)=>frame(target.item,current.frameSize)));
+    const layers=$('voice-output').value==='layers',layerAdapter=layers ? require('./zoom-layers.cjs').withHost(host):null;
+    if(layers) await layerAdapter.resolve(current.project,layerModel,current.frameSize);
+    if(layers && bases.some((base)=>Math.abs(base.rotation)>.0001 || Math.abs(base.anchor.x-wide.anchor.x)>.0001 || Math.abs(base.anchor.y-wide.anchor.y)>.0001)) throw new Error('Les calques demandent des clips sans rotation et avec le même ancrage que le plan large.');
     const config=movement(),frames=await cutFrames(current);
     const changes=require('./speaker-movement.cjs').plan(current.targets,result.turns,wide,frames,current.timebase,config);
     if(changes.reduce((sum,points)=>sum+points.length,0)>12000) throw new Error('Plus de 12 000 images clés. Traite une sélection plus courte.');
@@ -394,6 +417,10 @@
     for(const target of current.targets) await frame(target.item,current.frameSize);
     const copier=require('./sequence-copy.cjs').withHost(host),draft=await copier.create(current.project,current.sequence,current.targets.map((target)=>target.item));
     generatedId=id(draft.sequence);
+    if(layers) {
+      const count=await layerAdapter.apply(current.project,draft,current.targets,changes,bases,layerModel,current.frameSize,copier.assertCopy);
+      say(`${count} calque(s) de zoom créés sur une nouvelle séquence.`+faceSummary);return;
+    }
     const params=await Promise.all(draft.items.map(motion));if(params.some((value)=>!value)) throw new Error('Trajectoire absente dans la copie.');
     await copier.assertCopy(current.project,draft);
     let committed=false;
@@ -473,6 +500,7 @@
   $('voice-listener').addEventListener('play',()=>{if(!sampleMedia || $('voice-listener').src!==sampleMedia) return;heard=true;disabled(busy);$('voice-listen').textContent='↻ Réécouter';});
   $('voice-listener').addEventListener('error',()=>{if(!sampleMedia) return;heard=false;disabled(busy);say('Lecture audio impossible. Relance l’écoute de l’extrait.',true);sampleMedia=null;});
   bind($('voice-reset-preview'),resetPreview);
+  bind($('voice-layer-model'),captureLayer);
   bind($('voice-load'),load);bind($('voice-identify'),identify);bind($('voice-listen'),listen);
   for(const index of [0,1]) bind($('voice-assign-'+index),()=>assign(index),false);
   bind($('voice-skip'),()=>{if(busy || !samples.length) return;sampleIndex=(sampleIndex+1)%samples.length;renderSample();},false);
@@ -483,6 +511,7 @@
   $('voice-mode').addEventListener('change',()=>{invalidate();stopListening();$('voice-listen-panel').hidden=true;renderPeople(setup ? $('voice-track').children.length:0);save().catch((error)=>say(error.message,true));});
   $('voice-track').addEventListener('change',()=>{invalidate();stopListening();samples=[];$('voice-listen-panel').hidden=true;people.forEach((person)=>{person.reference=null;});renderPeople($('voice-track').children.length);save().catch((error)=>say(error.message,true));});
   $('voice-motion').addEventListener('change',()=>{$('voice-motion-mix').hidden=$('voice-motion').value!=='alternate';save().catch((error)=>say(error.message,true));});
+  $('voice-output').addEventListener('change',()=>{layerUI();save().catch((error)=>say(error.message,true));});
   for(const input of [...document.querySelectorAll('[data-voice-motion]'),$('voice-motion-duration'),$('voice-reframe-cuts')]) input.addEventListener('change',()=>save().catch((error)=>say(error.message,true)));
   $('voice-poster').addEventListener('error',()=>{if(poster) say('Affichage interrompu. Clique sur Recharger l’aperçu.',true);});
   renderPeople();
