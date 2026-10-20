@@ -5,6 +5,7 @@
   let people=[{name:'Intervenant 1',frame:null,reference:null},{name:'Intervenant 2',frame:null,reference:null}],wide=null;
   let saves=Promise.resolve(),poster=null,activePerson=0,drag=null,previewSerial=0;
   let samples=[],sampleIndex=0,heard=false,sampleMedia=null,listenSerial=0,generatedId=null,analysisSource=null;
+  let posterTime=null,faceScanning=false,faceCancelled=false,faceSummary='';
   try {host=require('premierepro');uxp=require('uxp');} catch(_) {}
   const id=(value)=>String(value.guid),pathKey=(value)=>String(value).replace(/^\/{3,}/,'/').normalize('NFC');
   const say=(text,bad=false)=>{$('voice-status').textContent=text;$('voice-status').className='tool-status'+(bad ? ' error':'');};
@@ -12,7 +13,8 @@
   function disabled(value) {
     document.querySelectorAll('#speaker-voice-pending [role=button]').forEach((button)=>button.setAttribute('aria-disabled',String(value)));
     document.querySelectorAll('#speaker-voice-pending input,#speaker-voice-pending select').forEach((input)=>{input.disabled=value;});
-    $('voice-cancel').hidden=!value || !job;
+    $('voice-cancel').hidden=!value || (!job && !faceScanning);
+    $('voice-reset-preview').setAttribute('aria-disabled',String(value || !setup));
     for(const index of [0,1]) $('voice-assign-'+index).setAttribute('aria-disabled',String(value || !heard));
     $('voice-analyze').setAttribute('aria-disabled',String(value || !poster || ($('voice-mode').value==='mixed' && !people.every((person)=>person.reference))));
   }
@@ -90,7 +92,8 @@
   async function save() {
     if(!setup || !uxp) return;
     const name=filename(setup),text=JSON.stringify({version:1,source:setup.source,people,wide,mode:$('voice-mode').value,
-      mixedTrack:$('voice-track').value,micTracks:[0,1].map((index)=>$(`voice-mic-${index}`)?.value)});
+      mixedTrack:$('voice-track').value,micTracks:[0,1].map((index)=>$(`voice-mic-${index}`)?.value),
+      movement:movement(),reframeCuts:$('voice-reframe-cuts').checked});
     saves=saves.catch(()=>{}).then(async()=>{const folder=await uxp.storage.localFileSystem.getDataFolder();const file=await folder.createFile(name,{overwrite:true});await file.write(text);});
     return saves;
   }
@@ -104,6 +107,7 @@
     const next=await selection();
     const changed=!setup || filename(next)!==filename(setup);
     setup=next;result=null;analysisSignature=null;$('voice-result').hidden=true;
+    $('voice-reset-preview').hidden=false;
     const count=await setup.sequence.getAudioTrackCount();
     let savedWide=false;
     if(changed) {
@@ -116,7 +120,12 @@
         people=data.people.map((person,index)=>({name:String(person.name || `Intervenant ${index+1}`).slice(0,80),frame:validFrame(person.frame) ? person.frame:null,
           crop:person.crop,reference:person.reference && typeof person.reference.path==='string' && Number.isFinite(person.reference.start) && Number.isFinite(person.reference.end) ? person.reference:null}));
         if(validFrame(data.wide)) {wide=data.wide;savedWide=true;}
+        if(['in','out','jump','alternate'].includes(data.movement?.motion)) $('voice-motion').value=data.movement.motion;
+        for(const input of document.querySelectorAll('[data-voice-motion]')) input.checked=data.movement?.types ? data.movement.types.includes(input.dataset.voiceMotion):true;
+        if([300,600,1200].includes(data.movement?.duration)) $('voice-motion-duration').value=String(data.movement.duration);
+        $('voice-reframe-cuts').checked=data.reframeCuts===true;
       }
+      $('voice-motion-mix').hidden=$('voice-motion').value!=='alternate';
       if(!savedWide) wide=null;
       samples=[];poster=null;$('voice-visual').hidden=true;stopListening();$('voice-listen-panel').hidden=true;
       options($('voice-track'),count,data?.mixedTrack || 0);
@@ -199,10 +208,67 @@
       time=clamp(time,sec(target.start),Math.max(sec(target.start),sec(target.end)-sec(current.timebase)));$('voice-preview-time').value=String(time);
     }
     say('Chargement de l’image…');
-    const response=await api('zooms/preview',{path:target.path,time:sec(target.sourceIn)+time-sec(target.start),size:current.frameSize,frame:validFrame(wide) ? wide:null});
+    let timer;
+    const request=api('zooms/preview',{path:target.path,time:sec(target.sourceIn)+time-sec(target.start),size:current.frameSize,frame:validFrame(wide) ? wide:null});
+    const timeout=new Promise((_,reject)=>{timer=setTimeout(()=>{previewSerial++;reject(new Error('L’aperçu ne répond pas. Clique sur Recharger l’aperçu.'));},45000);});
+    let response;try {response=await Promise.race([request,timeout]);} finally {clearTimeout(timer);}
     if(serial!==previewSerial || current!==setup) return;
-    poster=response.image;wide=response.frame;$('voice-poster').src=poster;
+    poster=response.image;posterTime=sec(target.sourceIn)+time-sec(target.start);wide=response.frame;$('voice-poster').src=poster;
     $('voice-preview-clock').textContent=clock(time);drawEditor();say('');
+  }
+  async function resetPreview() {
+    if(!setup) return;
+    drag=null;previewSerial++;
+    $('voice-poster').removeAttribute('src');
+    for(const index of [0,1]) $('voice-thumb-'+index)?.removeAttribute('src');
+    try {await refreshPreview();$('voice-visual').hidden=false;drawEditor();}
+    catch(error) {if(poster) {$('voice-poster').src=poster;drawEditor();}throw error;}
+  }
+  function movement() {
+    return {motion:$('voice-motion').value,duration:Number($('voice-motion-duration').value),
+      types:[...document.querySelectorAll('[data-voice-motion]')].filter((input)=>input.checked).map((input)=>input.dataset.voiceMotion)};
+  }
+  async function cutFrames(current) {
+    const frames=current.targets.map(()=>people.map((person)=>person.frame));faceSummary='';
+    if(!$('voice-reframe-cuts').checked) return frames;
+    if(!Number.isFinite(posterTime)) throw new Error('Recharge l’aperçu avant le recalage.');
+    faceScanning=true;faceCancelled=false;disabled(true);
+    try {
+      const detect=(target,time)=>api('zooms/faces',{path:target.path,time,size:current.frameSize,frame:wide});
+      say('Repérage des visages…');
+      const reference=(await detect({path:current.source},posterTime)).faces;
+      const crops=[0,1].map((index)=>({...cropFor(index)}));
+      const anchors=crops.map((crop)=>{
+        const inside=reference.filter((face)=>Math.abs(face.x-crop.x)<crop.r/2 && Math.abs(face.y-crop.y)<crop.r/2);
+        // Two visible faces inside one crop are ambiguous. Keep the manual frame.
+        return inside.length===1 ? inside[0]:null;
+      });
+      if(anchors[0]===anchors[1]) anchors.fill(null);
+      let adjusted=0,fallback=0;
+      const cache=new Map();
+      for(let index=0;index<current.targets.length;index++) {
+        if(faceCancelled) throw new Error('Recalage annulé. Aucune séquence créée.');
+        say(`Recalage aux cuts · ${index+1}/${current.targets.length}`);
+        const target=current.targets[index],moment=sec(target.sourceIn)+Math.min(.12,(sec(target.sourceOut)-sec(target.sourceIn))/2),key=target.path+'|'+moment;
+        if(!cache.has(key)) cache.set(key,(await detect(target,moment)).faces);
+        const faces=cache.get(key),matches=anchors.map((anchor)=>{
+          if(!anchor) return null;
+          const candidates=faces.filter((face)=>Math.hypot(face.x-anchor.x,face.y-anchor.y)<.18 && face.w/anchor.w>.65 && face.w/anchor.w<1.5)
+            .map((face)=>({face,score:face.descriptor.reduce((sum,value,i)=>sum+value*anchor.descriptor[i],0)})).sort((a,b)=>b.score-a.score);
+          // This is conservative visual matching, not facial identity recognition.
+          return candidates[0]?.score>.72 && (!candidates[1] || candidates[0].score-candidates[1].score>.12) ? candidates[0].face:null;
+        });
+        if(matches[0] && matches[0]===matches[1]) matches.fill(null);
+        frames[index]=matches.map((face,person)=>{
+          if(!face) {fallback++;return people[person].frame;}
+          const crop=crops[person],anchor=anchors[person],x=clamp(crop.x+face.x-anchor.x,crop.r/2,1-crop.r/2),y=clamp(crop.y+face.y-anchor.y,crop.r/2,1-crop.r/2);
+          adjusted++;return {...people[person].frame,position:{x:.5+(wide.position.x-x)/crop.r,y:.5+(wide.position.y-y)/crop.r}};
+        });
+      }
+      if(faceCancelled) throw new Error('Recalage annulé. Aucune séquence créée.');
+      faceSummary=` · ${adjusted} cadrage(s) repéré(s), ${fallback} conservé(s)`;
+      return frames;
+    } finally {faceScanning=false;disabled(true);}
   }
   function clock(value) {const seconds=Math.floor(value);return `${String(Math.floor(seconds/60)).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')}`;}
   function stopListening() {
@@ -238,8 +304,8 @@
       say(`${record.message || 'Analyse locale…'} · ${record.progress || 0} %`);
       await new Promise((resolve)=>setTimeout(resolve,700));record=await api(`module-jobs/${job}`);
     }
-    if(record.status!=='complete') throw new Error(record.error || 'Analyse annulée.');
-    return record.result;
+    if(record.status!=='complete') {job=null;throw new Error(record.error || 'Analyse annulée.');}
+    job=null;$('voice-cancel').hidden=true;return record.result;
   }
   async function identify() {
     await ensure();stopListening();
@@ -290,6 +356,7 @@
   async function analyze() {
     await restoreSourceSelection();
     await ensure();invalidate();
+    const config=movement();if(config.motion==='alternate' && !config.types.length) throw new Error('Choisis au moins un type de zoom.');
     if(!people.every((person)=>validFrame(person.frame)) || !validFrame(wide)) throw new Error('Place les deux cadres sur l’image avant de lancer.');
     const current=await selection(),mode=$('voice-mode').value;
     let audio;
@@ -317,23 +384,17 @@
     if(JSON.stringify(audio)!==analysisAudio.signature) throw new Error('Le montage audio a changé. Relance l’analyse.');
     for(const person of [...people,{frame:wide}]) if(!validFrame(person.frame) || person.frame.frameSize.width!==current.frameSize.width || person.frame.frameSize.height!==current.frameSize.height) throw new Error('Les dimensions ont changé. Reprends les cadrages.');
     for(const target of current.targets) await frame(target.item,current.frameSize);
+    const config=movement(),frames=await cutFrames(current);
+    const changes=require('./speaker-movement.cjs').plan(current.targets,result.turns,wide,frames,current.timebase,config);
+    if(changes.reduce((sum,points)=>sum+points.length,0)>12000) throw new Error('Plus de 12 000 images clés. Traite une sélection plus courte.');
+    // Recheck after potentially long face analysis, before any sequence is created.
+    if(signature(await selection())!==analysisSignature) throw new Error('La sélection a changé pendant le recalage. Relance l’analyse.');
+    const latestAudio=analysisAudio.mode==='mixed' ? await audioRows(analysisAudio.tracks[0],0,current):[...await audioRows(analysisAudio.tracks[0],0,current),...await audioRows(analysisAudio.tracks[1],1,current)];
+    if(JSON.stringify(latestAudio)!==analysisAudio.signature) throw new Error('Le montage audio a changé pendant le recalage. Relance l’analyse.');
+    for(const target of current.targets) await frame(target.item,current.frameSize);
     const copier=require('./sequence-copy.cjs').withHost(host),draft=await copier.create(current.project,current.sequence,current.targets.map((target)=>target.item));
     generatedId=id(draft.sequence);
     const params=await Promise.all(draft.items.map(motion));if(params.some((value)=>!value)) throw new Error('Trajectoire absente dans la copie.');
-    const changes=current.targets.map((target)=>{
-      const points=new Map(),sourceIn=BigInt(target.sourceIn),sourceOut=BigInt(target.sourceOut),frameTicks=BigInt(current.timebase);
-      const put=(time,person)=>{
-        let tick=sourceIn+BigInt(Math.round((time-sec(target.start))*1e6))*TICKS/1000000n;
-        tick=time===sec(target.start) ? sourceIn:((tick+frameTicks/2n)/frameTicks)*frameTicks;
-        tick=tick<sourceIn ? sourceIn:tick>=sourceOut ? sourceOut-frameTicks:tick;
-        if(tick>=sourceIn) points.set(String(tick),person===-1 ? wide:people[person].frame);
-      };
-      const initial=result.turns.find((turn)=>turn.start<=sec(target.start) && turn.end>sec(target.start));
-      put(sec(target.start),initial?.speaker ?? -1);
-      for(const turn of result.turns) if(turn.start>sec(target.start) && turn.start<sec(target.end)) put(turn.start,turn.speaker);
-      return [...points].sort((a,b)=>BigInt(a[0])<BigInt(b[0]) ? -1:1);
-    });
-    if(changes.reduce((sum,points)=>sum+points.length,0)>3000) throw new Error('Plus de 3 000 changements de cadrage. Traite une sélection plus courte.');
     await copier.assertCopy(current.project,draft);
     let committed=false;
     current.project.lockedAccess(()=>{
@@ -342,17 +403,18 @@
         if(params[index].uniform) actions.push(params[index].uniform.createSetValueAction(params[index].uniform.createKeyframe(true),true));
         for(const name of ['scale','position','anchor','rotation']) {
           const param=params[index][name];actions.push(param.createSetTimeVaryingAction(true));
-          for(const [ticks,value] of changes[index]) {
+          for(const [ticks,point] of changes[index]) {
+            const value=point.value;
             const v=['position','anchor'].includes(name) ? new host.PointF(value[name].x,value[name].y):value[name];
             const key=param.createKeyframe(v);key.position=host.TickTime.createWithTicks(ticks);
-            actions.push(param.createAddKeyframeAction(key));actions.push(param.createSetInterpolationAtKeyframeAction(key.position,host.Constants.InterpolationMode.HOLD,true));
+            actions.push(param.createAddKeyframeAction(key));actions.push(param.createSetInterpolationAtKeyframeAction(key.position,point.linear ? host.Constants.InterpolationMode.LINEAR:host.Constants.InterpolationMode.HOLD,true));
           }
         }
       }
       committed=current.project.executeTransaction((compound)=>{for(const action of actions) if(!compound.addAction(action)) throw new Error('Une action de zoom a été refusée.');},'Nocturnz/Edit — Zooms des intervenants');
     });
     if(!committed) throw new Error('Application non confirmée. La séquence source reste intacte.');
-    generatedId=id(draft.sequence);say('Zooms créés dans une nouvelle séquence.');
+    generatedId=id(draft.sequence);say('Zooms créés dans une nouvelle séquence.'+faceSummary);
   }
   async function restoreSourceSelection() {
     if(!analysisSource) return;
@@ -410,14 +472,18 @@
   $('open-settings').addEventListener('click',stopListening);
   $('voice-listener').addEventListener('play',()=>{if(!sampleMedia || $('voice-listener').src!==sampleMedia) return;heard=true;disabled(busy);$('voice-listen').textContent='↻ Réécouter';});
   $('voice-listener').addEventListener('error',()=>{if(!sampleMedia) return;heard=false;disabled(busy);say('Lecture audio impossible. Relance l’écoute de l’extrait.',true);sampleMedia=null;});
+  bind($('voice-reset-preview'),resetPreview);
   bind($('voice-load'),load);bind($('voice-identify'),identify);bind($('voice-listen'),listen);
   for(const index of [0,1]) bind($('voice-assign-'+index),()=>assign(index),false);
   bind($('voice-skip'),()=>{if(busy || !samples.length) return;sampleIndex=(sampleIndex+1)%samples.length;renderSample();},false);
   bind($('voice-analyze'),analyze);bind($('voice-apply'),apply);
-  bind($('voice-cancel'),async()=>{if(job) await api(`module-jobs/${job}/cancel`,{});},false);
+  bind($('voice-cancel'),async()=>{faceCancelled=true;if(job) await api(`module-jobs/${job}/cancel`,{});},false);
   bind($('voice-previous'),()=>{if(!busy && page>0) {page--;renderTurns();}},false);
   bind($('voice-next'),()=>{if(!busy && result && (page+1)*30<result.turns.length) {page++;renderTurns();}},false);
   $('voice-mode').addEventListener('change',()=>{invalidate();stopListening();$('voice-listen-panel').hidden=true;renderPeople(setup ? $('voice-track').children.length:0);save().catch((error)=>say(error.message,true));});
   $('voice-track').addEventListener('change',()=>{invalidate();stopListening();samples=[];$('voice-listen-panel').hidden=true;people.forEach((person)=>{person.reference=null;});renderPeople($('voice-track').children.length);save().catch((error)=>say(error.message,true));});
+  $('voice-motion').addEventListener('change',()=>{$('voice-motion-mix').hidden=$('voice-motion').value!=='alternate';save().catch((error)=>say(error.message,true));});
+  for(const input of [...document.querySelectorAll('[data-voice-motion]'),$('voice-motion-duration'),$('voice-reframe-cuts')]) input.addEventListener('change',()=>save().catch((error)=>say(error.message,true)));
+  $('voice-poster').addEventListener('error',()=>{if(poster) say('Affichage interrompu. Clique sur Recharger l’aperçu.',true);});
   renderPeople();
 })();

@@ -52,3 +52,11 @@ Les cadrages se règlent sur une image locale avec deux rectangles et leurs vign
 Le mode voix mélangées propose une étape d’écoute : bouton Écouter, question Qui parle ?, deux boutons portant les noms, option Autre extrait. Les boutons d’attribution deviennent actifs après un événement de lecture ; une erreur du lecteur retire cet état. Le modèle ne choisit pas le nom des personnes.
 
 Composants : `voice-stage`, `voice-crop`, `voice-thumb`, `voice-listen-panel`. Ils reprennent les couleurs et bordures de `panel.css`, avec un repère bleu pour le deuxième intervenant. États : chargement de l’image, cadre actif, contrôle désactivé, voix à associer/associée et erreur de lecture. L’ancienne capture depuis Trajectoire reste dans le mode Libellés, indépendant du nouvel éditeur Voix.
+
+
+### Zooms : mouvement et récupération d’aperçu
+
+- Action texte secondaire « ↻ Recharger l’aperçu » accessible hors du visuel, conserve les réglages.
+- Un sélecteur Mouvement ; les cases In / Out / Jump apparaissent uniquement pour Alterner.
+- Durée et recalage des visages aux cuts dans Options avancées, recalage marqué bêta et désactivé initialement.
+- Composants existants (sélecteur, disclosure, text-action), couleurs et texte issus des tokens Nocturnz ; pas de nouvelle carte explicative.

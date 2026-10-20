@@ -57,3 +57,10 @@ Le helper de collage `service/clipboard_image.swift` est original et utilise App
 Moteur optionnel `sherpa-onnx==1.13.8` / `sherpa-onnx-core==1.13.8` (projet k2-fsa/sherpa-onnx, Apache-2.0, bibliothèques tierces selon métadonnées installées). Modèle WeSpeaker ResNet34-LM, fourni par le projet WeSpeaker (Hongji Wang, Chengdong Liang, Shuai Wang et contributeurs), entraîné sur VoxCeleb2 Dev ; [carte et licence CC-BY-4.0](https://huggingface.co/Wespeaker/wespeaker-voxceleb-resnet34-LM), [conditions CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/). Variante ONNX distribuée par sherpa-onnx : `wespeaker_en_voxceleb_resnet34_LM.onnx`, SHA-256 `e9848563da86f263117134dfd7ad63c92355b37de492b55e325400c9d9c39012`. Conversion/export amont ; aucun poids modifié par Nocturnz. Les poids sont téléchargés dans `.runtime`, non redistribués dans Git. L’installateur conserve la provenance locale.
 
 La détection de parole utilise le modèle Silero livré avec faster-whisper ; les licences et attributions de ces paquets restent applicables. Aucun code du détecteur de remplacement approximatif d’OpenCut n’est utilisé pour identifier les personnes. L’association des références, la logique de décision et le raccordement UXP sont originaux Nocturnz.
+
+
+## Détection frontale aux cuts — OpenCV
+
+Le recalage facultatif utilise `cv2.CascadeClassifier` et le fichier `haarcascade_frontalface_default.xml` livré par la dépendance OpenCV du moteur privé (pas de modèle téléchargé supplémentaire). OpenCV est sous Apache-2.0 ; cette cascade contient une licence Intel distincte, reproduite dans `third_party/opencv-haar.LICENSE`. Le code de rapprochement et de planification des mouvements est original Nocturnz.
+
+Référence API : https://docs.opencv.org/4.x/d1/de5/classcv_1_1CascadeClassifier.html

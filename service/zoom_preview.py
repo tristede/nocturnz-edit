@@ -1,5 +1,6 @@
 """Small on-demand previews for the visual zoom editor; no project writes."""
 import json
+import hashlib
 import math
 from pathlib import Path
 import subprocess
@@ -36,6 +37,13 @@ def prepare(payload,kind):
         if file.is_file() and time.time()-file.stat().st_mtime>86400:
             file.unlink(missing_ok=True)
     key=uuid4().hex
+    cache=None
+    if kind=='faces':
+        stamp=path.stat()
+        fingerprint=json.dumps(dict(payload,path=str(path),kind=kind,version=1,mtime=stamp.st_mtime_ns,bytes=stamp.st_size),sort_keys=True)
+        cache=MEDIA/(hashlib.sha256(fingerprint.encode()).hexdigest()+'.faces.json')
+        if cache.is_file():
+            return json.loads(cache.read_text())
     request=MEDIA/(key+'.request.json')
     request.write_text(json.dumps(dict(payload,path=str(path),time=moment,kind=kind,key=key)))
     try:
@@ -43,7 +51,12 @@ def prepare(payload,kind):
             capture_output=True,text=True,timeout=40)
         if result.returncode:
             raise RuntimeError(result.stderr[-800:] or 'Aperçu indisponible.')
-        return json.loads(result.stdout)
+        data=json.loads(result.stdout)
+        if cache is not None:
+            temporary=MEDIA/(key+'.cache.json')
+            temporary.write_text(json.dumps(data))
+            temporary.replace(cache)
+        return data
     except subprocess.TimeoutExpired as error:
         raise RuntimeError('Ce média met trop de temps à répondre. Choisis une autre image.') from error
     finally:
@@ -105,6 +118,28 @@ def worker(request):
     transform=(dx*c/(scale*ratio),dx*s/(scale*ratio),dx*(frame['anchor']['x']*width-(c*px+s*py)/scale),
         -dy*s/(scale*ratio),dy*c/(scale*ratio),dy*(frame['anchor']['y']*height-(-s*px+c*py)/scale))
     preview=image.transform(canvas,Image.Transform.AFFINE,transform,Image.Resampling.BICUBIC,fillcolor=(0,0,0))
+    if request['kind']=='faces':
+        import cv2
+        import numpy as np
+        cv2.setNumThreads(1)
+        pixels=np.asarray(preview)
+        gray=cv2.cvtColor(pixels,cv2.COLOR_RGB2GRAY)
+        detector=cv2.CascadeClassifier(str(Path(cv2.data.haarcascades)/'haarcascade_frontalface_default.xml'))
+        if detector.empty():
+            raise RuntimeError('Détecteur de visages local absent.')
+        found=detector.detectMultiScale(cv2.equalizeHist(gray),scaleFactor=1.1,minNeighbors=6,minSize=(28,28))
+        faces=[]
+        for x,y,w,h in found:
+            x,y,w,h=map(int,(x,y,w,h))
+            patch=gray[max(0,y):min(gray.shape[0],y+h),max(0,x):min(gray.shape[1],x+w)]
+            descriptor=cv2.resize(cv2.equalizeHist(patch),(16,16)).astype(float).reshape(-1)
+            descriptor-=descriptor.mean()
+            norm=float(np.linalg.norm(descriptor))
+            if norm<1:
+                continue
+            faces.append(dict(x=(x+w/2)/canvas[0],y=(y+h/2)/canvas[1],w=w/canvas[0],h=h/canvas[1],
+                descriptor=(descriptor/norm).round(6).tolist()))
+        return dict(faces=faces[:12])
     buffer=BytesIO();preview.save(buffer,format='JPEG',quality=85)
     return dict(image='data:image/jpeg;base64,'+base64.b64encode(buffer.getvalue()).decode(),frame=frame,width=canvas[0],height=canvas[1])
 

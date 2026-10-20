@@ -130,6 +130,8 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError('Objet JSON requis.')
             if self.path == '/api/v1/zooms/preview':
                 self.reply(200, zoom_preview(payload,'frame'))
+            elif self.path == '/api/v1/zooms/faces':
+                self.reply(200, zoom_preview(payload,'faces'))
             elif self.path == '/api/v1/zooms/listen':
                 self.reply(200, zoom_preview(payload,'listen'))
             elif self.path == '/api/v1/zooms/speakers/samples':

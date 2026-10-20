@@ -84,13 +84,14 @@
     }
     if (frameTicks <= 0n || inTicks < 0n || outTicks <= inTicks) throw new Error('Temps source invalide.');
     const frames = (outTicks - inTicks) / frameTicks;
-    if (frames < (motion === 'return' ? 3n : 2n)) throw new Error('Clip trop court pour ce mouvement.');
+    if (frames < (motion === 'jump' ? 1n : motion === 'return' ? 3n : 2n)) throw new Error('Clip trop court pour ce mouvement.');
     const lastFrame = frames - 1n;
     const requested = durationMs === 0 ? lastFrame : (BigInt(durationMs) * ticksPerSecond / 1000n) / frameTicks;
     let movingFrames = requested < lastFrame ? requested : lastFrame;
     if (movingFrames < 1n) movingFrames = 1n;
     if (motion === 'return' && movingFrames < 2n) movingFrames = 2n;
     const elevated = base * (1 + amount / 100);
+    if (motion === 'jump') return [{ ticks: String(inTicks), value: elevated }];
     const keys = new Map();
     const add = (frame, value) => keys.set(String(frame), { ticks: String(inTicks + frame * frameTicks), value });
     const ramp = (fromFrame, toFrame, fromValue, toValue) => {
@@ -171,7 +172,7 @@
       const changes = [], perTrack = new Map();
       for (const clip of candidates) {
         const index = perTrack.get(clip.trackIndex) || 0;
-        const motion = config.motion === 'alternate' ? (index % 2 === 0 ? 'in' : 'out') : config.motion;
+        const motion = config.motion === 'alternate' ? ['in', 'out', 'jump'][index % 3] : config.motion;
         const keys = buildKeys(clip.scale, config.amount, clip.sourceIn, clip.sourceOut, frameTicks,
           config.duration, motion, config.easing);
         changes.push({ item: clip.item, keys }); perTrack.set(clip.trackIndex, index + 1);

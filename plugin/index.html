@@ -118,7 +118,7 @@
             <div class="zoom-presets" id="zoom-presets" aria-label="Presets de zoom"></div>
           </section>
           <section id="zoom-cuts-pane" hidden>
-            <div class="zoom-fields"><label>Mouvement<select id="zoom-direction"><option value="alternate" selected>In / Out alterné</option><option value="in">Zoom in</option><option value="out">Zoom out</option></select></label></div>
+            <div class="zoom-fields"><label>Mouvement<select id="zoom-direction"><option value="alternate" selected>Alterner In / Out / Jump</option><option value="in">Zoom in</option><option value="out">Zoom out</option><option value="jump">Jump · sans animation</option></select></label></div>
           </section>
           <section id="zoom-speaker-pane" hidden>
             <div class="speaker-sources" aria-label="Source de l’interlocuteur">
@@ -145,6 +145,7 @@
             </section>
             <section id="speaker-voice-pending">
               <div class="button button-secondary" id="voice-load" role="button" tabindex="0">Charger la vidéo sélectionnée</div>
+              <div class="text-action voice-preview-reset" id="voice-reset-preview" role="button" tabindex="0" hidden>↻ Recharger l’aperçu</div>
               <section id="voice-visual" hidden>
                 <div class="voice-stage" id="voice-stage" role="group" aria-label="Cadrages des intervenants">
                   <img id="voice-poster" alt="Image du rush à cadrer" draggable="false">
@@ -165,6 +166,10 @@
                   <div class="voice-assign"><div role="button" tabindex="0" id="voice-assign-0"></div><div role="button" tabindex="0" id="voice-assign-1"></div></div>
                   <div class="text-action" id="voice-skip" role="button" tabindex="0">Autre extrait</div>
                 </section>
+                <label class="voice-motion-choice">Mouvement<select id="voice-motion"><option value="alternate">Alterner</option><option value="in">Zoom in</option><option value="out">Zoom out</option><option value="jump" selected>Jump · sans animation</option></select></label>
+                <div id="voice-motion-mix" class="voice-motion-mix" hidden><label><input type="checkbox" data-voice-motion="in" checked>Zoom in</label><label><input type="checkbox" data-voice-motion="out" checked>Zoom out</label><label><input type="checkbox" data-voice-motion="jump" checked>Jump</label></div>
+                <div class="disclosure" role="button" tabindex="0" data-disclosure="voice-advanced" aria-expanded="false">Options avancées<span>+</span></div>
+                <div id="voice-advanced" hidden><label class="voice-motion-choice">Transition<select id="voice-motion-duration"><option value="300">Rapide · 0,3 s</option><option value="600" selected>Douce · 0,6 s</option><option value="1200">Lente · 1,2 s</option></select></label><label class="voice-face-choice"><input id="voice-reframe-cuts" type="checkbox">Recaler les visages à chaque cut · bêta</label></div>
                 <div class="button button-primary" id="voice-analyze" role="button" tabindex="0">Créer les zooms</div>
               </section>
               <div class="button button-secondary" id="voice-cancel" role="button" tabindex="0" hidden>Annuler</div>

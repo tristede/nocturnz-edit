@@ -185,4 +185,11 @@ h3 { font-size:12px; font-weight:550; margin:7px 0; }
 #zoom-controls .speaker-sources img { width:18px; height:18px; margin:0 7px 0 0; }
 #zoom-controls .zoom-modes { padding-bottom:8px; margin-bottom:10px; }
 .voice-change-source { text-align:right; padding:5px 0; margin-bottom:6px; }
+.voice-preview-reset { text-align:right; margin-bottom:8px; }
+.voice-motion-choice { display:flex; flex-direction:column; margin:12px 0; color:var(--muted); font-size:11px; }
+.voice-motion-choice select { margin-top:6px; }
+.voice-motion-mix { display:flex; flex-wrap:wrap; margin:0 0 14px; }
+.voice-motion-mix label { display:flex; align-items:center; margin:4px 16px 4px 0; font-size:11px; color:var(--text); }
+.voice-motion-mix input,.voice-face-choice input { margin-right:6px; }
+.voice-face-choice { display:flex; align-items:center; margin:12px 0; font-size:11px; color:var(--muted); }
 .voice-people-grid .voice-person input { padding:7px 5px; margin-top:5px; border:1px solid var(--line); border-radius:4px; background-color:#120d1e; }
